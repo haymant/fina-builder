@@ -13,6 +13,13 @@ const initialDashboards: Dashboard[] = [
   { id: 'risk-diagnostics', name: 'Risk Diagnostics', layout: [
     { i: 'attribution', x: 0, y: 0, w: 6, h: 5, minW: 4, minH: 3 }, { i: 'histogram', x: 6, y: 0, w: 6, h: 5, minW: 4, minH: 3 }, { i: 'sankey', x: 0, y: 5, w: 12, h: 4, minW: 4, minH: 3 },
   ] },
+  { id: 'monte-carlo-diagnostics', name: 'Monte Carlo Diagnostics', layout: [
+    { i: 'simulation-summary', x: 0, y: 0, w: 12, h: 3, minW: 6, minH: 2 },
+    { i: 'pv-convergence', x: 0, y: 3, w: 8, h: 5, minW: 5, minH: 3 }, { i: 'convergence-health', x: 8, y: 3, w: 4, h: 5, minW: 3, minH: 3 },
+    { i: 'ci-shrinkage', x: 0, y: 8, w: 6, h: 4, minW: 4, minH: 3 }, { i: 'error-vs-path-count', x: 6, y: 8, w: 6, h: 4, minW: 4, minH: 3 },
+    { i: 'ki-probability-convergence', x: 0, y: 12, w: 6, h: 4, minW: 4, minH: 3 }, { i: 'ko-probability-convergence', x: 6, y: 12, w: 6, h: 4, minW: 4, minH: 3 },
+    { i: 'percentile-convergence', x: 0, y: 16, w: 12, h: 4, minW: 5, minH: 3 }, { i: 'distribution-stability', x: 0, y: 20, w: 8, h: 4, minW: 5, minH: 3 }, { i: 'simulation-efficiency', x: 8, y: 20, w: 4, h: 4, minW: 3, minH: 3 },
+  ] },
 ]
 
 type ExplorerState = {
@@ -26,11 +33,16 @@ type ExplorerState = {
 function load() { try { return JSON.parse(localStorage.getItem('fina-workspace') ?? '{}') as Partial<ExplorerState> } catch { return {} } }
 const saved = typeof window !== 'undefined' ? load() : {}
 const initialPath = simulationBundle.paths[0]!
+const restoredDashboards = saved.dashboards?.length
+  ? saved.dashboards.some((dashboard) => dashboard.id === 'monte-carlo-diagnostics')
+    ? saved.dashboards
+    : [...saved.dashboards, initialDashboards.find((dashboard) => dashboard.id === 'monte-carlo-diagnostics')!]
+  : initialDashboards
 
 function persist(state: Partial<ExplorerState>) { try { localStorage.setItem('fina-workspace', JSON.stringify({ dashboards: state.dashboards, selectedDashboardId: state.selectedDashboardId, theme: state.theme })) } catch { /* storage is optional */ } }
 
 export const useExplorerStore = create<ExplorerState>((set, get) => ({
-  selectedPathId: initialPath.id, selectedNodeId: 'PathCube', selectedDateIndex: 0, theme: saved.theme ?? 'dark', dashboards: saved.dashboards?.length ? saved.dashboards : initialDashboards, selectedDashboardId: saved.selectedDashboardId ?? 'payoff-explorer',
+  selectedPathId: initialPath.id, selectedNodeId: 'PathCube', selectedDateIndex: 0, theme: saved.theme ?? 'dark', dashboards: restoredDashboards, selectedDashboardId: saved.selectedDashboardId ?? 'payoff-explorer',
   setSelectedPathId: (id) => { const path = simulationBundle.paths.find((p) => p.id === id); if (path) set({ selectedPathId: id, selectedDateIndex: 0, selectedNodeId: path.traversal[0] ?? 'PathCube' }) },
   setSelectedNodeId: (id) => set({ selectedNodeId: id }), setSelectedDateIndex: (index) => set({ selectedDateIndex: index }),
   toggleTheme: () => { const theme = get().theme === 'dark' ? 'light' : 'dark'; set({ theme }); persist({ ...get(), theme }) },
