@@ -5,6 +5,8 @@ export type TileType =
   | 'PercentileConvergence' | 'KIProbabilityConvergence' | 'KOProbabilityConvergence'
   | 'DistributionStability' | 'SimulationEfficiency' | 'ConvergenceHealth'
   | 'TradeSummary' | 'EconomicsImpactSummary' | 'SensitivityTornado' | 'ParameterImpactMatrix'
+  | 'RiskSummary' | 'GreeksTable' | 'BucketVega' | 'SpotPriceExplorer' | 'VolatilitySurface'
+  | 'CorrelationMatrix' | 'FXSpotExplorer' | 'GreeksWaterfall' | 'ScenarioComparison'
 
 export type TileLayout = { i: string; x: number; y: number; w: number; h: number; minW?: number; minH?: number }
 export type Tile = { id: string; type: TileType; title: string }

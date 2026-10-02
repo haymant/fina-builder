@@ -8,6 +8,7 @@ import { PayoffGraphPanel } from '../../payoff-graph/components/PayoffGraphPanel
 import { QuantileFanTile, StateOccupancyTile, BarrierHeatmapTile, PathDistributionPositionTile } from '../../pathcube/components/PathCubeTiles'
 import { SimulationSummaryTile, PVConvergenceTile, ConfidenceIntervalShrinkageTile, ErrorVsPathCountTile, PercentileConvergenceTile, KIProbabilityConvergenceTile, KOProbabilityConvergenceTile, DistributionStabilityTile, SimulationEfficiencyTile, ConvergenceHealthTile } from '../../pathcube/components/MCDiagnosticsTiles'
 import { TradeSummaryTile, EconomicsImpactSummaryTile, SensitivityTornadoTile, ParameterImpactMatrixTile } from '../../pathcube/components/TradeDesignTiles'
+import { RiskSummaryTile, GreeksTableTile, BucketVegaTile, SpotPriceExplorerTile, VolatilitySurfaceTile, CorrelationMatrixTile, FXSpotExplorerTile, GreeksWaterfallTile, ScenarioComparisonTile } from '../../pathcube/components/MarketRiskTiles'
 import type { TileType } from '../../dashboards/types'
 import type { ReactElement } from 'react'
 
@@ -39,5 +40,14 @@ export function TileRenderer({ type }: { type: TileType }) {
     case 'EconomicsImpactSummary': return wrap(<EconomicsImpactSummaryTile />)
     case 'SensitivityTornado': return wrap(<SensitivityTornadoTile />)
     case 'ParameterImpactMatrix': return wrap(<ParameterImpactMatrixTile />)
+    case 'RiskSummary': return wrap(<RiskSummaryTile />)
+    case 'GreeksTable': return wrap(<GreeksTableTile />)
+    case 'BucketVega': return wrap(<BucketVegaTile />)
+    case 'SpotPriceExplorer': return wrap(<SpotPriceExplorerTile />)
+    case 'VolatilitySurface': return wrap(<VolatilitySurfaceTile />)
+    case 'CorrelationMatrix': return wrap(<CorrelationMatrixTile />)
+    case 'FXSpotExplorer': return wrap(<FXSpotExplorerTile />)
+    case 'GreeksWaterfall': return wrap(<GreeksWaterfallTile />)
+    case 'ScenarioComparison': return wrap(<ScenarioComparisonTile />)
   }
 }

@@ -28,6 +28,15 @@ export const TILE_CATALOG: TileMeta[] = [
   { id: 'economics-impact-summary', type: 'EconomicsImpactSummary', title: 'Economics Impact Summary', description: 'Expected PV, coupon, put, and branch-probability impacts.', group: 'Trade Design', icon: 'Δ' },
   { id: 'sensitivity-tornado', type: 'SensitivityTornado', title: 'Sensitivity Tornado', description: 'Rank economics parameters by one-step PV impact.', group: 'Trade Design', icon: '◀' },
   { id: 'parameter-impact-matrix', type: 'ParameterImpactMatrix', title: 'Parameter Impact Matrix', description: 'Heatmap of directional impacts across analytics.', group: 'Trade Design', icon: '▦' },
+  { id: 'risk-summary', type: 'RiskSummary', title: 'Risk Summary', description: 'PV, Delta, Gamma, Vega, Theta, and FX Delta.', group: 'Market & Risk', icon: 'Σ' },
+  { id: 'greeks-table', type: 'GreeksTable', title: 'Greeks Table', description: 'Professional risk table with scenario equivalents.', group: 'Market & Risk', icon: 'Δ' },
+  { id: 'bucket-vega', type: 'BucketVega', title: 'Bucket Vega', description: 'Volatility sensitivity by term bucket.', group: 'Market & Risk', icon: 'ν' },
+  { id: 'spot-price-explorer', type: 'SpotPriceExplorer', title: 'Spot Price Explorer', description: 'Interactive OHLC candles with scenario spot selection.', group: 'Market Data', icon: '◫' },
+  { id: 'volatility-surface', type: 'VolatilitySurface', title: 'Volatility Surface', description: 'Editable mock SVI-style strike and maturity surface.', group: 'Market Data', icon: '▧' },
+  { id: 'correlation-matrix', type: 'CorrelationMatrix', title: 'Correlation Matrix', description: 'Interactive underlying correlation heatmap.', group: 'Market Data', icon: '▦' },
+  { id: 'fx-spot-explorer', type: 'FXSpotExplorer', title: 'FX Spot Explorer', description: 'Interactive FX scenario line chart.', group: 'Market Data', icon: '↔' },
+  { id: 'greeks-waterfall', type: 'GreeksWaterfall', title: 'Greeks Waterfall', description: 'Spot, vol, FX, correlation, and dividend risk contribution.', group: 'Market & Risk', icon: '▥' },
+  { id: 'scenario-comparison', type: 'ScenarioComparison', title: 'Scenario Comparison', description: 'Base, current, and shocked market risk states.', group: 'Market & Risk', icon: '⇄' },
 ]
 
 export function tileFromType(type: TileType, suffix = `${Date.now()}`): Tile { const meta = TILE_CATALOG.find((item) => item.type === type)!; return { id: `${meta.id}-${suffix}`, type, title: meta.title } }

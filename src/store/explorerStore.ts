@@ -24,6 +24,12 @@ const initialDashboards: Dashboard[] = [
     { i: 'trade-summary', x: 0, y: 0, w: 6, h: 4, minW: 4, minH: 3 }, { i: 'economics-impact-summary', x: 6, y: 0, w: 6, h: 4, minW: 4, minH: 3 },
     { i: 'sensitivity-tornado', x: 0, y: 4, w: 6, h: 5, minW: 4, minH: 3 }, { i: 'parameter-impact-matrix', x: 6, y: 4, w: 6, h: 5, minW: 4, minH: 3 },
   ] },
+  { id: 'market-risk', name: 'Market & Risk', layout: [
+    { i: 'risk-summary', x: 0, y: 0, w: 6, h: 4, minW: 4, minH: 3 }, { i: 'greeks-table', x: 6, y: 0, w: 6, h: 4, minW: 4, minH: 3 },
+    { i: 'spot-price-explorer', x: 0, y: 4, w: 8, h: 5, minW: 5, minH: 3 }, { i: 'volatility-surface', x: 8, y: 4, w: 4, h: 5, minW: 4, minH: 3 },
+    { i: 'bucket-vega', x: 0, y: 9, w: 4, h: 4, minW: 3, minH: 3 }, { i: 'correlation-matrix', x: 4, y: 9, w: 4, h: 4, minW: 3, minH: 3 }, { i: 'greeks-waterfall', x: 8, y: 9, w: 4, h: 4, minW: 3, minH: 3 },
+    { i: 'scenario-comparison', x: 0, y: 13, w: 8, h: 4, minW: 5, minH: 3 }, { i: 'fx-spot-explorer', x: 8, y: 13, w: 4, h: 4, minW: 3, minH: 3 },
+  ] },
 ]
 
 type ExplorerState = {
