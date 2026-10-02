@@ -10,6 +10,7 @@ import {
 } from '@xyflow/react'
 import { memo, useCallback, useEffect, useMemo, type MouseEvent } from 'react'
 import { useExplorerStore, useSelectedPath } from '../../../store/explorerStore'
+import { useTheme } from '../../themes/ThemeProvider'
 import type { PayoffNodeId } from '../../shared/types'
 import { PanelCard } from '../../shared/components/PanelCard'
 import { buildGraphElements } from '../data/graphLayout'
@@ -23,6 +24,7 @@ export const PayoffGraphPanel = memo(function PayoffGraphPanel() {
   const path = useSelectedPath()
   const selectedNodeId = useExplorerStore((s) => s.selectedNodeId)
   const setSelectedNodeId = useExplorerStore((s) => s.setSelectedNodeId)
+  const { tokens, mode } = useTheme()
 
   const { nodes: initialNodes, edges: initialEdges } = useMemo(
     () => buildGraphElements(path, selectedNodeId),
@@ -34,9 +36,13 @@ export const PayoffGraphPanel = memo(function PayoffGraphPanel() {
 
   useEffect(() => {
     const next = buildGraphElements(path, selectedNodeId)
+    next.edges = next.edges.map((edge) => ({
+      ...edge,
+      style: { ...edge.style, stroke: edge.animated ? tokens.primary : tokens.border },
+    }))
     setNodes(next.nodes)
     setEdges(next.edges)
-  }, [path, selectedNodeId, setNodes, setEdges])
+  }, [path, selectedNodeId, setNodes, setEdges, tokens])
 
   const onNodeClick = useCallback(
     (_: MouseEvent, node: Node) => {
@@ -64,23 +70,23 @@ export const PayoffGraphPanel = memo(function PayoffGraphPanel() {
         minZoom={0.4}
         maxZoom={1.6}
         proOptions={{ hideAttribution: true }}
-        colorMode="dark"
+        colorMode={mode}
       >
-        <Background color="#1e293b" gap={18} size={1} />
+        <Background color={tokens.grid} gap={18} size={1} />
         <Controls
           showInteractive={false}
-          className="!overflow-hidden !rounded !border !border-slate-600 !bg-panel"
+          className="react-flow-controls-themed !overflow-hidden !rounded"
         />
         <MiniMap
           nodeColor={(n) => {
             const state = (n.data as PayoffNodeData | undefined)?.state
-            if (state === 'active') return '#22c55e'
-            if (state === 'visited') return '#3b82f6'
-            if (state === 'skipped') return '#334155'
-            return '#64748b'
+            if (state === 'active') return tokens.success
+            if (state === 'visited') return tokens.primary
+            if (state === 'skipped') return tokens.border
+            return tokens.muted
           }}
-          maskColor="rgba(15,23,42,0.75)"
-          className="!overflow-hidden !rounded !border !border-slate-600 !bg-bg"
+          maskColor={mode === 'dark' ? 'rgba(15,23,42,0.75)' : 'rgba(248,250,252,0.75)'}
+          className="react-flow-minimap-themed !overflow-hidden !rounded"
         />
       </ReactFlow>
     </PanelCard>
