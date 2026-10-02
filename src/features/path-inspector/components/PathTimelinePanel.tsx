@@ -1,7 +1,7 @@
 import ReactECharts from 'echarts-for-react'
 import { memo, useMemo } from 'react'
-import { BARRIERS } from '../../../mock-data/generatePaths'
 import { useExplorerStore, useSelectedPath } from '../../../store/explorerStore'
+import { useTradeEconomicsStore } from '../../../store/tradeEconomicsStore'
 import { PanelCard } from '../../shared/components/PanelCard'
 
 export const PathTimelinePanel = memo(function PathTimelinePanel() {
@@ -9,6 +9,10 @@ export const PathTimelinePanel = memo(function PathTimelinePanel() {
   const selectedDateIndex = useExplorerStore((s) => s.selectedDateIndex)
   const setSelectedDateIndex = useExplorerStore((s) => s.setSelectedDateIndex)
   const theme = useExplorerStore((s) => s.theme)
+  const kiBarrier = useTradeEconomicsStore((s) => s.knockInBarrier)
+  const koBarrier = useTradeEconomicsStore((s) => s.knockOutBarrier)
+  const couponLower = useTradeEconomicsStore((s) => s.couponLowerBarrier)
+  const couponUpper = useTradeEconomicsStore((s) => s.couponUpperBarrier)
 
   const option = useMemo(() => {
     const dates = path.dates
@@ -91,25 +95,25 @@ export const PathTimelinePanel = memo(function PathTimelinePanel() {
             label: { fontSize: 9, color: '#94a3b8', position: 'insideEndTop' },
             data: [
               {
-                yAxis: BARRIERS.koBarrier * 100,
+                yAxis: koBarrier * 100,
                 name: 'KO',
                 lineStyle: { color: '#22c55e', type: 'dashed', width: 1.5 },
                 label: { formatter: 'KO {c}%' },
               },
               {
-                yAxis: BARRIERS.kiBarrier * 100,
+                yAxis: kiBarrier * 100,
                 name: 'KI',
                 lineStyle: { color: '#ef4444', type: 'dashed', width: 1.5 },
                 label: { formatter: 'KI {c}%' },
               },
               {
-                yAxis: BARRIERS.couponLower * 100,
+                yAxis: couponLower * 100,
                 name: 'Cpn Lo',
                 lineStyle: { color: '#f59e0b', type: 'dotted', width: 1 },
                 label: { formatter: 'Cpn Lo {c}%' },
               },
               {
-                yAxis: BARRIERS.couponUpper * 100,
+                yAxis: couponUpper * 100,
                 name: 'Cpn Hi',
                 lineStyle: { color: '#f59e0b', type: 'dotted', width: 1 },
                 label: { formatter: 'Cpn Hi {c}%' },
@@ -119,7 +123,7 @@ export const PathTimelinePanel = memo(function PathTimelinePanel() {
         },
       ],
     }
-  }, [path, selectedDateIndex, theme])
+  }, [path, selectedDateIndex, theme, kiBarrier, koBarrier, couponLower, couponUpper])
 
   return (
     <PanelCard

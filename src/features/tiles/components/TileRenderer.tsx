@@ -7,6 +7,7 @@ import { PathTimelinePanel } from '../../path-inspector/components/PathTimelineP
 import { PayoffGraphPanel } from '../../payoff-graph/components/PayoffGraphPanel'
 import { QuantileFanTile, StateOccupancyTile, BarrierHeatmapTile, PathDistributionPositionTile } from '../../pathcube/components/PathCubeTiles'
 import { SimulationSummaryTile, PVConvergenceTile, ConfidenceIntervalShrinkageTile, ErrorVsPathCountTile, PercentileConvergenceTile, KIProbabilityConvergenceTile, KOProbabilityConvergenceTile, DistributionStabilityTile, SimulationEfficiencyTile, ConvergenceHealthTile } from '../../pathcube/components/MCDiagnosticsTiles'
+import { TradeSummaryTile, EconomicsImpactSummaryTile, SensitivityTornadoTile, ParameterImpactMatrixTile } from '../../pathcube/components/TradeDesignTiles'
 import type { TileType } from '../../dashboards/types'
 import type { ReactElement } from 'react'
 
@@ -34,5 +35,9 @@ export function TileRenderer({ type }: { type: TileType }) {
     case 'DistributionStability': return wrap(<DistributionStabilityTile />)
     case 'SimulationEfficiency': return wrap(<SimulationEfficiencyTile />)
     case 'ConvergenceHealth': return wrap(<ConvergenceHealthTile />)
+    case 'TradeSummary': return wrap(<TradeSummaryTile />)
+    case 'EconomicsImpactSummary': return wrap(<EconomicsImpactSummaryTile />)
+    case 'SensitivityTornado': return wrap(<SensitivityTornadoTile />)
+    case 'ParameterImpactMatrix': return wrap(<ParameterImpactMatrixTile />)
   }
 }

@@ -4,6 +4,7 @@ export type TileType =
   | 'SimulationSummary' | 'PVConvergence' | 'ConfidenceIntervalShrinkage' | 'ErrorVsPathCount'
   | 'PercentileConvergence' | 'KIProbabilityConvergence' | 'KOProbabilityConvergence'
   | 'DistributionStability' | 'SimulationEfficiency' | 'ConvergenceHealth'
+  | 'TradeSummary' | 'EconomicsImpactSummary' | 'SensitivityTornado' | 'ParameterImpactMatrix'
 
 export type TileLayout = { i: string; x: number; y: number; w: number; h: number; minW?: number; minH?: number }
 export type Tile = { id: string; type: TileType; title: string }

@@ -24,6 +24,10 @@ export const TILE_CATALOG: TileMeta[] = [
   { id: 'distribution-stability', type: 'DistributionStability', title: 'Distribution Stability', description: 'Overlaid terminal payoff distributions at increasing path counts.', group: 'Monte Carlo Diagnostics', icon: '◒' },
   { id: 'simulation-efficiency', type: 'SimulationEfficiency', title: 'Simulation Efficiency', description: 'Educational paths-required tradeoff by variance-reduction method.', group: 'Monte Carlo Diagnostics', icon: '▤' },
   { id: 'convergence-health', type: 'ConvergenceHealth', title: 'Convergence Health', description: 'Traffic-light assessment of simulation quality.', group: 'Monte Carlo Diagnostics', icon: '●' },
+  { id: 'trade-summary', type: 'TradeSummary', title: 'Trade Summary', description: 'Current barriers, coupon, settlement, notional, and maturity.', group: 'Trade Design', icon: '◇' },
+  { id: 'economics-impact-summary', type: 'EconomicsImpactSummary', title: 'Economics Impact Summary', description: 'Expected PV, coupon, put, and branch-probability impacts.', group: 'Trade Design', icon: 'Δ' },
+  { id: 'sensitivity-tornado', type: 'SensitivityTornado', title: 'Sensitivity Tornado', description: 'Rank economics parameters by one-step PV impact.', group: 'Trade Design', icon: '◀' },
+  { id: 'parameter-impact-matrix', type: 'ParameterImpactMatrix', title: 'Parameter Impact Matrix', description: 'Heatmap of directional impacts across analytics.', group: 'Trade Design', icon: '▦' },
 ]
 
 export function tileFromType(type: TileType, suffix = `${Date.now()}`): Tile { const meta = TILE_CATALOG.find((item) => item.type === type)!; return { id: `${meta.id}-${suffix}`, type, title: meta.title } }

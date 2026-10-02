@@ -20,6 +20,10 @@ const initialDashboards: Dashboard[] = [
     { i: 'ki-probability-convergence', x: 0, y: 12, w: 6, h: 4, minW: 4, minH: 3 }, { i: 'ko-probability-convergence', x: 6, y: 12, w: 6, h: 4, minW: 4, minH: 3 },
     { i: 'percentile-convergence', x: 0, y: 16, w: 12, h: 4, minW: 5, minH: 3 }, { i: 'distribution-stability', x: 0, y: 20, w: 8, h: 4, minW: 5, minH: 3 }, { i: 'simulation-efficiency', x: 8, y: 20, w: 4, h: 4, minW: 3, minH: 3 },
   ] },
+  { id: 'trade-design', name: 'Trade Design', layout: [
+    { i: 'trade-summary', x: 0, y: 0, w: 6, h: 4, minW: 4, minH: 3 }, { i: 'economics-impact-summary', x: 6, y: 0, w: 6, h: 4, minW: 4, minH: 3 },
+    { i: 'sensitivity-tornado', x: 0, y: 4, w: 6, h: 5, minW: 4, minH: 3 }, { i: 'parameter-impact-matrix', x: 6, y: 4, w: 6, h: 5, minW: 4, minH: 3 },
+  ] },
 ]
 
 type ExplorerState = {
@@ -34,9 +38,7 @@ function load() { try { return JSON.parse(localStorage.getItem('fina-workspace')
 const saved = typeof window !== 'undefined' ? load() : {}
 const initialPath = simulationBundle.paths[0]!
 const restoredDashboards = saved.dashboards?.length
-  ? saved.dashboards.some((dashboard) => dashboard.id === 'monte-carlo-diagnostics')
-    ? saved.dashboards
-    : [...saved.dashboards, initialDashboards.find((dashboard) => dashboard.id === 'monte-carlo-diagnostics')!]
+  ? [...saved.dashboards, ...initialDashboards.filter((dashboard) => !saved.dashboards!.some((savedDashboard) => savedDashboard.id === dashboard.id))]
   : initialDashboards
 
 function persist(state: Partial<ExplorerState>) { try { localStorage.setItem('fina-workspace', JSON.stringify({ dashboards: state.dashboards, selectedDashboardId: state.selectedDashboardId, theme: state.theme })) } catch { /* storage is optional */ } }
