@@ -2,11 +2,13 @@
 
 A React/TypeScript analytical-workbench prototype for inspecting synthetic Worst-of Phoenix Autocall paths and assembling role-oriented dashboards. The same frontend runs in a browser during development and inside a Tauri 2 desktop shell.
 
-> **Scope:** this repository is a UI and analytics prototype, not a production pricing or risk system. The data and many calculations are deterministic or illustrative; read [FEATURE.md](./FEATURE.md) for the implementation inventory and limitations.
+> **Scope:** this repository is a UI and analytics prototype, not a production pricing or risk system. The data and many calculations are deterministic or illustrative; read [FEATURE.ts.md](./FEATURE.ts.md) for the TypeScript implementation inventory and limitations.
+
+> **In progress — PoC → production:** the migration to a Rust domain core (`fina-kernel`) behind transport adapters is specified in [PHASE1_MIGRATION_PROMPT.md](./PHASE1_MIGRATION_PROMPT.md). That document is the executable spec for that work and supersedes the roadmap notes in this file.
 
 ## Business rationale
 
-Structured-product analysis spans trade terms, path-dependent payoff events, risk, cashflows, and valuation explanations. This prototype brings those views into one configurable workspace so developers, quants, traders, validators, and product-control users can inspect linked examples and discuss model behavior. The business context is intentionally brief here; [FEATURE.md](./FEATURE.md) describes what the code actually implements rather than treating the original product vision as delivered functionality.
+Structured-product analysis spans trade terms, path-dependent payoff events, risk, cashflows, and valuation explanations. This prototype brings those views into one configurable workspace so developers, quants, traders, validators, and product-control users can inspect linked examples and discuss model behavior. The business context is intentionally brief here; [FEATURE.ts.md](./FEATURE.ts.md) describes what the TypeScript code actually implements rather than treating the original product vision as delivered functionality.
 
 ## Technology
 
@@ -76,7 +78,7 @@ src-tauri/
 - **Change workspace state or behavior:** inspect the relevant Zustand store in `src/store/` and its consuming components. Workspace/dashboard state is in `explorerStore.ts`; trade and market controls are in `tradeEconomicsStore.ts` and `marketDataStore.ts`.
 - **Change the app shell:** `src/App.tsx`, `src/main.tsx`, and `src-tauri/`.
 
-The app is client-side: there is no application API/server, database, authentication, external market-data feed, or production Monte Carlo engine in this repository. Details and caveats are in [FEATURE.md](./FEATURE.md).
+The app is client-side: there is no application API/server, database, authentication, external market-data feed, or production Monte Carlo engine in this repository. Details and caveats are in [FEATURE.ts.md](./FEATURE.ts.md).
 
 ## Validation
 
