@@ -48,7 +48,10 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # `--exclude payoff-explorer` on purpose: the Tauri crate links against GTK,
+      # GLib and WebKit, which are not installed in this job. It is clipped and
+      # tested in the `adapters` job, which installs them.
+      - run: cargo clippy --workspace --all-targets --exclude payoff-explorer -- -D warnings
       - run: cargo test -p fina-kernel
 
   adapters:
@@ -62,23 +65,13 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p fina-cli -p fina-server
-      # Tauri requires system webkit libs to link; a no-feature build is the
-      # compile check that does not. Package list is the Tauri v2 prerequisite set
-      # for Debian/Ubuntu (libayatana-appindicator3-dev, not libappindicator3-dev,
-      # which Ubuntu 24.04 no longer ships).
+      # The Tauri crate needs the GTK/GLib/WebKit system libraries to even build;
+      # the script is the single source of truth for that list and is a no-op
+      # elsewhere. See scripts/ci/install-tauri-linux-deps.sh.
       - name: Install Tauri Linux prerequisites
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libxdo-dev \
-            libssl-dev \
-            patchelf \
-            build-essential \
-            file
-      - run: cargo check -p payoff-explorer --lib
+        run: ./scripts/ci/install-tauri-linux-deps.sh
+      - run: cargo clippy -p payoff-explorer --all-targets -- -D warnings
+      - run: cargo test -p payoff-explorer
 
   coverage:
     name: Coverage gates
@@ -96,6 +89,10 @@ jobs:
       - run: npm run test:coverage
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
+      # `cargo llvm-cov --workspace` compiles every member, including the Tauri
+      # shell, so this job needs the same system libraries as the adapters job.
+      - name: Install Tauri Linux prerequisites
+        run: ./scripts/ci/install-tauri-linux-deps.sh
       - name: Rust coverage
         run: |
           cargo llvm-cov --workspace --exclude fina-mcp --lcov --output-path lcov.info

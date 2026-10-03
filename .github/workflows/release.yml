@@ -127,17 +127,7 @@ jobs:
           key: desktop-${{ matrix.label }}
       - name: Install Tauri Linux prerequisites
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libxdo-dev \
-            libssl-dev \
-            patchelf \
-            build-essential \
-            file
+        run: ./scripts/ci/install-tauri-linux-deps.sh
       - name: Stamp the release version into the manifests
         run: node scripts/set-version.mjs ${{ needs.release-create.outputs.version }}
       - name: Build bundles and attach them to the release

@@ -21,12 +21,15 @@ build, the CLI and (later) MCP return byte-identical numbers.
 - Node.js 22 and npm (`package-lock.json` is committed).
 - Rust/Cargo for every backend mode — web backend, CLI and desktop all compile Rust.
 - Desktop builds additionally need the [Tauri 2 platform prerequisites](https://v2.tauri.app/start/prerequisites/).
-  On Debian/Ubuntu:
+  On Debian/Ubuntu one command does it — the same script CI uses:
 
   ```bash
-  sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
-    libxdo-dev libssl-dev patchelf build-essential file
+  ./scripts/ci/install-tauri-linux-deps.sh
   ```
+
+  It installs WebKitGTK, GTK, the Ayatana status-icon library, librsvg, libxdo, libssl,
+  patchelf and build tools, then verifies `pkg-config` can see them. It is a no-op on
+  non-Debian systems.
 
   The browser + web-backend mode does not need the WebKit libraries.
 
