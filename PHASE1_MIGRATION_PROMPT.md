@@ -1523,13 +1523,23 @@ suppressed, with justification in the source:
 ### Repository housekeeping
 
 `.gitignore` covered `src-tauri/target` but not the workspace-root `target/`, so
-commits `0a3922c` and `03ecab8` tracked **1,093 build artifacts**. `.git` was
-111 MB, of which roughly 100 MB was compiled `.o` files. Commit `5d68889` adds
-`target/` and untracks them.
+commits `0a3922c` and `03ecab8` tracked **1,093 build artifacts** between them.
+`.git` had grown to 111 MB, almost entirely compiled `.o` files.
 
-The blobs remain in history. Two of the three affected commits are local-only in
-substance, but the branch is published to `origin/main`, so purging them requires a
-forced push — recorded here as a known outstanding item rather than done silently.
+Fixed in two steps. `5d68889` adds `target/` to `.gitignore` and untracks the
+artifacts going forward. A subsequent `git filter-repo --invert-paths
+--path-glob '**/target/**'` then purged them from history, because untracking
+alone leaves the blobs in `.git` forever: `.git` went from **111 MB to 2.2 MB**.
+
+The rewrite was verified rather than trusted. For all 14 commits, every non-target
+path was compared by mode and blob SHA before and after: **1,148 (commit, file)
+pairs byte-identical**, no path lost or gained, all commit subjects and their order
+preserved. Two tree hashes changed, which is inherent to removing paths from a
+tree, and those are exactly the two commits that had tracked `target/`.
+
+Only three commit SHAs moved as a result. `origin/main` is at `af5a94e` — the
+entire Rust migration is unpushed — so **no force-push was required and no
+published history was affected**.
 
 `03ecab8`'s message also claims "445k JS cases" for the `toFixed` corpus. The
 deduplicated corpus is **105,859** cases and the threshold in
