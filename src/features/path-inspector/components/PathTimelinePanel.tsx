@@ -3,6 +3,7 @@ import { memo, useMemo } from 'react'
 import { useExplorerStore, useSelectedPath } from '../../../store/explorerStore'
 import { useTradeEconomicsStore } from '../../../store/tradeEconomicsStore'
 import { PanelCard } from '../../shared/components/PanelCard'
+import { PanelLoading } from '../../shared/components/AsyncPanel'
 
 export const PathTimelinePanel = memo(function PathTimelinePanel() {
   const path = useSelectedPath()
@@ -15,6 +16,7 @@ export const PathTimelinePanel = memo(function PathTimelinePanel() {
   const couponUpper = useTradeEconomicsStore((s) => s.couponUpperBarrier)
 
   const option = useMemo(() => {
+    if (!path) return undefined
     const dates = path.dates
     const wo = path.worstOfPerformance.map((v) => +(v * 100).toFixed(2))
     const markPoint =
@@ -124,6 +126,12 @@ export const PathTimelinePanel = memo(function PathTimelinePanel() {
       ],
     }
   }, [path, selectedDateIndex, theme, kiBarrier, koBarrier, couponLower, couponUpper])
+
+  if (!path) {
+    return (
+      <PanelLoading title="Path Timeline" subtitle="Worst-of performance through time" />
+    )
+  }
 
   return (
     <PanelCard

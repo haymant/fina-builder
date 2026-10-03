@@ -1,10 +1,16 @@
+// Valuation-explain UI selection state only (§5d.3).
+//
+// The explain data itself comes from the `useValuationExplain` hook; this store
+// holds exactly the `selectedCategory` the tile tracks.
+
 import { create } from 'zustand'
-import { useMarketDataStore } from './marketDataStore'
-import { useTradeEconomicsStore } from './tradeEconomicsStore'
-import { useCashflowAnalytics } from './cashflowStore'
-export type PLVAContribution = { category: string; oldValue: number; newValue: number; contribution: number }
-export type TaylorExplain = { delta: number; gamma: number; vega: number; fx: number; rates: number; correlation: number; dividend: number; theta: number; predicted: number; residual: number }
-export type ValuationExplainState = { previousPV: number; currentPV: number; marketExplainedPnL: number; plvaPnL: number; residualPnL: number; totalPnL: number }
-export const useValuationExplainStore = create<{ selectedCategory: string; selectCategory: (category: string) => void }>((set) => ({ selectedCategory: 'Volatility Calibration', selectCategory: (selectedCategory) => set({ selectedCategory }) }))
-export function useValuationExplain() { const market = useMarketDataStore(); const trade = useTradeEconomicsStore(); const cash = useCashflowAnalytics(); const previousPV = cash.presentValue - 1.8; const taylor: TaylorExplain = { delta: (market.underlyings[0]?.spot ?? 100) * .006, gamma: .42, vega: market.vol.atmVol * 1.2, fx: (market.fxPairs[0]?.spot ?? 1) * .2, rates: -.18, correlation: .24, dividend: -.11, theta: -.35, predicted: 0, residual: 0 }; taylor.predicted = taylor.delta + taylor.gamma + taylor.vega + taylor.fx + taylor.rates + taylor.correlation + taylor.dividend + taylor.theta; taylor.residual = .12; const plva: PLVAContribution[] = [{ category: 'Volatility Calibration', oldValue: 24.1, newValue: 24.8, contribution: .8 }, { category: 'Correlation Calibration', oldValue: .62, newValue: .65, contribution: .3 }, { category: 'Funding Curve Update', oldValue: 4.1, newValue: 4.2, contribution: -.2 }, { category: 'Reserve Update', oldValue: 1.2, newValue: 1.3, contribution: .1 }]; const plvaPnL = plva.reduce((s, x) => s + x.contribution, 0); const marketExplainedPnL = taylor.predicted; const currentPV = cash.presentValue; return { previousPV, currentPV, taylor, plva, state: { previousPV, currentPV, marketExplainedPnL, plvaPnL, residualPnL: currentPV - previousPV - marketExplainedPnL - plvaPnL, totalPnL: currentPV - previousPV } satisfies ValuationExplainState, trade }
+
+type ValuationExplainState = {
+  selectedCategory: string
+  selectCategory: (category: string) => void
 }
+
+export const useValuationExplainStore = create<ValuationExplainState>((set) => ({
+  selectedCategory: 'Volatility Calibration',
+  selectCategory: (selectedCategory) => set({ selectedCategory }),
+}))

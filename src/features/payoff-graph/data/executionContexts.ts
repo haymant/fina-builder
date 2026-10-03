@@ -1,3 +1,0 @@
-import type { SimulationPath } from '../../shared/types'
-export type ExecutionEvent = { index: number; date: string; type: 'Coupon Observation' | 'KO Observation' | 'Barrier Observation' | 'Final Fixing' | 'Settlement'; worstOf: number; coupon: boolean; ki: boolean; ko: boolean }
-export function executionEvents(path: SimulationPath): ExecutionEvent[] { return path.dates.map((date, index) => { const o = path.observations[index]!; const final = index === path.dates.length - 1; return { index, date, type: final ? 'Final Fixing' : o.knockOutAtDate ? 'KO Observation' : o.couponAccrued > 0 ? 'Coupon Observation' : 'Barrier Observation', worstOf: +(path.worstOfPerformance[index]! * 100).toFixed(1), coupon: o.couponAccrued > 0, ki: o.knockInAtDate, ko: o.knockOutAtDate } }) }

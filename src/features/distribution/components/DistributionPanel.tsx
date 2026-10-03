@@ -1,9 +1,11 @@
 import ReactECharts from 'echarts-for-react'
 import { memo, useMemo, useState } from 'react'
-import { simulationBundle } from '../../../mock-data/generatePaths'
+import type { SimulationBundle, SimulationPath } from '../../../api/types'
 import { useExplorerStore, useSelectedPath } from '../../../store/explorerStore'
+import { useSimulationStore } from '../../../store/simulationStore'
 import type { DistributionStats } from '../../shared/types'
 import { PanelCard } from '../../shared/components/PanelCard'
+import { PanelLoading } from '../../shared/components/AsyncPanel'
 import { StatsBadge } from '../../shared/components/StatsBadge'
 
 type DistTab = 'total' | 'coupon' | 'put' | 'worstOf'
@@ -31,8 +33,7 @@ function histogram(values: number[], bins = 20): { centers: number[]; counts: nu
   return { centers, counts, width }
 }
 
-function selectedValue(tab: DistTab, pathId: string): number {
-  const path = simulationBundle.paths.find((p) => p.id === pathId)!
+function selectedValue(tab: DistTab, path: SimulationPath): number {
   switch (tab) {
     case 'total':
       return path.payoff
@@ -47,8 +48,14 @@ function selectedValue(tab: DistTab, pathId: string): number {
   }
 }
 
-function statsFor(tab: DistTab): DistributionStats {
-  const d = simulationBundle.distributions
+const EMPTY_DIST: SimulationBundle['distributions'] = {
+  totalPayoff: { mean: 0, median: 0, stdDev: 0, p05: 0, p95: 0, values: [] },
+  couponPv: { mean: 0, median: 0, stdDev: 0, p05: 0, p95: 0, values: [] },
+  putPv: { mean: 0, median: 0, stdDev: 0, p05: 0, p95: 0, values: [] },
+  worstOfFinal: { mean: 0, median: 0, stdDev: 0, p05: 0, p95: 0, values: [] },
+}
+
+function statsFor(tab: DistTab, d: SimulationBundle['distributions']): DistributionStats {
   switch (tab) {
     case 'total':
       return d.totalPayoff
@@ -65,8 +72,9 @@ export const DistributionPanel = memo(function DistributionPanel() {
   const [tab, setTab] = useState<DistTab>('total')
   const path = useSelectedPath()
   const theme = useExplorerStore((s) => s.theme)
-  const stats = statsFor(tab)
-  const marker = selectedValue(tab, path.id)
+  const bundle = useSimulationStore((s) => s.bundle)
+  const stats = statsFor(tab, bundle?.distributions ?? EMPTY_DIST)
+  const marker = path ? selectedValue(tab, path) : 0
 
   const option = useMemo(() => {
     const { centers, counts } = histogram(stats.values, 18)
@@ -143,6 +151,12 @@ export const DistributionPanel = memo(function DistributionPanel() {
       ],
     }
   }, [stats, marker, tab, theme])
+
+  if (!bundle || !path) {
+    return (
+      <PanelLoading title="Distribution Analytics" subtitle="Population vs selected path" />
+    )
+  }
 
   return (
     <PanelCard

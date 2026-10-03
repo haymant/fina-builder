@@ -1,5 +1,6 @@
 import type { Edge, Node } from '@xyflow/react'
-import type { NodeState, PayoffNodeId, SimulationPath } from '../../shared/types'
+import type { NodeState, PayoffNodeId } from '../../shared/types'
+import type { SimulationPath } from '../../../api/types'
 import type { PayoffNodeData } from '../components/PayoffGraphNode'
 
 const NODE_META: { id: PayoffNodeId; label: string; x: number; y: number }[] = [

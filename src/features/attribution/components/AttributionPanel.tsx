@@ -2,14 +2,16 @@ import ReactECharts from 'echarts-for-react'
 import { memo, useMemo } from 'react'
 import { useExplorerStore, useSelectedPath } from '../../../store/explorerStore'
 import { PanelCard } from '../../shared/components/PanelCard'
+import { PanelLoading } from '../../shared/components/AsyncPanel'
 import { StatsBadge } from '../../shared/components/StatsBadge'
 
 export const AttributionPanel = memo(function AttributionPanel() {
   const path = useSelectedPath()
   const theme = useExplorerStore((s) => s.theme)
-  const a = path.attribution
+  const a = path?.attribution
 
   const option = useMemo(() => {
+    if (!a) return undefined
     const items = [
       { name: 'Par Redemption', value: a.parRedemption },
       { name: 'Coupon', value: a.coupon },
@@ -108,6 +110,12 @@ export const AttributionPanel = memo(function AttributionPanel() {
       ],
     }
   }, [a, theme])
+
+  if (!a) {
+    return (
+      <PanelLoading title="Attribution" subtitle="Expected value decomposition" />
+    )
+  }
 
   return (
     <PanelCard

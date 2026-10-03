@@ -13,6 +13,7 @@ import { useExplorerStore, useSelectedPath } from '../../../store/explorerStore'
 import { useTheme } from '../../themes/ThemeProvider'
 import type { PayoffNodeId } from '../../shared/types'
 import { PanelCard } from '../../shared/components/PanelCard'
+import { PanelLoading } from '../../shared/components/AsyncPanel'
 import { buildGraphElements } from '../data/graphLayout'
 import { PayoffGraphNode, type PayoffNodeData } from './PayoffGraphNode'
 
@@ -27,7 +28,10 @@ export const PayoffGraphPanel = memo(function PayoffGraphPanel() {
   const { tokens, mode } = useTheme()
 
   const { nodes: initialNodes, edges: initialEdges } = useMemo(
-    () => buildGraphElements(path, selectedNodeId),
+    () => {
+      if (!path) return { nodes: [], edges: [] }
+      return buildGraphElements(path, selectedNodeId)
+    },
     [path, selectedNodeId],
   )
 
@@ -35,6 +39,7 @@ export const PayoffGraphPanel = memo(function PayoffGraphPanel() {
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
 
   useEffect(() => {
+    if (!path) return
     const next = buildGraphElements(path, selectedNodeId)
     next.edges = next.edges.map((edge) => ({
       ...edge,
@@ -50,6 +55,15 @@ export const PayoffGraphPanel = memo(function PayoffGraphPanel() {
     },
     [setSelectedNodeId],
   )
+
+  if (!path) {
+    return (
+      <PanelLoading
+        title="Payoff Evaluation Graph"
+        subtitle="Observation output → decision logic → settlement"
+      />
+    )
+  }
 
   return (
     <PanelCard

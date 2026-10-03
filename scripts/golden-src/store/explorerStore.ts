@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { simulationStorePaths, useSimulationStore } from './simulationStore'
+import { simulationBundle } from '../mock-data/generatePaths'
 import type { PayoffNodeId, ThemeMode } from '../features/shared/types'
 import type { Dashboard, TileLayout } from '../features/dashboards/types'
 
@@ -42,6 +42,7 @@ type ExplorerState = {
 
 function load() { try { return JSON.parse(localStorage.getItem('fina-workspace') ?? '{}') as Partial<ExplorerState> } catch { return {} } }
 const saved = typeof window !== 'undefined' ? load() : {}
+const initialPath = simulationBundle.paths[0]!
 const restoredDashboards = saved.dashboards?.length
   ? [...saved.dashboards, ...initialDashboards.filter((dashboard) => !saved.dashboards!.some((savedDashboard) => savedDashboard.id === dashboard.id))]
   : initialDashboards
@@ -49,14 +50,12 @@ const restoredDashboards = saved.dashboards?.length
 function persist(state: Partial<ExplorerState>) { try { localStorage.setItem('fina-workspace', JSON.stringify({ dashboards: state.dashboards, selectedDashboardId: state.selectedDashboardId, theme: state.theme })) } catch { /* storage is optional */ } }
 
 export const useExplorerStore = create<ExplorerState>((set, get) => ({
-  // selectedPathId starts empty: the bundle arrives asynchronously from the
-  // backend (simulationStore). The exposed selector below resolves it.
-  selectedPathId: '', selectedNodeId: 'PathCube', selectedDateIndex: 0, theme: saved.theme ?? 'dark', dashboards: restoredDashboards, selectedDashboardId: saved.selectedDashboardId ?? 'payoff-explorer',
-  setSelectedPathId: (id) => { const path = simulationStorePaths().find((p) => p.id === id); if (path) set({ selectedPathId: id, selectedDateIndex: 0, selectedNodeId: path.traversal[0] ?? 'PathCube' }) },
+  selectedPathId: initialPath.id, selectedNodeId: 'PathCube', selectedDateIndex: 0, theme: saved.theme ?? 'dark', dashboards: restoredDashboards, selectedDashboardId: saved.selectedDashboardId ?? 'payoff-explorer',
+  setSelectedPathId: (id) => { const path = simulationBundle.paths.find((p) => p.id === id); if (path) set({ selectedPathId: id, selectedDateIndex: 0, selectedNodeId: path.traversal[0] ?? 'PathCube' }) },
   setSelectedNodeId: (id) => set({ selectedNodeId: id }), setSelectedDateIndex: (index) => set({ selectedDateIndex: index }),
   toggleTheme: () => { const theme = get().theme === 'dark' ? 'light' : 'dark'; set({ theme }); persist({ ...get(), theme }) },
-  selectRandomPath: () => { const paths = simulationStorePaths().filter((p) => p.id !== get().selectedPathId); const pick = paths[Math.floor(Math.random() * paths.length)]; if (pick) get().setSelectedPathId(pick.id) },
-  nextPath: (direction) => { const paths = simulationStorePaths(); const idx = paths.findIndex((p) => p.id === get().selectedPathId); const next = paths[(idx + direction + paths.length) % paths.length]; if (next) get().setSelectedPathId(next.id) },
+  selectRandomPath: () => { const paths = simulationBundle.paths.filter((p) => p.id !== get().selectedPathId); const pick = paths[Math.floor(Math.random() * paths.length)]; if (pick) get().setSelectedPathId(pick.id) },
+  nextPath: (direction) => { const idx = simulationBundle.paths.findIndex((p) => p.id === get().selectedPathId); const next = simulationBundle.paths[(idx + direction + simulationBundle.paths.length) % simulationBundle.paths.length]; if (next) get().setSelectedPathId(next.id) },
   selectDashboard: (id) => { set({ selectedDashboardId: id }); persist({ ...get(), selectedDashboardId: id }) },
   createDashboard: () => { const id = `dashboard-${Date.now()}`; const dashboard = { id, name: 'Untitled Dashboard', layout: [] }; set((s) => ({ dashboards: [...s.dashboards, dashboard], selectedDashboardId: id })); persist({ ...get(), dashboards: [...get().dashboards, dashboard], selectedDashboardId: id }) },
   createDashboardFromTemplate: (name, layout) => { const id = `dashboard-${Date.now()}`; const dashboard = { id, name, layout }; const dashboards = [...get().dashboards, dashboard]; set({ dashboards, selectedDashboardId: id }); persist({ ...get(), dashboards, selectedDashboardId: id }); return id },
@@ -66,9 +65,4 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   updateLayout: (layout) => { const dashboards = get().dashboards.map((d) => d.id === get().selectedDashboardId ? { ...d, layout } : d); set({ dashboards }); persist({ ...get(), dashboards }) },
 }))
 
-export function useSelectedPath() {
-  const bundle = useSimulationStore((s) => s.bundle)
-  const id = useExplorerStore((s) => s.selectedPathId)
-  if (!bundle) return null
-  return bundle.paths.find((p) => p.id === id) ?? bundle.paths[0] ?? null
-}
+export function useSelectedPath() { const id = useExplorerStore((s) => s.selectedPathId); return simulationBundle.paths.find((p) => p.id === id) ?? initialPath }

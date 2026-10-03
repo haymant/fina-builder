@@ -1,15 +1,20 @@
 import ReactECharts from 'echarts-for-react'
 import { memo, useMemo } from 'react'
-import { simulationBundle } from '../../../mock-data/generatePaths'
 import { useExplorerStore, useSelectedPath } from '../../../store/explorerStore'
+import { useSimulationStore } from '../../../store/simulationStore'
 import { PanelCard } from '../../shared/components/PanelCard'
+import { PanelLoading } from '../../shared/components/AsyncPanel'
+
+const EMPTY_BRANCH = { totalPaths: 0, koTriggered: 0, alive: 0, knockIn: 0, noKnockIn: 0, cashSettlement: 0, physicalDelivery: 0 }
 
 export const BranchSankeyPanel = memo(function BranchSankeyPanel() {
   const path = useSelectedPath()
   const theme = useExplorerStore((s) => s.theme)
-  const stats = simulationBundle.branchStats
+  const bundle = useSimulationStore((s) => s.bundle)
+  const stats = bundle?.branchStats ?? EMPTY_BRANCH
 
   const highlightBranch = useMemo(() => {
+    if (!path) return 'No KnockIn'
     if (path.knockedOut) return 'KO Triggered'
     if (path.knockInTriggered) {
       return path.settlementType === 'physical' ? 'Physical Delivery' : 'Cash Settlement'
@@ -118,6 +123,15 @@ export const BranchSankeyPanel = memo(function BranchSankeyPanel() {
       ],
     }
   }, [stats, highlightBranch, theme])
+
+  if (!bundle || !path) {
+    return (
+      <PanelLoading
+        title="Branch Statistics"
+        subtitle={`Selected branch · ${highlightBranch}`}
+      />
+    )
+  }
 
   return (
     <PanelCard

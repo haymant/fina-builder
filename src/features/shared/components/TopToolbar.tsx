@@ -1,6 +1,6 @@
 import { Dices, Moon, Sun, Workflow } from 'lucide-react'
 import { memo } from 'react'
-import { simulationBundle } from '../../../mock-data/generatePaths'
+import { useSimulationStore } from '../../../store/simulationStore'
 import { useExplorerStore, useSelectedPath } from '../../../store/explorerStore'
 
 export const TopToolbar = memo(function TopToolbar() {
@@ -10,6 +10,22 @@ export const TopToolbar = memo(function TopToolbar() {
   const theme = useExplorerStore((s) => s.theme)
   const toggleTheme = useExplorerStore((s) => s.toggleTheme)
   const path = useSelectedPath()
+  const bundle = useSimulationStore((s) => s.bundle)
+
+  if (!bundle || !path) {
+    return (
+      <header className="flex h-12 shrink-0 items-center gap-4 border-b border-slate-700/80 bg-panel px-4">
+        <div className="flex items-center gap-2">
+          <div className="flex h-7 w-7 items-center justify-center rounded bg-primary/20 text-primary">
+            <Workflow size={16} />
+          </div>
+          <div className="leading-tight">
+            <div className="text-sm font-semibold text-slate-100">Loading…</div>
+          </div>
+        </div>
+      </header>
+    )
+  }
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-4 border-b border-slate-700/80 bg-panel px-4">
@@ -19,9 +35,9 @@ export const TopToolbar = memo(function TopToolbar() {
         </div>
         <div className="leading-tight">
           <div className="text-sm font-semibold text-slate-100">
-            {simulationBundle.productName}
+            {bundle.productName}
           </div>
-          <div className="text-[10px] text-muted">{simulationBundle.tagline}</div>
+          <div className="text-[10px] text-muted">{bundle.tagline}</div>
         </div>
       </div>
 
@@ -34,7 +50,7 @@ export const TopToolbar = memo(function TopToolbar() {
           onChange={(e) => setSelectedPathId(e.target.value)}
           className="h-8 min-w-[160px] rounded border border-slate-600 bg-bg px-2 font-mono text-xs text-slate-100 outline-none focus:border-primary"
         >
-          {simulationBundle.paths.map((p) => (
+          {bundle.paths.map((p) => (
             <option key={p.id} value={p.id}>
               #{p.pathIndex} · PV {p.attribution.totalPv.toFixed(1)}
               {p.knockedOut ? ' · KO' : p.knockInTriggered ? ' · KI' : ' · Alive'}
@@ -55,7 +71,7 @@ export const TopToolbar = memo(function TopToolbar() {
       <div className="ml-auto flex items-center gap-3">
         <div className="hidden items-center gap-2 text-[11px] text-muted md:flex">
           <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-slate-300">
-            {simulationBundle.underlyings.join(' / ')}
+            {bundle.underlyings.join(' / ')}
           </span>
           <span>
             {path.knockedOut

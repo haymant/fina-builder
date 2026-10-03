@@ -1,9 +1,22 @@
+// Explain-ledger UI selection state only (§5d.3).
+//
+// The ledger entries + reconciliation come from the `useExplainLedger` hook;
+// this store holds exactly the selection state the tile tracks.
+
 import { create } from 'zustand'
-import { useValuationExplain } from './valuationExplainStore'
-import { useCashflowAnalytics } from './cashflowStore'
+
 export type ExplainSource = 'market' | 'plva' | 'cashflow' | 'valuation' | 'risk'
-export type ExplainEntry = { id: string; timestamp: string; source: ExplainSource; category: string; subCategory?: string; contribution: number; currency: string; description: string; parentId?: string; metadata?: Record<string, unknown> }
-export type ExplainReconciliation = { totalMarket: number; totalPLVA: number; totalCashflow: number; totalValuation: number; totalRisk: number; explained: number; actualPnL: number; residual: number }
-export const useExplainLedgerStore = create<{ selectedEntryId?: string; selectedSource?: ExplainSource; selectEntry: (id: string) => void; selectSource: (source?: ExplainSource) => void }>((set) => ({ selectedEntryId: undefined, selectedSource: undefined, selectEntry: (selectedEntryId) => set({ selectedEntryId }), selectSource: (selectedSource) => set({ selectedSource }) }))
-export function useExplainLedger() { const v = useValuationExplain(); const cash = useCashflowAnalytics(); const timestamp = new Date().toISOString().slice(0, 10); const entries: ExplainEntry[] = [{ id: 'market-delta', timestamp, source: 'market', category: 'spot', subCategory: 'delta', contribution: v.taylor.delta, currency: 'USD', description: 'Spot move × delta contribution' }, { id: 'market-gamma', timestamp, source: 'market', category: 'spot', subCategory: 'gamma', contribution: v.taylor.gamma, currency: 'USD', description: 'Convexity contribution' }, { id: 'market-vega', timestamp, source: 'market', category: 'volatility', subCategory: 'vega', contribution: v.taylor.vega, currency: 'USD', description: 'Volatility move × vega contribution' }, { id: 'market-theta', timestamp, source: 'market', category: 'time', subCategory: 'theta', contribution: v.taylor.theta, currency: 'USD', description: 'Time decay contribution' }, ...v.plva.map((x) => ({ id: `plva-${x.category}`, timestamp, source: 'plva' as const, category: x.category, contribution: x.contribution, currency: 'USD', description: 'Valuation methodology adjustment' })), { id: 'cashflow-coupon', timestamp, source: 'cashflow', category: 'coupon', contribution: cash.realized, currency: 'USD', description: 'Realized coupon cashflows' }, { id: 'valuation-discounting', timestamp, source: 'valuation', category: 'discounting', contribution: cash.presentValue - cash.grossCashflow, currency: 'USD', description: 'Discounting impact on cashflows' }]; const selected = useExplainLedgerStore((s) => s.selectedEntryId); const source = useExplainLedgerStore((s) => s.selectedSource); const filtered = entries.filter((e) => !source || e.source === source); const totals = (s: ExplainSource) => entries.filter((e) => e.source === s).reduce((n, e) => n + e.contribution, 0); const totalMarket = totals('market'); const totalPLVA = totals('plva'); const totalCashflow = totals('cashflow'); const totalValuation = totals('valuation'); const totalRisk = totals('risk'); const explained = totalMarket + totalPLVA + totalCashflow + totalValuation + totalRisk; const actualPnL = v.state.totalPnL; return { entries, filtered, selectedEntry: entries.find((e) => e.id === selected), reconciliation: { totalMarket, totalPLVA, totalCashflow, totalValuation, totalRisk, explained, actualPnL, residual: actualPnL - explained } satisfies ExplainReconciliation, selected }
+
+type ExplainLedgerState = {
+  selectedEntryId?: string
+  selectedSource?: ExplainSource
+  selectEntry: (id: string) => void
+  selectSource: (source?: ExplainSource) => void
 }
+
+export const useExplainLedgerStore = create<ExplainLedgerState>((set) => ({
+  selectedEntryId: undefined,
+  selectedSource: undefined,
+  selectEntry: (selectedEntryId) => set({ selectedEntryId }),
+  selectSource: (selectedSource) => set({ selectedSource }),
+}))

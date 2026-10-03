@@ -1,9 +1,17 @@
 /**
  * ONE-OFF golden-fixture generator.
  *
- * Runs the *actual* TypeScript domain logic (as it exists at the start of the
+ * Runs the *actual* TypeScript domain logic (as it existed at the start of the
  * Rust migration) and serialises the result to JSON. The Rust port of
  * `fina-kernel` must reproduce these bytes exactly (see FEATURE parity rules).
+ *
+ * The domain modules it imports were deleted from `src/` when the frontend was
+ * rewired to the kernel (Phase 5d), so they are re-materialised here from the
+ * pinned ref `48da206` — the last commit that still had them. Regenerating the
+ * fixture therefore reproduces the exact captured baseline, deliberately:
+ * the golden file is a *witness*, not a moving target.
+ *
+ *   git show 48da206:src/<path> > scripts/golden-src/<path>
  *
  * Usage:
  *   npx tsx scripts/generate-golden-fixture.ts
@@ -14,22 +22,22 @@ import { writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { simulationBundle } from '../src/mock-data/generatePaths'
-import { mcDiagnostics, mcEfficiency, finalMC } from '../src/mock-data/mcDiagnostics'
-import { DEFAULT_TRADE_ECONOMICS, deriveTradeAnalytics } from '../src/store/tradeEconomicsStore'
-import { useTradeEconomicsStore } from '../src/store/tradeEconomicsStore'
+import { simulationBundle } from './golden-src/mock-data/generatePaths'
+import { mcDiagnostics, mcEfficiency, finalMC } from './golden-src/mock-data/mcDiagnostics'
+import { DEFAULT_TRADE_ECONOMICS, deriveTradeAnalytics } from './golden-src/store/tradeEconomicsStore'
+import { useTradeEconomicsStore } from './golden-src/store/tradeEconomicsStore'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const out = resolve(here, '../crates/fina-kernel/tests/fixtures/golden.json')
 
 // ---- risk engine (needs market data shape) -------------------------------
-const { computeRisk } = await import('../src/features/pathcube/riskEngine')
-const { useMarketDataStore } = await import('../src/store/marketDataStore')
+const { computeRisk } = await import('./golden-src/features/pathcube/riskEngine')
+const { useMarketDataStore } = await import('./golden-src/store/marketDataStore')
 
 // ---- cashflows -----------------------------------------------------------
 // buildCashflows depends on a selected path + trade inputs. Re-implement the
 // *invocation* here only; the logic itself is imported from the store.
-const { buildCashflows } = await import('../src/store/cashflowStore')
+const { buildCashflows } = await import('./golden-src/store/cashflowStore')
 
 const marketState = useMarketDataStore.getState()
 const trade = useTradeEconomicsStore.getState()

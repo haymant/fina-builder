@@ -1,6 +1,7 @@
 import { memo, useMemo } from 'react'
 import { useExplorerStore, useSelectedPath } from '../../../store/explorerStore'
 import { PanelCard } from '../../shared/components/PanelCard'
+import { PanelLoading } from '../../shared/components/AsyncPanel'
 import { StatsBadge } from '../../shared/components/StatsBadge'
 
 export const NodeDetailPanel = memo(function NodeDetailPanel() {
@@ -8,10 +9,11 @@ export const NodeDetailPanel = memo(function NodeDetailPanel() {
   const selectedNodeId = useExplorerStore((s) => s.selectedNodeId)
   const selectedDateIndex = useExplorerStore((s) => s.selectedDateIndex)
 
-  const detail = path.nodeDetails[selectedNodeId]
-  const obs = path.observations[selectedDateIndex]
+  const detail = path?.nodeDetails[selectedNodeId]
+  const obs = path?.observations[selectedDateIndex]
 
   const liveInput = useMemo(() => {
+    if (!detail) return '—'
     if (!obs) return detail.inputValue
     if (selectedNodeId === 'WorstOfPerformance') {
       return `Wo = ${(obs.worstOfPerformance * 100).toFixed(1)}% @ ${obs.date}`
@@ -26,7 +28,16 @@ export const NodeDetailPanel = memo(function NodeDetailPanel() {
       return `${obs.couponMemoryBalance.toFixed(2)}`
     }
     return detail.inputValue
-  }, [detail.inputValue, obs, selectedNodeId])
+  }, [detail, obs, selectedNodeId])
+
+  if (!path || !detail) {
+    return (
+      <PanelLoading
+        title="Node Details"
+        subtitle="Node-level probability and decision detail"
+      />
+    )
+  }
 
   return (
     <PanelCard
