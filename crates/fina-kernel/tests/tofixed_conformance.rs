@@ -8,7 +8,7 @@
 //! cargo test -p fina-kernel --test tofixed_conformance -- --ignored
 //! ```
 //!
-//! The corpus is ~132,000 entries covering:
+//! The corpus is ~215,000 entries covering:
 //!
 //! - every distinct value the real kernel formats (from `golden.json`)
 //! - an exhaustive sweep of 4-decimal values ending in `5` (every `toFixed`
@@ -19,12 +19,18 @@
 //!   six presets' analytics, the risk engine's outputs, the demo market's
 //!   synthetic history, and the MC series (added in Phase 3 by
 //!   `extend-tofixed-cases.mjs`)
+//! - every Phase 4 cashflow formatter input — sixty raw amounts, sixty raw
+//!   discount factors (the port's first `toFixed(4)`) and sixty raw
+//!   `amount * rounded_df` products — plus a full 4-decimal tie sweep and a
+//!   4-decimal near-tie/random/non-tie pass (sections 5–6 of
+//!   `extend-tofixed-cases.mjs`)
 //!
 //! A naive `Math.round(v * 10^p) / 10^p` implementation fails this corpus on
-//! **2,256** entries, landing on a different *number*. That is the only evidence
-//! that the exact-rational approach is right and that `js_to_fixed_f64` is
-//! needed separately from `round2`. A further **4,457** entries differ only in
-//! the sign of a zero result, which is a separate and documented divergence.
+//! **11,111** entries, landing on a different *number*. That is the only
+//! evidence that the exact-rational approach is right and that
+//! `js_to_fixed_f64` is needed separately from `round2`. A further **5,961**
+//! entries differ only in the sign of a zero result, which is a separate and
+//! documented divergence.
 //!
 //! Values are stored as **raw IEEE-754 bit patterns**, not decimals. Adjacent
 //! doubles such as `0.45` and `0.44999999999999996` round-trip through decimal
@@ -49,8 +55,10 @@
 use fina_kernel::diagnostics::{final_mc, mc_diagnostics, mc_efficiency};
 use fina_kernel::economics::{derive_trade_analytics, DEFAULT_TRADE_ECONOMICS};
 use fina_kernel::jsnum::{js_to_fixed, js_to_fixed_f64, round2};
+use fina_kernel::path_generator::{generate_paths, SimulationConfig};
 use fina_kernel::risk_engine::compute_risk;
 use fina_kernel::types::MarketSnapshot;
+use fina_kernel::valuation::build_cashflows;
 use serde::Deserialize;
 
 /// One `[valueBitsHex, places, jsResult]` triple.
@@ -122,7 +130,7 @@ fn js_to_fixed_matches_javascript_across_the_differential_corpus() {
 /// `+x.toFixed(p)` sites in `economics`, `risk_engine` and `diagnostics` use.
 ///
 /// This is the test that would have caught the Phase 3 defect. Running the
-/// corpus through `round2` instead fails 2,256 entries, one of which is
+/// corpus through `round2` instead fails 11,111 entries, one of which is
 /// `Defensive Phoenix`'s published `couponPv`.
 #[test]
 #[ignore = "requires `node scripts/generate-tofixed-cases.mjs` (see module docs)"]
@@ -212,12 +220,12 @@ fn the_corpus_discriminates_js_to_fixed_f64_from_the_round_family() {
     // either fires, the corpus or the docs need updating — deliberately so.
     assert_eq!(
         digits,
-        2_256,
+        11_111,
         "digit-discriminating count changed; module docs and Appendix D quote it\n  {}",
         examples.join("\n  ")
     );
     assert_eq!(
-        sign_of_zero, 4_457,
+        sign_of_zero, 5_961,
         "sign-of-zero count changed; module docs and Appendix D quote it"
     );
 }
@@ -515,6 +523,70 @@ fn corpus_covers_every_value_phase_three_emits() {
     assert!(
         missing.is_empty(),
         "{} Phase 3 values are absent from the toFixed corpus:\n  {}",
+        missing.len(),
+        missing
+            .iter()
+            .take(20)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+}
+
+/// Phase 4's cashflow formatter inputs, every one of them: the sixty raw
+/// amounts (2dp), the sixty raw discount factors (the first `toFixed(4)` in the
+/// port) and the sixty raw `amount * rounded_df` products (2dp).
+///
+/// The corpus gained a dedicated 4-decimal sweep in Phase 4
+/// (`extend-tofixed-cases.mjs` sections 5–6); this test asserts the *specific*
+/// values the kernel emits are in it, so removing that sweep fails here with a
+/// named value rather than an unexplained parity break.
+#[test]
+fn corpus_covers_every_value_phase_four_formats() {
+    let cases = load();
+    let covered: std::collections::HashSet<(u32, String)> = cases
+        .iter()
+        .map(|c| (c.places, c.expected.clone()))
+        .collect();
+    let is_covered = |v: f64, p: u32| covered.contains(&(p, js_to_fixed(v, p)));
+
+    let bundle = generate_paths(SimulationConfig::demo(), |_| {}).expect("demo config valid");
+    let path = &bundle.paths[0];
+    let rows = build_cashflows(path, &DEFAULT_TRADE_ECONOMICS);
+
+    let mut missing = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        // The raw input to each of the three `+(x).toFixed(p)` sites. `amount`
+        // and `discountFactor` are recomputed with the exact TS expressions;
+        // `present_value` is `round2(amount * rounded_df)`'s input.
+        let raw_amount = if i == rows.len() - 1 {
+            DEFAULT_TRADE_ECONOMICS.notional
+        } else {
+            DEFAULT_TRADE_ECONOMICS.notional * DEFAULT_TRADE_ECONOMICS.coupon_rate / 12.0
+                * if path.observations[i].coupon_accrued > 0.0 {
+                    1.0
+                } else {
+                    0.0
+                }
+        };
+        let raw_df = 1.0 / 1.04_f64.powf((i as f64 + 1.0) / 12.0);
+        let rounded_df = js_to_fixed_f64(raw_df, 4);
+        let raw_pv = row.amount * rounded_df;
+
+        if !is_covered(raw_amount, 2) {
+            missing.push(format!("rows[{i}].amount raw = {raw_amount:?} at 2dp"));
+        }
+        if !is_covered(raw_df, 4) {
+            missing.push(format!("rows[{i}].discountFactor raw = {raw_df:?} at 4dp"));
+        }
+        if !is_covered(raw_pv, 2) {
+            missing.push(format!("rows[{i}].presentValue raw = {raw_pv:?} at 2dp"));
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "{} Phase 4 values are absent from the toFixed corpus:\n  {}",
         missing.len(),
         missing
             .iter()

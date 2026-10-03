@@ -31,6 +31,7 @@ use fina_kernel::economics::{derive_trade_analytics, DEFAULT_TRADE_ECONOMICS};
 use fina_kernel::path_generator::{generate_paths, SimulationConfig};
 use fina_kernel::risk_engine::compute_risk;
 use fina_kernel::types::{MarketSnapshot, PayoffNodeId, SettlementType, SimulationBundle};
+use fina_kernel::valuation::{build_cashflows, cashflow_analytics, valuation_explain};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -206,6 +207,92 @@ fn assert_eq_values(section: &str, expected: &Value, actual: &Value) {
 #[test]
 fn simulation_bundle_matches_golden_byte_for_byte() {
     assert_parity("simulationBundle", &generate());
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: cashflow, valuation explain
+// ---------------------------------------------------------------------------
+
+/// The path the fixture's `cashflow` section was captured from.
+fn golden_cashflow_inputs() -> (fina_kernel::types::SimulationPath, serde_json::Value) {
+    let g = golden();
+    let path0_path_index = g["cashflow"]["pathIndex"].as_u64().unwrap() as usize;
+    let bundle = generate();
+    let path = bundle
+        .paths
+        .iter()
+        .find(|p| p.path_index == path0_path_index)
+        .expect("fixture's cashflow.pathIndex must match a demo path");
+    (path.clone(), g)
+}
+
+/// The whole `cashflow` section — rows, path index and the three aggregates —
+/// against the fixture, which was captured from the real
+/// `buildCashflows(paths[0], defaultTrade)`.
+#[test]
+fn cashflow_section_matches_golden() {
+    let (path, _g) = golden_cashflow_inputs();
+    let trade = DEFAULT_TRADE_ECONOMICS;
+    let rows = build_cashflows(&path, &trade);
+    let a = cashflow_analytics(&path, &trade);
+
+    let payload = serde_json::json!({
+        "pathIndex": path.path_index,
+        "rows": rows,
+        "grossCashflow": a.gross_cashflow,
+        "presentValue": a.present_value,
+        "realized": a.realized,
+    });
+    assert_parity("cashflow", &payload);
+}
+
+/// The 60 cashflow rows individually, so a failure names the row.
+#[test]
+fn every_cashflow_row_matches_golden_individually() {
+    let (path, g) = golden_cashflow_inputs();
+    let rows = build_cashflows(&path, &DEFAULT_TRADE_ECONOMICS);
+    let golden_rows = g["cashflow"]["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), golden_rows.len());
+
+    for (i, (row, grow)) in rows.iter().zip(golden_rows).enumerate() {
+        let mut diffs = Vec::new();
+        let n = diff(
+            &format!("cashflow.rows[{i}]"),
+            grow,
+            &serde_json::to_value(row).unwrap(),
+            &mut diffs,
+            25,
+        );
+        assert_eq!(
+            n,
+            0,
+            "cashflow row {i} ({}) diverged:\n  {}",
+            row.id,
+            diffs.join("\n  ")
+        );
+    }
+}
+
+/// `valuation`: previousPV, currentPV, the nine Taylor fields, the four PLVA
+/// rows and the **unrounded** `plvaPnL` (`1.0000000000000002`, not `1`).
+#[test]
+fn valuation_section_matches_golden() {
+    let (path, _g) = golden_cashflow_inputs();
+    let cash = cashflow_analytics(&path, &DEFAULT_TRADE_ECONOMICS);
+    let v = valuation_explain(&cash, &MarketSnapshot::demo());
+
+    let payload = serde_json::json!({
+        "previousPV": v.previous_pv,
+        "currentPV": v.current_pv,
+        "taylor": v.taylor,
+        "plva": v.plva,
+        "plvaPnL": v.plva_pnl,
+    });
+    assert_parity("valuation", &payload);
+
+    // The two headline numbers this phase exists to reproduce, exactly.
+    assert_eq!(cash.present_value, 94.89);
+    assert_eq!(v.taylor.predicted, 1.686_000_000_000_000_4);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Adds the `economics`, `risk_engine` and `marketDataStore` demo values to the
-// differential corpus used by
+// Adds the `economics`, `risk_engine`, `marketDataStore` demo values **and the
+// Phase 4 cashflow formatter inputs** to the differential corpus used by
 // `crates/fina-kernel/tests/tofixed_conformance.rs`.
 //
 //   node scripts/extend-tofixed-cases.mjs
@@ -228,6 +228,67 @@ for (let i = 0; i < 10; i += 1) {
   push(116 - 5 / Math.sqrt(i + 1), 2)
 }
 
+// --- 5. Phase 4: the cashflow formatter inputs ----------------------------
+// `buildCashflows` formats through `+(x).toFixed(p)` at THREE sites per row:
+// `amount` at 2, `discountFactor` at **4**, and `presentValue` at 2. The 4-decimal
+// site is the first in the port, and the corpus had no 4-decimal entries at all —
+// `js_to_fixed_f64(.., 4)` would have been entirely unverified. These are the 60
+// raw inputs from the fixture's own captured path, re-derived with the exact
+// TypeScript expression so the bits match what the kernel produces.
+const cfPath = golden.simulationBundle.paths[0] // pathIndex 1, the fixture's cashflow path
+for (let i = 0; i < 60; i += 1) {
+  const final = i === 59
+  const accrued = cfPath.observations[i].couponAccrued > 0
+  const amountRaw = final ? 100 : (100 * 0.12 / 12) * (accrued ? 1 : 0)
+  const dfRaw = 1 / (1 + 0.04) ** ((i + 1) / 12)
+  const dfRounded = Number(dfRaw.toFixed(4))
+  const pvRaw = Number(amountRaw.toFixed(2)) * dfRounded // amount is already rounded
+
+  push(amountRaw, 2)
+  push(dfRaw, 4)
+  push(pvRaw, 2)
+  push(-dfRaw, 4) // negative curve would never occur, but the primitive is shared
+}
+
+// --- 6. 4-decimal tie coverage (p = 4) -------------------------------------
+// Section 2 of the original generator sweeps ties at 1, 2 and 3 decimals only.
+// These are the same sweep at 4.
+for (let k = 0; k < 100000; k += 1) {
+  const v = k / 100000
+  if (Math.round(v * 100000) % 10 !== 5) continue
+  push(v, 4)
+  push(-v, 4)
+  push(v, 2)
+  push(-v, 2)
+}
+// Near-tie 4-decimal boundaries: doubles a hair either side of a 4dp boundary,
+// the complement of the exact-tie sweep.
+const nearTies4 = [0.00005, 0.00015, 0.00025, 0.00035, 0.00045, 0.00055, 0.00065, 0.00075,
+  0.00085, 0.00095, 0.0045 / 10, 0.0055 / 10, 0.0095 / 10, 0.0145 / 10, 0.0995, 0.0995 * 10,
+  0.000049999999999999, 0.004999999999999999, 0.045 * 0.1, 0.055 * 0.1,
+]
+for (const v of nearTies4) {
+  push(v, 4)
+  push(-v, 4)
+}
+// Broad non-tie sweep at 4 decimals (stride, like section 4 of the generator).
+for (let k = 1; k < 20000; k += 1) {
+  const v = k / 100000
+  if (Math.round(v * 100000) % 10 === 5) continue
+  push(v, 4)
+  push(-v, 4)
+}
+// Pseudo-random doubles at 4 decimals, across magnitudes.
+let s4 = 98765
+const rnd4 = () => {
+  s4 = (s4 * 1103515245 + 12345) & 0x7fffffff
+  return s4 / 0x7fffffff
+}
+for (let i = 0; i < 20000; i += 1) {
+  const v = (rnd4() - 0.5) * 10 ** Math.floor(rnd4() * 3 - 4)
+  push(v, 4)
+}
+
 // --- 5. the known ties, stated explicitly --------------------------------
 // These are the values that separate `+(x).toFixed(p)` from
 // `Math.round(x * 10^p) / 10^p`. They are in the sweeps above by construction,
@@ -303,8 +364,8 @@ console.log(`cases where it differs only in the sign of zero:                ${s
 // These two numbers are also the assertions in `tests/tofixed_conformance.rs` and
 // are quoted in Appendix D. If a sweep is added or removed, all three must move
 // together — failing loudly here is what stops the docs becoming fiction.
-const EXPECTED_DIGITS = 2256
-const EXPECTED_SIGN_OF_ZERO = 4457
+const EXPECTED_DIGITS = 11111
+const EXPECTED_SIGN_OF_ZERO = 5961
 if (digits !== EXPECTED_DIGITS || signOfZero !== EXPECTED_SIGN_OF_ZERO) {
   throw new Error(
     `discriminating-case counts changed: got ${digits} digits / ${signOfZero} sign-of-zero, ` +

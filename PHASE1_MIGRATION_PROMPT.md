@@ -1479,7 +1479,9 @@ going through `f64` at all. It is verified against a differential corpus generat
 by Node, stored as IEEE-754 hex bit patterns (so the fixture is exact rather than
 decimal-text-lossy). The corpus was **105,859** cases when this appendix was
 written and is **132,002** after Phase 3 extended it with every value the
-`economics`/`risk_engine`/`diagnostics` modules can format. All cases pass.
+`economics`/`risk_engine`/`diagnostics` modules can format, and **215,775**
+after Phase 4 added the first `toFixed(4)` site plus a full 4-decimal tie
+sweep. All cases pass.
 
 One divergence is documented and unreachable here: JavaScript returns `"1e+30"` for
 `|x| >= 1e21`, which `js_to_fixed` does not.
@@ -1544,7 +1546,7 @@ entire Rust migration is unpushed — so **no force-push was required and no
 published history was affected**.
 
 `03ecab8`'s message also claims "445k JS cases" for the `toFixed` corpus. The
-deduplicated corpus is **105,859** cases at that point (132,002 after Phase 3) and
+deduplicated corpus is **105,859** cases at that point (215,775 after Phase 4) and
 the threshold in `tofixed_conformance.rs` was corrected from 400,000 to 60,000 in
 `5d68889`.
 
@@ -1555,8 +1557,8 @@ the threshold in `tofixed_conformance.rs` was corrected from 400,000 to 60,000 i
 Delivered in this commit. 239 tests passing workspace-wide (172 lib + 6 hygiene +
 21 golden + 17 semantics + 10 conformance + 13 doctests), `cargo clippy
 --all-targets --all-features -- -D warnings` clean, `cargo fmt --check` clean. The
-two `#[ignore]`d differential tests pass over all 132,002 corpus entries when run
-with `--ignored`.
+two `#[ignore]`d differential tests pass over all 215,775 corpus entries when
+run with `--ignored`.
 
 | Artifact | Lines | Purpose |
 | --- | --- | --- |
@@ -1594,12 +1596,13 @@ The corpus quantifies what the alternative would have cost:
 
 | Divergence | Cases | Consequence |
 | --- | --- | --- |
-| Different **digits** | **2,256** | Wrong number. `round2` instead of `js_to_fixed_f64`. |
-| Different **sign of zero** | **4,457** | Same number under `==`; different JSON *text*. See below. |
+| Different **digits** | **11,111** | Wrong number. `round2` instead of `js_to_fixed_f64`. |
+| Different **sign of zero** | **5,961** | Same number under `==`; different JSON *text*. See below. |
 
-Both counts are pinned by `the_corpus_discriminates_js_to_fixed_f64_from_the_round_family`,
-so regenerating the corpus without updating this appendix is a test failure rather
-than a silent change of ground.
+Both counts are pinned by `the_corpus_discriminates_js_to_fixed_f64_from_the_round_family`
+**and** asserted inside `extend-tofixed-cases.mjs` itself, so regenerating the
+corpus without updating either (and this appendix) is a test failure rather than
+a silent change of ground.
 
 The sign-of-zero divergence is a separate finding. `+(-0.0001).toFixed(2)` is `-0`
 in JavaScript, because the string is `"-0.00"` and `Number` preserves the sign;
@@ -1703,7 +1706,98 @@ behavioural difference, not an implementation detail.
 
 | # | Draft said | Did | Why |
 | --- | --- | --- | --- |
-| A-14 | Reuse `round2` for `+(x).toFixed(p)` | Added `js_to_fixed_f64` | The two disagree on 2,256 corpus entries and on a published preset value. See above. |
+| A-14 | Reuse `round2` for `+(x).toFixed(p)` | Added `js_to_fixed_f64` | The two disagree on 11,111 corpus entries and on a published preset value. See above. |
 | A-15 | §3.1: `expected_pv` uses rounded `ki_probability` | Uses the clamped unrounded local | The spec is wrong; the source and the golden fixture agree with each other. |
 | A-16 | Market types belong to `risk_engine` | They live in `types.rs` | Phase 4's `valuation_explain` needs `Underlying`/`FxPair`/`VolParams` too, and a domain type owned by one feature module is the wrong home. |
 | A-17 | `diagnostics` gets its own progress callback | Reuses Phase 1's `ProgressEvent` | `mcDiagnostics` is a static table with no per-row progress to report; a callback would be a fiction. |
+
+---
+
+## Appendix E. Phase 4 completion record
+
+Delivered in this commit. 260 tests passing workspace-wide (189 lib + 6 hygiene
++ 24 golden + 17 semantics + 11 conformance + 13 doctests), `cargo clippy
+--all-targets --all-features -- -D warnings` clean, `cargo fmt --check` clean.
+The two `#[ignore]`d differential tests pass over all 215,775 corpus entries.
+
+| Artifact | Lines | Purpose |
+| --- | --- | --- |
+| `crates/fina-kernel/src/valuation.rs` | ~1,100 | Port of `cashflowStore.ts`, `valuationExplainStore.ts`, `explainLedgerStore.ts` |
+| `scripts/extend-tofixed-cases.mjs` (§§5–6) | +120 | Phase 4 formatter inputs + the corpus's first 4-decimal coverage |
+| `golden_parity.rs` (3 tests) | +150 | `cashflow` + `valuation` sections, whole and row-by-row |
+
+The ledger has no golden section (it did not exist when the fixture was
+captured), so every ledger value is pinned against the *real TypeScript
+executed under Node*, with the same discipline as the golden values: exact
+doubles, no epsilon. The ledger test doubles as the source of truth for the
+next fixture regeneration.
+
+### What the golden fixture demanded
+
+- `plvaPnL` is `1.0000000000000002`, **not `1.0`**. §4.2's "= 1.0" is the
+  mathematical intent; IEEE-754 refuses. `0.8 + 0.3 - 0.2 + 0.1` unrounded is
+  what the frontend emits, and the fixture says so. Portal, don't repair.
+- `state.totalPnl` is `1.7999999999999972` (i.e. `94.89 - 93.09`), and
+  `state.residualPnL` is `-0.8860000000000035`. Several spec pseudocode lines
+  show these as `1.8` / `-0.886`; the raw doubles are the contract.
+- `taylor.predicted` is the same order-pinned eight-term sum as Phase 1 —
+  `1.6860000000000004` — proving A-11's "one module" decision has held across
+  two phases without the order drifting.
+- `cashflow.grossCashflow` is `113` — 59 coupons of which 13 accrue — and
+  `presentValue` `94.89`; the sixty rows match row-for-row.
+
+### The `toFixed(4)` gap, closed
+
+Phase 4 introduced the port's first 4-decimal formatting site (`discountFactor
+= +(1 / 1.04 ** ((i + 1) / 12)).toFixed(4)`), and the differential corpus had
+**no 4-decimal entries at all** — `js_to_fixed_f64(.., 4)` would have been
+entirely unverified, with only the golden fixture as a witness for 60 specific
+values. `extend-tofixed-cases.mjs` gained a full 4-decimal coverage pass (the
+sixty raw df inputs, a complete 4dp tie sweep, near-ties, non-ties and
+pseudo-random values across magnitudes). The corpus is now **215,775** entries
+and the discriminating counts rose accordingly:
+
+| Divergence | Before | After Phase 4 | Cause of the increase |
+| --- | --- | --- | --- |
+| Different **digits** | 2,256 | **11,111** | 4dp ties, where the scaling multiply rounds to exactly the tie |
+| Different **sign of zero** | 4,457 | **5,961** | 4dp near-ties like `-0.00004999…` → `-0.0000` (−0) vs `+0` |
+
+The counts are asserted in three places that must move together: the Rust
+conformance test, the generator itself (which throws otherwise), and this
+appendix.
+
+### A serde trap the acronyms set
+
+`serde`'s `rename_all = "camelCase"` turns `previous_pv` into `previousPv`,
+`plva_pnl` into `plvaPnl`, and `total_plva` into `totalPlva`. The frontend's
+object literals say `previousPV`, `plvaPnL`, `totalPLVA`. Every `PV`/`PnL`
+field therefore carries an explicit `#[serde(rename = …)]`, and
+`acronym_keys_serialise_exactly_as_the_frontend_writes_them` fails if a naive
+camelCase key ever leaks. Phase 3 got away with `rename_all = "camelCase"`
+because `fxDelta`, `bucketVegas` etc. are not acronym-heavy; this is the
+class of detail the golden tests exist to catch, but the ledger has no golden
+section, so the key-shape test is load-bearing there.
+
+### The `?? 100` / `?? 1` fallbacks are real
+
+`valuationExplainStore.ts` reads `underlyings[0]?.spot ?? 100` and
+`fxPairs[0]?.spot ?? 1`. The demo market never triggers them, but they are
+part of the contract (an empty market is a valid request). `valuation_explain`
+mirrors both; `empty_market_uses_the_store_fallbacks` proves it.
+
+### One convention fight, deliberately not settled
+
+§4.1 flags that `cashflowStore` treats `coupon_rate` as **annual** (0.12/12 per
+month) while `generatePaths` uses **monthly** 0.008. The port keeps both
+verbatim and `build_cashflows` documents the annual reading on the
+`coupon_rate` field. Unifying them is explicitly out of scope.
+
+### Deviations from the draft roadmap
+
+| # | Draft said | Did | Why |
+| --- | --- | --- | --- |
+| A-18 | `cashflow`/`explain`/`ledger` as separate modules | One `valuation` module | Same A-11 rationale: three small stores with one shared type surface read better side by side. The public API is `fina_kernel::valuation::*`, so a later split is mechanical. |
+| A-19 | §4.2 `residual` omitted from `predicted` "preserve that" | Preserved, and pinned | `explained` deliberately excludes `taylor.residual`, so the ledger can never reconcile to `total_pnl` by itself; the residual is that difference. Documented on the struct and in the reconciliation test. |
+| A-20 | §4.1 pseudocode `round2(...)` for `amount` | `js_to_fixed_f64(..., 2)` | The store writes `+(…).toFixed(2)`. Identical on every demo row; the corpus is the reason to keep them apart. Same finding as A-14. |
+| A-21 | §4.3 `total_risk == 0.0` "label, do not repair" | Labelled (`ExplainReconciliation::total_risk`) | The reconciliation sums an empty bucket. The field exists because the frontend renders five buckets. |
+| A-22 | `as_of` injected | `explain_ledger(explain, cash, as_of)` | The store reads `new Date()`, the one nondeterminism in the module. Injected so `Same inputs → same bytes` (I-2) holds for the ledger too. |

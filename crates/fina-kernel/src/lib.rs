@@ -70,6 +70,7 @@ pub mod progress;
 pub mod risk_engine;
 pub mod rng;
 pub mod types;
+pub mod valuation;
 
 pub use error::{FinaError, FinaErrorWire, Result, WireError};
 pub use progress::{ProgressEvent, ProgressLog};
@@ -78,6 +79,11 @@ pub use types::{
     PathAttribution, PathObservation, PayoffNodeId, ProductBarriers, SettlementType,
     SimulationBundle, SimulationDistributions, SimulationPath, TradeEconomics, Underlying,
     VolParams, DEFAULT_TRADE_ECONOMICS,
+};
+pub use valuation::{
+    build_cashflows, cashflow_analytics, explain_ledger, valuation_explain, Cashflow,
+    CashflowAnalytics, CashflowType, ExplainEntry, ExplainLedger, ExplainReconciliation,
+    ExplainSource, PlvaContribution, TaylorExplain, ValuationExplain, ValuationExplainState,
 };
 
 /// Crate version, surfaced by the `health` command on every transport.

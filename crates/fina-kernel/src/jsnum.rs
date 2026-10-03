@@ -279,7 +279,7 @@ fn decompose_f64(a: f64) -> (u64, i32) {
 ///
 /// `serde_json` then writes `-0.0` where JavaScript's `JSON.stringify` writes
 /// `0`. The two are the same number under `==`, so golden parity is unaffected;
-/// only the serialised *text* differs. 4,457 of the 132,002 entries in the
+/// only the serialised *text* differs. 5,961 of the 215,775 entries in the
 /// differential corpus are in this position, and every Phase 3 module can reach
 /// one through a negative sub-cent result — `theta = -notional * 0.012` for a
 /// notional below `0.4167`, or `cross_gamma` from a small negative correlation.
@@ -683,7 +683,7 @@ mod tests {
     /// The places where the two primitives disagree on *magnitude*, for a
     /// sample of the shapes Phase 3 produces. A small version of the corpus
     /// sweep, kept here so the primitive's contract is stated in the module that
-    /// implements it. `tests/tofixed_conformance.rs` runs the full 132,002-case
+    /// implements it. `tests/tofixed_conformance.rs` runs the full 215,775-case
     /// version and pins the count.
     #[test]
     fn round_family_disagrees_with_js_to_fixed_f64_on_ties() {
