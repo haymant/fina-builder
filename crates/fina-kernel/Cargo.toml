@@ -1,0 +1,32 @@
+[package]
+name = "fina-kernel"
+description = "Structured-product analytics domain kernel: path generation, risk, cashflows, valuation explain"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# ---------------------------------------------------------------------------
+# DEPENDENCY ALLOWLIST (hard constraint, enforced by CI job `dependency-hygiene`)
+#
+# This crate is the single source of truth for domain logic. It must contain
+# NO transport, UI, async-runtime or framework dependencies. If a change here
+# adds anything outside this list, the layering rule in
+# PHASE1_MIGRATION_PROMPT.md section 4 has been violated.
+#
+#   serde      - wire/domain types
+#   serde_json - golden fixtures + adapter serialization tests
+#   thiserror  - FinaError
+#   (no chrono/time: the demo schedule is plain month arithmetic, see dates.rs)
+# ---------------------------------------------------------------------------
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

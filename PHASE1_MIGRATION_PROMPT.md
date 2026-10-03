@@ -180,9 +180,18 @@ The layering rule, stated once:
       └───────────────────┘        └──────────────────┘
 ```
 
-**`fina-kernel` dependency allowlist (hard constraint):** `serde`, `serde_json`, `thiserror`,
-`chrono` (or `time`). Nothing else. No `tauri`, no `actix-web`, no `clap`, no `tokio`, no
-`rand`, no `nalgebra`. CI must fail if this is violated (Phase 6 lint).
+**`fina-kernel` dependency allowlist (hard constraint):** `serde`, `serde_json`, `thiserror`.
+Nothing else. No `tauri`, no `actix-web`, no `clap`, no `tokio`, no `rand`, no `nalgebra`, and
+no `chrono`/`time` (see the deviation note below). CI must fail if this is violated: the
+allowlist is enforced by `crates/fina-kernel/tests/dependency_hygiene.rs`, which also asserts
+that the list here and the list in that test cannot drift apart.
+
+> **Deviation from the original draft — `chrono` dropped.** The observation schedule is
+> `2024-01-15` plus `i` months, day-of-month fixed at 15, so no month-end clamping ever occurs.
+> `crates/fina-kernel/src/dates.rs` implements this with a proleptic-Gregorian month index in
+> ~40 lines and zero dependencies, verified against all 60 golden dates. Dropping `chrono`
+> keeps the crate trivially liftable into a standalone git submodule, which is a stated goal
+> for the `fina-*` family. Rationale is recorded in that module's docs.
 
 **Progress streaming:** core exposes callbacks (`impl FnMut(ProgressEvent)`), never channels.
 Adapters bridge: Tauri → `tauri::ipc::Channel<ProgressEvent>`; HTTP → SSE `text/event-stream`;
@@ -199,7 +208,15 @@ These are checked by tests. If a test for an invariant does not exist, it is not
 | **I-1** | For the fixed fixture inputs, every numeric output of `fina-kernel` equals `golden.json` **bit-for-bit** (IEEE-754 `f64` equality, same summation order). No tolerance on core values. |
 | **I-2** | `generate_paths(SimulationConfig::demo())` is **pure and deterministic**: same input → identical bytes, forever, on any platform. Verified by hashing output twice and by a committed digest. |
 | **I-3** | All JSON crossing any transport uses **camelCase** keys and is **byte-identical across Tauri, HTTP and CLI** for identical input. |
-| **I-4** | `branchStats` keeps `totalPaths = 100_000` and all six scaled counts exactly as today, **and** additionally reports `samplePathCount: 100` and `scaled: true`. |
+| **I-4** | `branchStats` keeps `totalPaths = 100_000` and all six scaled counts exactly as today, **with no additional serialized fields**. The sample size and the scaling flag are exposed as non-serialized accessors (`SimulationBundle::sample_path_count`, `BranchStats::is_scaled`, `BranchStats::SCALE_FACTOR`). |
+
+> **Deviation from the original draft — I-4 narrowed.** The draft asked for
+> `samplePathCount` and `scaled` to be *added* to `branchStats` on the wire. That would break
+> I-1: `golden.json`'s `branchStats` object has exactly seven keys, and an eighth or ninth key
+> fails byte-for-byte parity. Since I-1 is the stronger constraint, the extra information is
+> surfaced through Rust accessors instead. Consumers that genuinely need it in JSON can add a
+> derived wrapper in an adapter without touching the kernel's output shape.
+> `dependency_hygiene.rs` asserts the exact seven-key set so this cannot regress silently.
 | **I-5** | `PathCube`, `FixingSchedule` and the other 9 payoff nodes keep their exact ids, labels and display strings. Graph/tile code depends on these strings. |
 | **I-6** | The 5 `localStorage` keys and their value shapes are unchanged (§2.5). |
 | **I-7** | All 51 tiles still render. A tile that needs backend data renders a defined loading state (§8.4) and then the identical value it renders today. |
@@ -1360,3 +1377,54 @@ Use these as smoke checks while porting. Any deviation is a bug until proven oth
    reviewer must be able to trace any number back to a TS line.
 7. **When a phase's exit criteria pass, say so explicitly** and list the command output summary
    before moving on.
+---
+
+## Appendix A. Deviations from the original draft
+
+Recorded so a reviewer can tell an intentional decision from an oversight.
+
+| # | Draft said | Implementation does | Why |
+| --- | --- | --- | --- |
+| A-1 | `crates/fina-core` | `crates/fina-kernel` | `fina-core` is taken by another repo. Keeps the `fina-*` prefix uniform and leaves every crate liftable into its own submodule. |
+| A-2 | Frontend moves to `frontend/` | Frontend stays at `src/` | Would break `vite.config.ts`, `tsconfig.app.json` (`include: ["src"]`) and `tauri.conf.json`, and touch 45 files for zero benefit. |
+| A-3 | `src-core/` for the kernel | `crates/fina-kernel/` | Avoids a half-renamed `src`/`src-core` split at the repo root. |
+| A-4 | Allowlist includes `chrono` or `time` | Plain integer date arithmetic | Day-of-month is fixed at 15, so there is no clamping to handle. One less dependency aids the submodule-split goal. See `dates.rs`. |
+| A-5 | I-4 adds `samplePathCount` + `scaled` to `branchStats` | Non-serialized accessors instead | The golden object has exactly seven keys; adding fields breaks I-1. See the I-4 note. |
+| A-6 | `src-tauri` keeps its own `Cargo.lock` | Single workspace `Cargo.lock` at the root | Standard Cargo behaviour once `src-tauri` is a workspace member; the nested lock is gitignored. |
+| A-7 | `lib` crate name `app_lib` | `fina_tauri` | Matches the `fina-*` naming; `src-tauri/src/main.rs` updated accordingly. |
+| A-8 | "75% React coverage" | Behavioural gates per tile type | A percentage on wrapper components that mostly delegate is not a meaningful measure. |
+| A-9 | Phase 1 goals marked complete | All Phase 1 goals were unstarted | The draft's checkmarks did not match the repo: 16 lines of Rust, 0 commands, 0 tests. |
+
+## Appendix B. Phase 1 completion record
+
+Delivered in this repository. 77 tests passing, `cargo clippy -- -D warnings` clean,
+`cargo fmt --check` clean.
+
+| Artifact | Purpose |
+| --- | --- |
+| `Cargo.toml` | Workspace root; `release-runner` profile; shared dependency table |
+| `rust-toolchain.toml` | Pins stable + rustfmt + clippy |
+| `crates/fina-kernel/Cargo.toml` | Allowlist, `forbid(unsafe_code)`, relocatable via `workspace = true` |
+| `src/jsnum.rs` | `js_round` (JS tie-breaking), `round1/2/3/4`, `clamp`, `sum_ordered` |
+| `src/rng.rs` | `Mulberry32`, bit-exact with the TypeScript `createRng` |
+| `src/dates.rs` | Month-arithmetic observation schedule, no date dependency |
+| `src/types.rs` | Domain types mirroring `src/features/shared/types.ts` |
+| `src/error.rs` | `FinaError`, stable `code()`, `http_status()`, wire shape |
+| `src/progress.rs` | `ProgressEvent`, `ProgressLog`, callback-based, runtime-free |
+| `tests/dependency_hygiene.rs` | Enforces I-8, the allowlist, and the golden fixture's shape |
+
+### Values verified against the real TypeScript during Phase 1
+
+Every reference constant in this phase was produced by executing the original
+TypeScript under Node and diffing the result, not by reasoning about it. Several
+first drafts were wrong and were corrected: `Math.round(2.675) == 2.68` (not
+`2.67`), `round2(94.89499999999999) == 94.9` (not `94.89`), and the canonical
+Taylor sum is `1.686_000_000_000_000_4`. Reordering the eight Taylor terms is
+genuinely order-sensitive — 38,622 of the 40,320 permutations differ — so I-1's
+no-tolerance rule has real teeth.
+
+Two parity traps were caught one phase early by the fixture: the invented
+`branchStats` fields (A-5) and `nodeDetails`, which is a TypeScript
+`Record<PayoffNodeId, NodeDetailSnapshot>` — a JSON object keyed by PascalCase
+node label — rather than the array of pairs a naive port would produce.
+`types.rs` carries a custom serde adapter for it.

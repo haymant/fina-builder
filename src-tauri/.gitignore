@@ -2,3 +2,6 @@
 # will have compiled files and executables
 /target/
 /gen/schemas
+
+# Workspace-managed: the root Cargo.lock is authoritative for the fina-* workspace.
+/Cargo.lock

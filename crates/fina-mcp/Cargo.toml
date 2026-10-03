@@ -1,0 +1,16 @@
+[package]
+name = "fina-mcp"
+description = "Model Context Protocol adapter over fina-kernel (AI agent transport) — deferred to Phase 2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fina-mcp"
+path = "src/main.rs"
+
+[dependencies]
+fina-kernel = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
