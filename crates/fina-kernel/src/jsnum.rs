@@ -64,16 +64,27 @@ pub fn round4(v: f64) -> f64 {
     js_round(v * 1.0e4) / 1.0e4
 }
 
-/// Rounds to 3 decimal places (`cross_gamma` in `risk_engine` is the only
-/// user; every other risk field rounds to 2).
+/// Rounds to 3 decimal places.
+///
+/// There is no longer a caller for this in `risk_engine`: the TypeScript writes
+/// cross-gamma as `+(x).toFixed(3)`, which is [`js_to_fixed_f64`] with three
+/// places, not this function. Kept because it is the natural companion to
+/// [`round2`] and [`round4`] and is exercised directly by the conformance tests.
 #[inline]
 #[must_use]
 pub fn round3(v: f64) -> f64 {
     js_round(v * 1.0e3) / 1.0e3
 }
 
-/// Rounds to 2 decimal places. This is the workhorse: money, payoffs, PV,
-/// Greeks, discount factors' present values, branch counts.
+/// Rounds to 2 decimal places. The workhorse: money, payoffs, PV, discount
+/// factors' present values, branch counts.
+///
+/// # Not a substitute for [`js_to_fixed_f64`]
+///
+/// Use this only where the TypeScript says `Math.round(x * 100) / 100`. Where
+/// it says `+x.toFixed(2)` — which is everywhere in `economics`,
+/// `risk_engine` and `diagnostics` — use [`js_to_fixed_f64`]; the two disagree
+/// on ties and a published preset value is one of the casualties.
 ///
 /// ```
 /// use fina_kernel::jsnum::round2;
@@ -143,6 +154,9 @@ pub fn round1(v: f64) -> f64 {
 /// assert_eq!(js_to_fixed(-0.0001, 2), "-0.00");
 /// assert_eq!(js_to_fixed(100.0, 2), "100.00");
 /// ```
+///
+/// To get the **number** rather than the string — which is what `+x.toFixed(p)`
+/// evaluates to — use [`js_to_fixed_f64`].
 #[must_use]
 pub fn js_to_fixed(v: f64, places: u32) -> String {
     assert!(
@@ -220,6 +234,71 @@ fn decompose_f64(a: f64) -> (u64, i32) {
     } else {
         (frac | (1u64 << 52), raw_exp - 1075)
     }
+}
+
+/// The numeric value of the JavaScript idiom `+(x).toFixed(places)`.
+///
+/// # This is not [`round2`], [`round3`] or [`round4`]
+///
+/// `+x.toFixed(p)` rounds the **exact decimal expansion** of the double and
+/// then parses the result back, so its tie behaviour follows ECMA-262. The
+/// `roundN` family instead scales by a power of ten in floating point, where
+/// the scaling itself rounds. The two disagree whenever `x * 10^p` lands
+/// exactly on a half — and the TypeScript in `economics`, `risk_engine` and
+/// `diagnostics` uses the `toFixed` idiom at **every** output site.
+///
+/// The disagreement is not theoretical. `Defensive Phoenix`'s `couponPv`:
+///
+/// ```text
+/// 11.6 * (0.09 / 0.12) * 1.05 * (5 / 5) == 9.1349999999999997868
+/// round2(that)                          == 9.14   <-- WRONG
+/// +(that).toFixed(2)                    == 9.13
+/// ```
+///
+/// The exact value is below the tie, but `x * 100` rounds *up* to exactly
+/// `913.5`, which `Math.round` then sends away from zero. Getting this wrong
+/// changes a published preset's displayed coupon PV by a cent.
+///
+/// # Examples
+///
+/// ```
+/// use fina_kernel::jsnum::js_to_fixed_f64;
+/// assert_eq!(js_to_fixed_f64(9.134_999_999_999_999, 2), 9.13);
+/// assert_eq!(js_to_fixed_f64(-0.25, 1), -0.3);
+/// assert_eq!(js_to_fixed_f64(-0.0, 2), 0.0); // "+(-0.0)" is +0 in JS too
+/// ```
+///
+/// # Known divergence: the sign of a zero result
+///
+/// When the rounded result is zero, this returns whatever sign `Number` would
+/// give in JavaScript — which is **negative** if `v` is negative:
+///
+/// ```text
+/// +(-0.0001).toFixed(2)  ==  -0     (the string is "-0.00")
+/// ```
+///
+/// `serde_json` then writes `-0.0` where JavaScript's `JSON.stringify` writes
+/// `0`. The two are the same number under `==`, so golden parity is unaffected;
+/// only the serialised *text* differs. 4,457 of the 132,002 entries in the
+/// differential corpus are in this position, and every Phase 3 module can reach
+/// one through a negative sub-cent result — `theta = -notional * 0.012` for a
+/// notional below `0.4167`, or `cross_gamma` from a small negative correlation.
+///
+/// **This is deliberately not normalised here.** The primitive's contract is to
+/// be the honest `+x.toFixed(p)`, and in JavaScript that operation really does
+/// produce `-0`. An adapter that needs byte-identical *text* with the frontend
+/// should fold `-0.0` to `0.0` before serialising; that is a transport concern,
+/// and it belongs in Phase 5's adapters rather than in a numeric primitive.
+/// `tests/tofixed_conformance.rs` pins both halves of the claim.
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`js_to_fixed`].
+#[must_use]
+pub fn js_to_fixed_f64(v: f64, places: u32) -> f64 {
+    js_to_fixed(v, places)
+        .parse::<f64>()
+        .expect("js_to_fixed only ever emits a parseable decimal")
 }
 
 /// JavaScript `Math.min` over a slice. NaN propagates, unlike `f64::min`.
@@ -358,6 +437,18 @@ pub fn sum_ordered(values: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Math.round(v * 10^p) / 10^p` for arbitrary `p`, so one table can cover
+    /// `round1`, `round2` and `round3`.
+    ///
+    /// The bound is not a convenience: `js_to_fixed` rejects `places > 17`
+    /// because 10^17 is already past `f64`'s exact-integer range, and
+    /// `powi`/`js_to_fixed` would silently disagree out there.
+    fn round_to(v: f64, places: u32) -> f64 {
+        assert!(places <= 17, "beyond f64's exact-integer range");
+        let scale = 10f64.powi(i32::try_from(places).unwrap());
+        js_round(v * scale) / scale
+    }
 
     #[test]
     fn js_round_positive_ties_go_up() {
@@ -521,5 +612,149 @@ mod tests {
         assert_eq!(sum_ordered(&[]), 0.0);
         assert_eq!(sum_ordered(&[-1.5]), -1.5);
         assert_eq!(sum_ordered(&[1.0, -1.0]), 0.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // `js_to_fixed_f64`
+    // -----------------------------------------------------------------------
+
+    /// `js_to_fixed_f64` is defined as `Number(js_to_fixed(v, p))`, so the only
+    /// thing worth asserting is that it really is that, for every shape the
+    /// conformance corpus does not need a Node process to reach.
+    #[test]
+    fn js_to_fixed_f64_is_the_number_form_of_js_to_fixed() {
+        let values = [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            0.005,
+            0.015,
+            0.025,
+            0.045,
+            0.055,
+            0.065,
+            0.085,
+            0.095,
+            -0.005,
+            -0.015,
+            -0.025,
+            -0.045,
+            0.1,
+            0.2,
+            1.0 / 3.0,
+            2.0 / 3.0,
+            9.134_999_999_999_999,
+            12.349_999_999_999_999,
+            100.0,
+            -100.0,
+            1.0e15,
+            1.0e-7,
+            -1.0e-7,
+            f64::MIN_POSITIVE,
+        ];
+        for places in 0..=6 {
+            for v in values {
+                let want = js_to_fixed(v, places).parse::<f64>().unwrap();
+                assert_eq!(
+                    js_to_fixed_f64(v, places).to_bits(),
+                    want.to_bits(),
+                    "js_to_fixed_f64({v:?}, {places})"
+                );
+            }
+        }
+    }
+
+    /// The tie that motivated the primitive, stated as a fact about the
+    /// implementation rather than about a preset.
+    ///
+    /// The product's *exact* value sits below `9.135`; `v * 100` rounds up to
+    /// exactly the tie; `Math.round` sends it away from zero. `js_to_fixed` never
+    /// multiplies, so it never loses the information.
+    #[test]
+    fn js_to_fixed_f64_reads_the_exact_value_where_round2_reads_a_rounded_one() {
+        let v = 11.6 * (0.09_f64 / 0.12) * 1.05;
+        assert_eq!(js_to_fixed(v, 16), "9.1349999999999998");
+        assert_eq!(v * 100.0, 913.5);
+        assert_eq!(js_to_fixed_f64(v, 2), 9.13);
+        assert_eq!(round2(v), 9.14);
+    }
+
+    /// The places where the two primitives disagree on *magnitude*, for a
+    /// sample of the shapes Phase 3 produces. A small version of the corpus
+    /// sweep, kept here so the primitive's contract is stated in the module that
+    /// implements it. `tests/tofixed_conformance.rs` runs the full 132,002-case
+    /// version and pins the count.
+    #[test]
+    fn round_family_disagrees_with_js_to_fixed_f64_on_ties() {
+        // Positive ties. The double for `n.n5` is almost always *below* the tie,
+        // so `toFixed` rounds down; `Math.round(v * 10^p)` has already rounded
+        // the scaled product to exactly the tie and sends it up.
+        for (v, tf, rn) in [
+            (0.015_f64, 0.01, 0.02),
+            (0.045, 0.04, 0.05),
+            (0.075, 0.07, 0.08),
+            (0.105, 0.1, 0.11),
+            (1.045, 1.04, 1.05),
+            (9.135, 9.13, 9.14),
+        ] {
+            assert_eq!(js_to_fixed_f64(v, 2), tf, "toFixed({v}, 2)");
+            assert_eq!(round2(v), rn, "round2({v})");
+        }
+
+        // Not every tie diverges: `0.005` and `0.025` are the cases where the
+        // double happens to land above the tie. Pin the agreement so a future
+        // change to either primitive is caught here rather than in production.
+        for v in [0.005_f64, 0.025, 0.035, 0.055, 0.065, 0.085, 0.095] {
+            assert_eq!(
+                js_to_fixed_f64(v, 2),
+                round2(v),
+                "toFixed({v}, 2) vs round2"
+            );
+        }
+
+        // Negative ties diverge *more* dramatically, because `Math.round` sends
+        // the tie toward positive infinity while `toFixed` reads the exact
+        // expansion, which is below the tie's magnitude.
+        for (v, tf, rn) in [(-0.25_f64, -0.3, -0.2), (-0.75, -0.8, -0.7)] {
+            assert_eq!(js_to_fixed_f64(v, 1), tf, "toFixed({v}, 1)");
+            assert_eq!(round1(v), rn, "round1({v})");
+        }
+        for (v, tf, rn) in [
+            (-0.005_f64, -0.01, 0.0),
+            (-0.025, -0.03, -0.02),
+            (-0.055, -0.06, -0.05),
+            (-0.125, -0.13, -0.12),
+        ] {
+            assert_eq!(js_to_fixed_f64(v, 2), tf, "toFixed({v}, 2)");
+            assert_eq!(round2(v), rn, "round2({v})");
+        }
+
+        // Endless expansions: at these precisions the two agree, because neither
+        // runs into a tie. Worth pinning, since a change that made `toFixed`
+        // scale-and-round would *also* agree here — but would fail above.
+        for v in [1.0 / 3.0, 2.0 / 3.0, 1.0 / 7.0] {
+            for places in 1..=3 {
+                assert_eq!(
+                    js_to_fixed_f64(v, places),
+                    round_to(v, places),
+                    "{v} @{places}"
+                );
+            }
+        }
+    }
+
+    /// Trailing zeros are structural in the *string* form and vanish in the
+    /// numeric form, which is exactly why Phase 3 needed a numeric primitive.
+    #[test]
+    fn js_to_fixed_f64_discards_the_trailing_zeros_that_money_needs() {
+        assert_eq!(js_to_fixed(100.0, 2), "100.00");
+        assert_eq!(js_to_fixed_f64(100.0, 2), 100.0);
+        assert_eq!(js_to_fixed(1.5, 2), "1.50");
+        assert_eq!(js_to_fixed_f64(1.5, 2), 1.5);
+        // So a Phase 3 module that wants `9.13` must ask for 2 places, not 2
+        // places' worth of significant digits.
+        assert_eq!(js_to_fixed_f64(9.134_999_999_999_999, 2), 9.13);
+        assert_eq!(js_to_fixed(9.134_999_999_999_999, 3), "9.135");
     }
 }

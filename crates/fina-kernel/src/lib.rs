@@ -61,19 +61,23 @@
 #![allow(clippy::float_cmp, clippy::excessive_precision)]
 
 pub mod dates;
+pub mod diagnostics;
+pub mod economics;
 pub mod error;
 pub mod jsnum;
 pub mod path_generator;
 pub mod progress;
+pub mod risk_engine;
 pub mod rng;
 pub mod types;
 
 pub use error::{FinaError, FinaErrorWire, Result, WireError};
 pub use progress::{ProgressEvent, ProgressLog};
 pub use types::{
-    BranchStats, DistributionStats, NodeDetailSnapshot, PathAttribution, PathObservation,
-    PayoffNodeId, ProductBarriers, SettlementType, SimulationBundle, SimulationDistributions,
-    SimulationPath, TradeEconomics,
+    BranchStats, DistributionStats, FxPair, MarketSnapshot, NodeDetailSnapshot, OhlcBar,
+    PathAttribution, PathObservation, PayoffNodeId, ProductBarriers, SettlementType,
+    SimulationBundle, SimulationDistributions, SimulationPath, TradeEconomics, Underlying,
+    VolParams, DEFAULT_TRADE_ECONOMICS,
 };
 
 /// Crate version, surfaced by the `health` command on every transport.

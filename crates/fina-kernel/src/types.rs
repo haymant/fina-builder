@@ -534,20 +534,239 @@ pub struct TradeEconomics {
     pub notional: f64,
 }
 
+/// The exact `DEFAULT_TRADE_ECONOMICS` constant from
+/// `src/store/tradeEconomicsStore.ts`.
+///
+/// Named here so that adapters, the CLI and the tests all reference one value
+/// rather than three copies of it. Re-exported from
+/// [`crate::economics`] because that is where a caller looks for it.
+pub const DEFAULT_TRADE_ECONOMICS: TradeEconomics = TradeEconomics {
+    strike: 1.0,
+    knock_in_barrier: 0.6,
+    knock_out_barrier: 1.0,
+    coupon_lower_barrier: 0.7,
+    coupon_upper_barrier: 1.2,
+    coupon_rate: 0.12,
+    memory_coupon_enabled: true,
+    physical_settlement_enabled: true,
+    maturity_years: 5.0,
+    notional: 100.0,
+};
+
 impl Default for TradeEconomics {
     /// The exact `DEFAULT_TRADE_ECONOMICS` constant.
     fn default() -> Self {
+        DEFAULT_TRADE_ECONOMICS
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Market snapshot (mirrors `src/store/marketDataStore.ts`)
+//
+// These live in `types` rather than in `risk_engine` because two modules read
+// them: `risk_engine` prices `base` off the spot mean, and Phase 4's
+// `valuation_explain` reads `underlyings[0].spot`, `fx_pairs[0].spot` and
+// `vol.atm_vol`. Putting them behind `risk_engine` would give `valuation` a
+// false dependency on the module that happens to define them first.
+//
+// Deliberately absent: `selectedUnderlying` / `selectedFX`. Those are UI
+// selection state, not market data, and the TypeScript `computeRisk` already
+// narrows them out with `Pick<MarketDataState, 'underlyings' | 'fxPairs' |
+// 'correlations' | 'vol'>`.
+// ---------------------------------------------------------------------------
+
+/// One daily OHLC bar. Named `OhlcBar` to satisfy `clippy::upper_case_acronyms`;
+/// the TypeScript type is `OHLCBar`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OhlcBar {
+    /// `YYYY-MM-DD`.
+    pub date: String,
+    /// Open.
+    pub open: f64,
+    /// High.
+    pub high: f64,
+    /// Low.
+    pub low: f64,
+    /// Close.
+    pub close: f64,
+    /// Volume.
+    ///
+    /// `f64` for uniformity with the rest of the numeric surface, even though
+    /// every producer in this repository emits integral volumes. That makes
+    /// `serde_json` write `800000.0` where the frontend writes `800000`; the
+    /// two are equal as parsed values, and invariant I-3 is about
+    /// byte-identity *between transports*, all of which serialise through this
+    /// same type.
+    pub volume: f64,
+}
+
+/// One equity underlying.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Underlying {
+    /// Ticker, e.g. `"AAPL"`.
+    pub symbol: String,
+    /// Current spot.
+    pub spot: f64,
+    /// Spot at the start of the study; shock buttons measure against it.
+    pub baseline_spot: f64,
+    /// Annual dividend yield.
+    pub dividend_yield: f64,
+    /// ISO currency code.
+    pub currency: String,
+    /// Sample daily history.
+    pub historical_prices: Vec<OhlcBar>,
+}
+
+/// One FX pair.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FxPair {
+    /// Pair label, e.g. `"USDSGD"`.
+    pub pair: String,
+    /// Current rate.
+    pub spot: f64,
+    /// Rate at the start of the study.
+    pub baseline_spot: f64,
+    /// Annualised volatility.
+    pub volatility: f64,
+}
+
+/// The volatility surface parameters.
+///
+/// A four-number mock, not a surface: nothing in the repository interpolates
+/// it. See `FEATURE.ts.md` on the mock market and vol surface.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VolParams {
+    /// At-the-money volatility.
+    pub atm_vol: f64,
+    /// Skew.
+    pub skew: f64,
+    /// Curvature.
+    pub curvature: f64,
+    /// Term slope.
+    pub term_slope: f64,
+}
+
+/// The market state a computation reads.
+///
+/// The frontend owns market data in Phase 1 (invariant: the backend does not
+/// fetch quotes), so this is a *request* payload travelling frontend → backend,
+/// not a response. [`MarketSnapshot::demo`] reproduces the store's initial
+/// state so that the CLI and the tests have a canonical input.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketSnapshot {
+    /// Underlyings, in display order.
+    pub underlyings: Vec<Underlying>,
+    /// FX pairs, in display order.
+    pub fx_pairs: Vec<FxPair>,
+    /// Row-major correlation matrix.
+    pub correlations: Vec<Vec<f64>>,
+    /// Volatility parameters.
+    pub vol: VolParams,
+}
+
+/// Number of bars [`MarketSnapshot::demo`] generates per underlying.
+const DEMO_BAR_COUNT: usize = 36;
+
+/// Port of `makeBars` in `src/store/marketDataStore.ts`.
+///
+/// Every price is a `toFixed(2)` result, so it goes through
+/// [`crate::jsnum::js_to_fixed_f64`] rather than [`crate::jsnum::round2`]: the
+/// two disagree when `x * 100` lands on a half, and the sine below produces
+/// such values. `seed` is the symbol's ordinal, which is what makes the AAPL,
+/// MSFT and NVDA series differ.
+fn demo_bars(start: f64, seed: f64) -> Vec<OhlcBar> {
+    (0..DEMO_BAR_COUNT)
+        .map(|i| {
+            let t = i as f64;
+            let close = crate::jsnum::js_to_fixed_f64(
+                start * (1.0 + (t / 4.0 + seed).sin() * 0.08 + t * 0.002),
+                2,
+            );
+            // `open`/`high`/`low` derive from the **rounded** close, matching
+            // the TypeScript, where `close` is already the `toFixed` result.
+            OhlcBar {
+                date: format!("2023-{:02}-01", (i % 12) + 1),
+                open: crate::jsnum::js_to_fixed_f64(close * 0.99, 2),
+                high: crate::jsnum::js_to_fixed_f64(close * 1.02, 2),
+                low: crate::jsnum::js_to_fixed_f64(close * 0.97, 2),
+                close,
+                volume: 800_000.0 + t * 15_000.0,
+            }
+        })
+        .collect()
+}
+
+impl MarketSnapshot {
+    /// The store's initial state: AAPL/MSFT/NVDA, three FX pairs, a 3x3
+    /// correlation matrix and a mock vol surface.
+    ///
+    /// This is the input behind the `risk.base` and `valuation` sections of
+    /// `golden.json`.
+    #[must_use]
+    pub fn demo() -> Self {
         Self {
-            strike: 1.0,
-            knock_in_barrier: 0.6,
-            knock_out_barrier: 1.0,
-            coupon_lower_barrier: 0.7,
-            coupon_upper_barrier: 1.2,
-            coupon_rate: 0.12,
-            memory_coupon_enabled: true,
-            physical_settlement_enabled: true,
-            maturity_years: 5.0,
-            notional: 100.0,
+            underlyings: vec![
+                Underlying {
+                    symbol: "AAPL".into(),
+                    spot: 185.0,
+                    baseline_spot: 185.0,
+                    dividend_yield: 0.005,
+                    currency: "USD".into(),
+                    historical_prices: demo_bars(185.0, 1.0),
+                },
+                Underlying {
+                    symbol: "MSFT".into(),
+                    spot: 420.0,
+                    baseline_spot: 420.0,
+                    dividend_yield: 0.007,
+                    currency: "USD".into(),
+                    historical_prices: demo_bars(420.0, 2.0),
+                },
+                Underlying {
+                    symbol: "NVDA".into(),
+                    spot: 122.0,
+                    baseline_spot: 122.0,
+                    dividend_yield: 0.001,
+                    currency: "USD".into(),
+                    historical_prices: demo_bars(122.0, 3.0),
+                },
+            ],
+            fx_pairs: vec![
+                FxPair {
+                    pair: "USDSGD".into(),
+                    spot: 1.34,
+                    baseline_spot: 1.34,
+                    volatility: 0.07,
+                },
+                FxPair {
+                    pair: "EURUSD".into(),
+                    spot: 1.08,
+                    baseline_spot: 1.08,
+                    volatility: 0.09,
+                },
+                FxPair {
+                    pair: "USDJPY".into(),
+                    spot: 151.2,
+                    baseline_spot: 151.2,
+                    volatility: 0.11,
+                },
+            ],
+            correlations: vec![
+                vec![1.0, 0.55, 0.48],
+                vec![0.55, 1.0, 0.62],
+                vec![0.48, 0.62, 1.0],
+            ],
+            vol: VolParams {
+                atm_vol: 0.24,
+                skew: -0.18,
+                curvature: 0.12,
+                term_slope: 0.015,
+            },
         }
     }
 }
@@ -1041,5 +1260,212 @@ mod tests {
         for id in PayoffNodeId::ALL {
             assert!(seen.insert(id), "duplicate node id {id}");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Market snapshot
+    // -----------------------------------------------------------------------
+
+    /// The demo snapshot is the input behind `golden.json`'s `risk.base` and
+    /// `valuation` sections, so its shape is pinned rather than incidental.
+    #[test]
+    fn demo_market_matches_the_store_defaults() {
+        let m = MarketSnapshot::demo();
+        assert_eq!(
+            m.underlyings
+                .iter()
+                .map(|u| u.symbol.as_str())
+                .collect::<Vec<_>>(),
+            ["AAPL", "MSFT", "NVDA"]
+        );
+        let spots: Vec<f64> = m.underlyings.iter().map(|u| u.spot).collect();
+        assert_eq!(spots, [185.0, 420.0, 122.0]);
+        // `spot == baseline_spot` initially: the shock buttons are no-ops until
+        // the user moves a spot.
+        for u in &m.underlyings {
+            assert_eq!(
+                u.spot, u.baseline_spot,
+                "{} must start at baseline",
+                u.symbol
+            );
+            assert_eq!(u.currency, "USD");
+        }
+        assert_eq!(m.underlyings[0].dividend_yield, 0.005);
+        assert_eq!(m.underlyings[1].dividend_yield, 0.007);
+        assert_eq!(m.underlyings[2].dividend_yield, 0.001);
+
+        assert_eq!(
+            m.fx_pairs
+                .iter()
+                .map(|p| p.pair.as_str())
+                .collect::<Vec<_>>(),
+            ["USDSGD", "EURUSD", "USDJPY"]
+        );
+        let fx: Vec<f64> = m.fx_pairs.iter().map(|p| p.spot).collect();
+        assert_eq!(fx, [1.34, 1.08, 151.2]);
+        for p in &m.fx_pairs {
+            assert_eq!(p.spot, p.baseline_spot, "{} must start at baseline", p.pair);
+        }
+        assert_eq!(m.fx_pairs[0].volatility, 0.07);
+        assert_eq!(m.fx_pairs[1].volatility, 0.09);
+        assert_eq!(m.fx_pairs[2].volatility, 0.11);
+
+        assert_eq!(
+            m.correlations,
+            vec![
+                vec![1.0, 0.55, 0.48],
+                vec![0.55, 1.0, 0.62],
+                vec![0.48, 0.62, 1.0]
+            ]
+        );
+        assert_eq!(
+            m.vol,
+            VolParams {
+                atm_vol: 0.24,
+                skew: -0.18,
+                curvature: 0.12,
+                term_slope: 0.015
+            }
+        );
+    }
+
+    /// The mean spot that drives `risk.base`'s `pv` is `727 / 3`.
+    #[test]
+    fn demo_market_mean_spot_is_the_risk_engine_reference_plus_one_third() {
+        let m = MarketSnapshot::demo();
+        let mean =
+            crate::jsnum::sum_ordered(&m.underlyings.iter().map(|u| u.spot).collect::<Vec<_>>())
+                / 3.0;
+        assert_eq!(mean, 242.333_333_333_333_34);
+        assert!(mean > 242.0 && mean < 242.5);
+    }
+
+    /// `makeBars` is a pure function of `(start, seed)`, so the demo history is
+    /// reproducible and the three series differ only by their seed.
+    #[test]
+    fn demo_bars_are_reproducible_and_seed_dependent() {
+        let m = MarketSnapshot::demo();
+        for u in &m.underlyings {
+            assert_eq!(u.historical_prices.len(), DEMO_BAR_COUNT);
+            assert_eq!(
+                demo_bars(u.historical_prices[0].close, 1.0).len(),
+                DEMO_BAR_COUNT
+            );
+        }
+        let aapl_close: Vec<f64> = m.underlyings[0]
+            .historical_prices
+            .iter()
+            .map(|b| b.close)
+            .collect();
+        let msft_close: Vec<f64> = m.underlyings[1]
+            .historical_prices
+            .iter()
+            .map(|b| b.close)
+            .collect();
+        assert_ne!(aapl_close, msft_close, "seeds 1 and 2 must differ");
+        assert_eq!(demo_bars(185.0, 1.0)[5].close, aapl_close[5]);
+    }
+
+    /// Every generated price is a 2-decimal value, because `makeBars` applies
+    /// `toFixed(2)` to all four of open/high/low/close. Re-formatting at 2
+    /// places must be a no-op, which proves the value really is a 2dp decimal
+    /// rather than merely formatted as one.
+    #[test]
+    fn demo_bars_are_all_two_decimal_values() {
+        for u in &MarketSnapshot::demo().underlyings {
+            for bar in &u.historical_prices {
+                for v in [bar.open, bar.high, bar.low, bar.close] {
+                    assert_eq!(
+                        crate::jsnum::js_to_fixed_f64(v, 2),
+                        v,
+                        "{}/{} is not a 2dp value: {v:?}",
+                        u.symbol,
+                        bar.date
+                    );
+                }
+            }
+        }
+    }
+
+    /// `open`, `high` and `low` are derived from the **rounded** close, not the
+    /// unrounded one, so `high >= close >= low` holds exactly.
+    #[test]
+    fn demo_bars_are_internally_consistent() {
+        for u in &MarketSnapshot::demo().underlyings {
+            for bar in &u.historical_prices {
+                assert!(
+                    bar.high >= bar.close,
+                    "{}/{} high < close",
+                    u.symbol,
+                    bar.date
+                );
+                assert!(
+                    bar.close >= bar.low,
+                    "{}/{} close < low",
+                    u.symbol,
+                    bar.date
+                );
+                assert!(
+                    bar.high >= bar.open,
+                    "{}/{} high < open",
+                    u.symbol,
+                    bar.date
+                );
+                assert!(bar.open >= bar.low, "{}/{} open < low", u.symbol, bar.date);
+            }
+        }
+    }
+
+    /// Dates wrap `i % 12` over 2023, so the series repeats months across three
+    /// years while `volume` climbs monotonically.
+    #[test]
+    fn demo_bar_dates_and_volumes_follow_the_generator() {
+        let m = MarketSnapshot::demo();
+        for (i, bar) in m.underlyings[0].historical_prices.iter().enumerate() {
+            assert_eq!(bar.date, format!("2023-{:02}-01", (i % 12) + 1), "bar {i}");
+            assert_eq!(bar.volume, 800_000.0 + i as f64 * 15_000.0, "bar {i}");
+        }
+        let vols: Vec<f64> = m.underlyings[0]
+            .historical_prices
+            .iter()
+            .map(|b| b.volume)
+            .collect();
+        assert!(vols.windows(2).all(|w| w[1] > w[0]), "volume must climb");
+    }
+
+    #[test]
+    fn market_snapshot_round_trips_through_json() {
+        let m = MarketSnapshot::demo();
+        let json = serde_json::to_string(&m).unwrap();
+        assert_eq!(serde_json::from_str::<MarketSnapshot>(&json).unwrap(), m);
+    }
+
+    #[test]
+    fn market_types_serialise_camel_case() {
+        let m = MarketSnapshot::demo();
+        let json = serde_json::to_string(&m).unwrap();
+        for key in [
+            "\"underlyings\"",
+            "\"baselineSpot\"",
+            "\"dividendYield\"",
+            "\"historicalPrices\"",
+            "\"fxPairs\"",
+            "\"correlations\"",
+            "\"atmVol\"",
+            "\"termSlope\"",
+            "\"pair\"",
+            "\"volatility\"",
+            "\"volume\"",
+        ] {
+            assert!(json.contains(key), "{key} missing from {json}");
+        }
+        // The TypeScript names are all lower-camel on the wire, so no snake_case
+        // key may appear.
+        assert!(
+            !json.contains("baseline_spot")
+                && !json.contains("atm_vol")
+                && !json.contains("historical_prices"),
+            "snake_case key leaked into the wire format"
+        );
     }
 }

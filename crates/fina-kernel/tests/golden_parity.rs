@@ -26,8 +26,12 @@
 //! differs" is not an actionable bug report and "the 24th worst-of level of the
 //! 8th path differs" is.
 
+use fina_kernel::diagnostics::{final_mc, mc_diagnostics, mc_efficiency};
+use fina_kernel::economics::{derive_trade_analytics, DEFAULT_TRADE_ECONOMICS};
 use fina_kernel::path_generator::{generate_paths, SimulationConfig};
-use fina_kernel::types::{PayoffNodeId, SettlementType, SimulationBundle};
+use fina_kernel::risk_engine::compute_risk;
+use fina_kernel::types::{MarketSnapshot, PayoffNodeId, SettlementType, SimulationBundle};
+use serde::Serialize;
 use serde_json::Value;
 
 const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/golden.json");
@@ -153,17 +157,31 @@ fn kind(v: &Value) -> &'static str {
     }
 }
 
-/// Asserts the kernel's serialised bundle equals the golden fixture exactly.
-fn assert_parity(section: &str) {
-    let golden = golden();
-    let bundle = serde_json::to_value(generate()).expect("bundle serialises");
-    // The fixture nests the bundle under `simulationBundle`; the kernel returns
-    // the struct itself, so re-wrap it for a like-for-like comparison.
-    let got = serde_json::json!({ "simulationBundle": bundle });
+/// Asserts the kernel's serialised `value` equals `golden[section]` exactly.
+///
+/// `section` is the full path into the fixture, e.g. `"trade.defaults"` or just
+/// `"mc"`. The kernel value is the serialisation of that **whole subtree**, so
+/// it is compared against the resolved fixture path rather than indexed by the
+/// same path — the kernel does not wrap its output in `{"trade": {...}}` the way
+/// the fixture does.
+fn assert_parity(section: &str, value: &impl Serialize) {
+    let fixture = golden();
+    let expected = lookup(&fixture, section);
+    let actual = &serde_json::to_value(value).expect("kernel output serialises");
+    assert_eq_values(section, expected, actual);
+}
 
-    let expected = &golden[section];
-    let actual = &got[section];
+/// Resolves a dotted path inside the fixture.
+fn lookup<'a>(golden: &'a Value, section: &str) -> &'a Value {
+    let mut node = golden;
+    for part in section.split('.') {
+        node = &node[part];
+    }
+    node
+}
 
+/// The shared comparison, with the fixture-presence check.
+fn assert_eq_values(section: &str, expected: &Value, actual: &Value) {
     assert!(
         !expected.is_null(),
         "golden.json has no `{section}` section; the fixture and the kernel have drifted apart"
@@ -187,7 +205,154 @@ fn assert_parity(section: &str) {
 /// The full simulation bundle: every path, every observation, every node detail.
 #[test]
 fn simulation_bundle_matches_golden_byte_for_byte() {
-    assert_parity("simulationBundle");
+    assert_parity("simulationBundle", &generate());
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: economics, risk engine, MC diagnostics
+// ---------------------------------------------------------------------------
+
+/// The Monte Carlo diagnostics series, its efficiency table and the
+/// "converged" row.
+#[test]
+fn mc_diagnostics_matches_golden() {
+    let payload = serde_json::json!({
+        "mcDiagnostics": mc_diagnostics(),
+        "mcEfficiency": mc_efficiency(),
+        "finalMC": final_mc(),
+    });
+    assert_parity("mc", &payload);
+}
+
+/// The MC diagnostics row-by-row, so a failure names the path count.
+#[test]
+fn every_mc_row_matches_golden_individually() {
+    let golden = golden();
+    let rows = mc_diagnostics();
+    assert_eq!(
+        rows.len(),
+        golden["mc"]["mcDiagnostics"].as_array().unwrap().len()
+    );
+
+    for (i, row) in rows.iter().enumerate() {
+        let mut diffs = Vec::new();
+        let n = diff(
+            &format!("mc.mcDiagnostics[{i}]"),
+            &golden["mc"]["mcDiagnostics"][i],
+            &serde_json::to_value(row).unwrap(),
+            &mut diffs,
+            25,
+        );
+        assert_eq!(
+            n,
+            0,
+            "row {} diverged:\n  {}",
+            row.paths,
+            diffs.join("\n  ")
+        );
+    }
+
+    // `finalMC` is the last row verbatim, not a re-derivation.
+    assert_eq!(final_mc(), *rows.last().unwrap());
+    assert_parity("mc.finalMC", &final_mc());
+}
+
+/// The efficiency table: four literal rows.
+#[test]
+fn mc_efficiency_matches_golden() {
+    let rows = mc_efficiency();
+    assert_parity("mc.mcEfficiency", &rows);
+    assert_eq!(rows, mc_efficiency(), "must be a pure literal table");
+}
+
+/// `trade.defaults`: the kernel's constant against the frontend's.
+#[test]
+fn trade_defaults_match_golden() {
+    assert_parity("trade.defaults", &DEFAULT_TRADE_ECONOMICS);
+}
+
+/// `trade.analytics`: the derived analytics panel against the frontend's.
+#[test]
+fn trade_analytics_matches_golden() {
+    let analytics = derive_trade_analytics(&DEFAULT_TRADE_ECONOMICS);
+    assert_parity("trade.analytics", &analytics);
+
+    // And field by field, so the failure message names the field.
+    let g = &golden()["trade"]["analytics"];
+    assert_eq!(analytics.expected_pv, g["expectedPv"].as_f64().unwrap());
+    assert_eq!(analytics.coupon_pv, g["couponPv"].as_f64().unwrap());
+    assert_eq!(analytics.put_pv, g["putPv"].as_f64().unwrap());
+    assert_eq!(analytics.redemption, g["redemption"].as_f64().unwrap());
+    assert_eq!(
+        analytics.ki_probability,
+        g["kiProbability"].as_f64().unwrap()
+    );
+    assert_eq!(
+        analytics.ko_probability,
+        g["koProbability"].as_f64().unwrap()
+    );
+    assert_eq!(analytics.ci_width, g["ciWidth"].as_f64().unwrap());
+}
+
+/// The whole `trade` section, defaults and analytics together.
+#[test]
+fn trade_section_matches_golden() {
+    let payload = serde_json::json!({
+        "defaults": DEFAULT_TRADE_ECONOMICS,
+        "analytics": derive_trade_analytics(&DEFAULT_TRADE_ECONOMICS),
+    });
+    assert_parity("trade", &payload);
+}
+
+/// `risk.base`: the risk panel against the frontend's.
+#[test]
+fn risk_base_matches_golden() {
+    let risk = compute_risk(&DEFAULT_TRADE_ECONOMICS, &MarketSnapshot::demo())
+        .expect("the demo market is valid");
+    assert_parity("risk.base", &risk);
+}
+
+/// The risk panel field by field, so a failure names the Greek.
+#[test]
+fn every_risk_field_matches_golden_individually() {
+    let g = golden();
+    let r = compute_risk(&DEFAULT_TRADE_ECONOMICS, &MarketSnapshot::demo()).unwrap();
+    let g = &g["risk"]["base"];
+
+    for (field, got) in [
+        ("pv", r.pv),
+        ("delta", r.delta),
+        ("gamma", r.gamma),
+        ("vega", r.vega),
+        ("theta", r.theta),
+        ("rho", r.rho),
+        ("fxDelta", r.fx_delta),
+    ] {
+        assert_eq!(Some(got), g[field].as_f64(), "risk.base.{field} diverged");
+    }
+
+    // The Greeks the spec calls out by name.
+    assert_eq!(r.pv, 154.03);
+    assert_eq!(r.gamma, 0.0);
+    assert_eq!(r.delta, 80.0);
+}
+
+/// `risk.base` as a whole: every field, every list element, every pair string.
+#[test]
+fn risk_base_matches_golden_including_lists() {
+    let risk = compute_risk(&DEFAULT_TRADE_ECONOMICS, &MarketSnapshot::demo()).unwrap();
+    let payload = serde_json::json!({ "base": risk });
+    assert_parity("risk", &payload);
+
+    // Bucket and cross-gamma labels are UI contracts, so check them by name.
+    let labels: Vec<&str> = risk
+        .bucket_vegas
+        .iter()
+        .map(|b| b.bucket.as_str())
+        .collect();
+    assert_eq!(labels, ["1M", "3M", "6M", "1Y", "2Y", "5Y"]);
+    let pairs: Vec<&str> = risk.cross_gamma.iter().map(|c| c.pair.as_str()).collect();
+    assert_eq!(pairs, ["AAPL/MSFT", "AAPL/NVDA"]);
 }
 
 /// The headline scalars, so a failure names them individually.
