@@ -139,12 +139,29 @@ jobs:
         run: ./scripts/ci/install-tauri-linux-deps.sh
       - name: Stamp the release version into the manifests
         run: node scripts/set-version.mjs ${{ needs.release-create.outputs.version }}
-      - name: Build bundles and attach them to the release
-        uses: tauri-apps/tauri-action@v1
+      - name: Forward the signing secrets only when they are actually set
+        shell: bash
+        # An *unset* secret expands to an empty string, and tauri-action reads an
+        # empty APPLE_CERTIFICATE/WINDOWS_CERTIFICATE as "sign with this
+        # certificate" — it then dies in `security import` with
+        # `SecKeychainItemImport: One or more parameters ... not valid`.
+        # Forwarding only non-empty values keeps unsigned builds unsigned.
+        run: |
+          set -euo pipefail
+          forwarded=0
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+                      APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID \
+                      WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD; do
+            if [ -n "${!name:-}" ]; then
+              echo "$name=${!name}" >> "$GITHUB_ENV"
+              echo "signing secret present: $name"
+              forwarded=1
+            fi
+          done
+          if [ "$forwarded" = 0 ]; then
+            echo "No signing secrets configured; building unsigned bundles."
+          fi
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Optional. Present secrets sign (and notarise) the bundles; absent ones
-          # produce an unsigned build.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -153,6 +170,10 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      - name: Build bundles and attach them to the release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ env.TAG }}
           releaseDraft: true
@@ -179,9 +200,15 @@ jobs:
           # smoke test below is not attempted for a cross-built binary.
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-24.04, archive: raw, runnable: true }
           - { target: x86_64-unknown-linux-musl, os: ubuntu-24.04, archive: raw, runnable: true }
-          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04, archive: raw, runnable: false }
+          # aarch64 is built on a NATIVE arm64 runner, not cross-compiled from
+          # x86_64: cross-linking makes rustc pass the aarch64-only
+          # `--fix-cortex-a53-843419` workaround flag to the host linker, which
+          # then refuses with "only supported on AArch64". Building natively also
+          # lets the smoke test below actually run this binary.
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm, archive: raw, runnable: true }
           - { target: x86_64-apple-darwin, os: macos-15, archive: tar.gz, runnable: false }
-          - { target: aarch64-apple-darwin, os: macos-15, archive: tar.gz, runnable: false }
+          # Native on the Apple Silicon runner, so unlike x86_64 this one runs.
+          - { target: aarch64-apple-darwin, os: macos-15, archive: tar.gz, runnable: true }
           - { target: x86_64-pc-windows-msvc, os: windows-latest, archive: zip, runnable: true }
     steps:
       - uses: actions/checkout@v4
@@ -197,11 +224,8 @@ jobs:
         with:
           workspaces: . -> target
           key: cli-${{ matrix.target }}
-      - name: Install the aarch64 Linux toolchain
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+      # No cross toolchain is installed for aarch64-linux: that job builds
+      # natively on an arm64 runner (see the matrix note above).
       - name: Install the musl toolchain
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
