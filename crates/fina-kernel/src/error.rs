@@ -145,6 +145,15 @@ impl From<FinaError> for FinaErrorWire {
     }
 }
 
+impl From<serde_json::Error> for FinaError {
+    /// Request deserialisation failure, reported as `INVALID_REQUEST` so every
+    /// transport maps it to the same 400-class status regardless of which
+    /// library the adapter uses to read the body.
+    fn from(e: serde_json::Error) -> Self {
+        Self::InvalidRequest(e.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

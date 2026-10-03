@@ -60,10 +60,12 @@
 // comparison is the correct assertion.
 #![allow(clippy::float_cmp, clippy::excessive_precision)]
 
+pub mod api;
 pub mod dates;
 pub mod diagnostics;
 pub mod economics;
 pub mod error;
+pub mod execution;
 pub mod jsnum;
 pub mod path_generator;
 pub mod progress;
@@ -72,7 +74,13 @@ pub mod rng;
 pub mod types;
 pub mod valuation;
 
+pub use api::{
+    dispatch, dispatch_sync, dispatch_value, CashflowRequest, CommandId, ComputeRiskRequest,
+    ExplainRequest, GeneratePathsRequest, HealthResponse, McDiagnosticsResponse, PathRequest,
+    TradeRequest,
+};
 pub use error::{FinaError, FinaErrorWire, Result, WireError};
+pub use execution::{execution_events, ExecutionEvent, ExecutionEventType};
 pub use progress::{ProgressEvent, ProgressLog};
 pub use types::{
     BranchStats, DistributionStats, FxPair, MarketSnapshot, NodeDetailSnapshot, OhlcBar,
