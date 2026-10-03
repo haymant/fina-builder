@@ -43,10 +43,24 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # rust-toolchain.toml is the single source of truth; the workflows pin the
+      # same version so the toolchain is installed explicitly. This step fails if
+      # the two ever drift, which is the failure mode that breaks CI.
+      - name: Verify the pinned toolchain matches rust-toolchain.toml
+        shell: bash
+        run: |
+          set -euo pipefail
+          want=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          have=$(rustc --version | sed -n 's/^rustc \([0-9.]*\).*/\1/p')
+          if [ "$want" != "$have" ]; then
+            echo "::error::rust-toolchain.toml pins $want but this job runs $have — update the dtolnay/rust-toolchain@ pins in .github/workflows/"
+            exit 1
+          fi
+          echo "toolchain $have matches rust-toolchain.toml"
       - run: cargo fmt --all --check
       # `--exclude payoff-explorer` on purpose: the Tauri crate links against GTK,
       # GLib and WebKit, which are not installed in this job. It is clipped and
@@ -60,7 +74,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
@@ -79,7 +93,7 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
@@ -112,5 +126,5 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
       - run: cargo test -p fina-kernel --test dependency_hygiene

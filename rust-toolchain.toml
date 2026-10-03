@@ -1,3 +1,27 @@
+# Single source of truth for the Rust toolchain.
+#
+# Local development and CI must run the SAME rustc/clippy/rustfmt. CI additionally
+# pins `@1.99.0` in `.github/workflows/{ci,release}.yml` (so the toolchain is
+# installed explicitly rather than downloaded implicitly), and the
+# "Verify the pinned toolchain" step in the ci.yml `core` job fails if the two
+# ever disagree.
+#
+# Why pin at all: an unpinned `@stable` means every clippy release can turn CI red
+# for reasons unrelated to this code. That happened twice in one afternoon — a new
+# lint (`assert_is_empty`) and a distro package rename
+# (`libappindicator3-dev` -> `libayatana-appindicator3-dev`).
+#
+# Bumping:
+#   1. change `channel` below
+#   2. change `@1.99.0` to `@<new version>` in .github/workflows/ci.yml and
+#      .github/workflows/release.yml
+#   3. cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings
+#      && cargo test --workspace
+#
+# `rust-version = "1.77"` in Cargo.toml is the MSRV and stays independent of this
+# file: it is the oldest compiler the crates claim to build with, not the one CI
+# tests them on.
 [toolchain]
-channel = "stable"
+channel = "1.99.0"
+profile = "minimal"
 components = ["rustfmt", "clippy"]

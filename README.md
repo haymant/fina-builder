@@ -20,6 +20,8 @@ build, the CLI and (later) MCP return byte-identical numbers.
 
 - Node.js 22 and npm (`package-lock.json` is committed).
 - Rust/Cargo for every backend mode — web backend, CLI and desktop all compile Rust.
+  The version is pinned in `rust-toolchain.toml` (currently **1.99.0**); `rustup`
+  installs it automatically on first use, so `cargo build` just works.
 - Desktop builds additionally need the [Tauri 2 platform prerequisites](https://v2.tauri.app/start/prerequisites/).
   On Debian/Ubuntu one command does it — the same script CI uses:
 

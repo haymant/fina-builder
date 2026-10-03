@@ -348,6 +348,8 @@ import/export.
 | CI | `.github/workflows/ci.yml`: frontend, Rust core, adapters, coverage, dependency-hygiene — plus a guard that fails if a test mock reaches `dist/`. |
 | Releases | `.github/workflows/release.yml` builds desktop bundles (Linux x64, macOS x64/arm64, Windows x64) and `fina-cli` binaries (Linux gnu/musl/arm64, macOS x64/arm64, Windows x64) on a version tag and publishes one GitHub Release. See the README. |
 | Versioning | `scripts/set-version.mjs` writes one version into `Cargo.toml`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`; CI re-derives it from the tag. |
+| Toolchain | `rust-toolchain.toml` pins one Rust version (1.99.0) for local development and every CI job; the workflows pin the same version and a guard step fails if the two drift, so a clippy or rustfmt release cannot turn CI red on its own. The MSRV (`rust-version = "1.77"`) is separate. |
+| Linux build deps | `scripts/ci/install-tauri-linux-deps.sh` is the single copy of the Tauri v2 prerequisite list, used by CI and runnable locally. |
 
 ## Known gaps and deliberate divergences
 
