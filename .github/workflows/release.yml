@@ -92,21 +92,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `--bundles` is set explicitly per platform rather than taking
+          # `bundle.targets: "all"` from tauri.conf.json: "all" on macOS also
+          # produces the bare `.app` directory, which cannot be uploaded as a
+          # release asset (and the .dmg already contains it).
+          #   linux  -> .deb, .rpm, AppImage
+          #   macos  -> .dmg (universal app inside)
+          #   windows-> .msi and setup.exe (NSIS)
           - label: linux-x86_64
             os: ubuntu-24.04
-            args: ''
+            args: '--bundles deb,rpm,appimage'
             targets: ''
+          # macos-15/macos-14/macos-latest are Apple Silicon runners; the Intel
+          # image is `macos-15-intel` (macos-13 was retired by GitHub).
           - label: macos-aarch64
-            os: macos-14
-            args: '--target aarch64-apple-darwin'
+            os: macos-15
+            args: '--target aarch64-apple-darwin --bundles dmg'
             targets: 'aarch64-apple-darwin'
           - label: macos-x86_64
-            os: macos-13
-            args: '--target x86_64-apple-darwin'
+            os: macos-15-intel
+            args: '--target x86_64-apple-darwin --bundles dmg'
             targets: 'x86_64-apple-darwin'
           - label: windows-x86_64
-            os: windows-latest
-            args: ''
+            os: windows-2025
+            args: '--bundles msi,nsis'
             targets: ''
     steps:
       - uses: actions/checkout@v4
@@ -151,6 +160,9 @@ jobs:
           # Machine-readable asset names: <name>_<version>_<platform>_<arch>.<ext>
           releaseAssetNamePattern: '[name]_[version]_[platform]_[arch].[ext]'
           args: ${{ matrix.args }}
+          # Also keep the bundles as workflow artifacts, so a failed upload to
+          # the release does not mean the builds are lost.
+          uploadWorkflowArtifacts: true
 
   cli:
     name: CLI ${{ matrix.target }}
@@ -168,8 +180,8 @@ jobs:
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-24.04, archive: raw, runnable: true }
           - { target: x86_64-unknown-linux-musl, os: ubuntu-24.04, archive: raw, runnable: true }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04, archive: raw, runnable: false }
-          - { target: x86_64-apple-darwin, os: macos-14, archive: tar.gz, runnable: false }
-          - { target: aarch64-apple-darwin, os: macos-14, archive: tar.gz, runnable: false }
+          - { target: x86_64-apple-darwin, os: macos-15, archive: tar.gz, runnable: false }
+          - { target: aarch64-apple-darwin, os: macos-15, archive: tar.gz, runnable: false }
           - { target: x86_64-pc-windows-msvc, os: windows-latest, archive: zip, runnable: true }
     steps:
       - uses: actions/checkout@v4
