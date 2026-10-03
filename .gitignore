@@ -32,3 +32,7 @@ target/
 
 # Tauri
 src-tauri/target
+
+# Frontend test coverage output
+coverage/
+lcov.info

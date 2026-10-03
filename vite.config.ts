@@ -1,10 +1,17 @@
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   clearScreen: false,
+  resolve: {
+    alias: {
+      // §6.2: tests never talk to a real Tauri runtime; both the test files and
+      // tauriTransport resolve this same module.
+      '@tauri-apps/api/core': new URL('./src/tests/mocks/tauriMock.ts', import.meta.url).pathname,
+    },
+  },
   server: {
     port: 5173,
     strictPort: true,
@@ -14,5 +21,16 @@ export default defineConfig({
   build: {
     target: 'esnext',
     sourcemap: !!process.env.TAURI_DEBUG,
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/tests/setup.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json'],
+      exclude: ['src/tests/**', '**/*.tsx', 'src/api/tauriTransport.ts'],
+    },
   },
 })

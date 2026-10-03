@@ -127,3 +127,25 @@ fn out_of_range_error_matches_dispatch() {
     let via_dispatch = must_serialise(&fina_kernel::WireError::from(&via_dispatch_err));
     assert_eq!(via_tauri, via_dispatch);
 }
+
+#[test]
+fn branch_distributions_and_execution_events_match_dispatch() {
+    use fina_tauri::commands::path_generator as pg;
+
+    let via_tauri = from_wire(pg::get_branch_stats());
+    let via_dispatch =
+        String::from_utf8(dispatch_sync("get_branch_stats", b"{}").unwrap()).unwrap();
+    assert_eq!(via_tauri, via_dispatch);
+
+    let via_tauri = from_wire(pg::get_distributions());
+    let via_dispatch =
+        String::from_utf8(dispatch_sync("get_distributions", b"{}").unwrap()).unwrap();
+    assert_eq!(via_tauri, via_dispatch);
+
+    let req = PathRequest { path_index: 1 };
+    let body = serde_json::to_vec(&req).unwrap();
+    let via_tauri = from_wire(pg::execution_events(req));
+    let via_dispatch =
+        String::from_utf8(dispatch_sync("execution_events", &body).unwrap()).unwrap();
+    assert_eq!(via_tauri, via_dispatch);
+}

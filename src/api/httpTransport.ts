@@ -11,14 +11,18 @@ const BASE = (import.meta.env.VITE_FINA_BASE_URL as string | undefined) ?? 'http
 
 async function parseBody<T>(response: Response): Promise<T> {
   const text = await response.text()
-  if (!response.ok) {
-    try {
-      throw JSON.parse(text) as unknown
-    } catch {
-      throw { code: 'INVALID_REQUEST', message: `HTTP ${response.status}: ${text}` }
-    }
+  if (response.ok) return JSON.parse(text) as T
+  // Non-2xx: the server sends the wire error shape; fall back to a generic one.
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    parsed = null
   }
-  return JSON.parse(text) as T
+  if (typeof parsed === 'object' && parsed !== null && 'code' in (parsed as object)) {
+    throw parsed
+  }
+  throw { code: 'INVALID_REQUEST', message: `HTTP ${response.status}: ${text}` }
 }
 
 export const httpTransport: FinaTransport = {
