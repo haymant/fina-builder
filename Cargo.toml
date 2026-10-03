@@ -18,6 +18,7 @@ license = "MIT"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
+clap = { version = "4.5", features = ["derive"] }
 
 # fina-kernel dependency allowlist is intentionally minimal. Every entry here
 # that fina-kernel does not use must be removed from ITS OWN Cargo.toml;
