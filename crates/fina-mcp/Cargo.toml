@@ -1,6 +1,6 @@
 [package]
 name = "fina-mcp"
-description = "Model Context Protocol adapter over fina-kernel (AI agent transport) — deferred to Phase 2"
+description = "Model Context Protocol JSON-RPC stdio adapter over fina-kernel"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

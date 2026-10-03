@@ -1,11 +1,12 @@
-//! fina-builder desktop shell: a **thin Tauri adapter** over `fina-kernel`.
+//! fina-builder desktop shell: thin kernel-command adapters plus a local-agent service.
 //!
-//! All domain logic lives in `fina-kernel`; this crate only translates Tauri
-//! IPC into kernel calls (see `FEATURES.md` §5c). Commands in
-//! `commands/` are pure pass-throughs: no formulas, no defaults, no branching
-//! on domain values.
+//! All product-domain logic lives in `fina-kernel`; commands in `commands/` are
+//! pure pass-throughs (see `FEATURES.md` §5c). `local_agent` is separate native
+//! application infrastructure for app-data, GGUF model lifecycle, in-process
+//! inference, and local session files; it does not implement kernel formulas.
 
 pub mod commands;
+pub mod local_agent;
 
 use fina_kernel::api::HealthResponse;
 use fina_kernel::FinaErrorWire;
@@ -22,6 +23,8 @@ fn health() -> Result<HealthResponse, FinaErrorWire> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .manage(local_agent::LocalAgentRuntime::default())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -45,6 +48,21 @@ pub fn run() {
             commands::valuation::build_cashflows,
             commands::valuation::valuation_explain,
             commands::valuation::explain_ledger,
+            local_agent::get_app_paths,
+            local_agent::curated_model_catalog,
+            local_agent::list_local_models,
+            local_agent::open_models_folder,
+            local_agent::start_model_download,
+            local_agent::cancel_model_download,
+            local_agent::load_model,
+            local_agent::unload_model,
+            local_agent::get_loaded_model,
+            local_agent::run_local_inference,
+            local_agent::cancel_local_inference,
+            local_agent::save_local_agent_session,
+            local_agent::list_local_agent_sessions,
+            local_agent::load_local_agent_session,
+            local_agent::get_preferred_model,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

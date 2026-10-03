@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Installs the Linux system libraries the Tauri desktop shell links against
-# (GTK, GLib, WebKit, the status-icon library, librsvg, patchelf).
+# (GTK, GLib, WebKit, the status-icon library, librsvg, patchelf) and the
+# CMake/libclang toolchain required to build the bundled llama.cpp runtime.
 #
 #   ./scripts/ci/install-tauri-linux-deps.sh
 #
@@ -24,6 +25,9 @@ PACKAGES=(
   libssl-dev              # TLS
   patchelf                # AppImage bundling rewrites RPATHs with it
   build-essential
+  cmake
+  ninja-build
+  libclang-dev
   file
 )
 

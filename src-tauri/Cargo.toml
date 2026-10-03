@@ -1,7 +1,7 @@
 [package]
 name = "payoff-explorer"
 version = "0.1.0"
-description = "Fina Builder desktop shell — Tauri IPC adapter over fina-kernel"
+description = "Fina Builder desktop shell with Tauri IPC and embedded local llama.cpp assistant"
 authors = ["fina"]
 license = "MIT"
 repository = ""
@@ -28,3 +28,10 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.12.1", features = [] }
 tauri-plugin-log = "2"
+tauri-plugin-opener = "2"
+llama-cpp-2 = { version = "0.1.158", default-features = false, features = ["common", "openmp"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+sha2 = "0.10"
+encoding_rs = "0.8"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }

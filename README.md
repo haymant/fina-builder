@@ -13,12 +13,12 @@ build, the CLI and (later) MCP return byte-identical numbers.
 
 | Document | What it covers |
 | --- | --- |
-| **[FEATURES.md](./FEATURES.md)** | Part I: what the product does (surfaces, the 12 commands, kernel modules, the 51-tile UI, known gaps). Part II: the migration specification and its completion record (Appendices A–F). |
+| **[FEATURES.md](./FEATURES.md)** | What is implemented: product surfaces, kernel commands, local assistant, MCP tools, UI, and known gaps; followed by the migration specification and its completion record. |
 | [README.md](./README.md) (this file) | How to run it and how to release it. |
 
 ## Requirements
 
-- Node.js 22 and npm (`package-lock.json` is committed).
+- Node.js **22.19.0 or newer** and npm (`package-lock.json` is committed; Pi's local agent packages require this minimum).
 - Rust/Cargo for every backend mode — web backend, CLI and desktop all compile Rust.
   The version is pinned in `rust-toolchain.toml` (currently **1.99.0**); `rustup`
   installs it automatically on first use, so `cargo build` just works.
@@ -30,7 +30,8 @@ build, the CLI and (later) MCP return byte-identical numbers.
   ```
 
   It installs WebKitGTK, GTK, the Ayatana status-icon library, librsvg, libxdo, libssl,
-  patchelf and build tools, then verifies `pkg-config` can see them. It is a no-op on
+  patchelf, CMake, Ninja and libclang, then verifies `pkg-config` can see the Tauri libraries.
+  CMake and libclang are required to build the bundled `llama.cpp` inference backend. It is a no-op on
   non-Debian systems.
 
   The browser + web-backend mode does not need the WebKit libraries.
@@ -78,6 +79,35 @@ npm run tauri:dev      # window with IPC; no HTTP backend needed
 npm run tauri:build    # native bundles for the current platform
 ```
 
+### Local assistant (Tauri desktop only)
+
+The **Chat** button in the workspace header opens a side panel. The first run requires an
+explicit model download (internet required only for this download) or a compatible `.gguf`
+file copied into the app-managed models folder. Downloads are cancellable; incomplete files
+are removed on cancellation or error. Completed downloads are checked against the catalogued
+byte count and SHA-256 before being finalized. Models are
+stored under the OS-specific Tauri app-data directory; the panel can open that folder. A
+downloaded model is loaded in-process by Rust `llama-cpp-2` and the GGUF's embedded chat
+template is used. **Chat inference runs locally**; the app does not send prompts or model
+files to a hosted model API.
+
+Pi's `pi-agent-core` agent/session/tool orchestration and assistant-ui runtime execute in the
+embedded TypeScript webview, with a custom local provider calling the native Rust inference
+commands over Tauri IPC. The currently registered read-only tools are `get_branch_stats`,
+`get_distributions`, and `get_mc_diagnostics`. Session transcripts are persisted as JSONL in
+the app-data sessions directory. List/load commands are available, but a session picker is
+not yet exposed in the panel. Model terms are linked in the selector; usage remains subject
+to each model's upstream license. The curated models are several gigabytes, so check disk and
+RAM before downloading/loading them.
+
+The assistant is not available in browser + HTTP mode. Its analytics tools inspect the
+synthetic demo bundle and must not be treated as market-calibrated prices, official
+valuations, risk limits, or investment advice.
+
+Implementation references: [llama-cpp-2 Rust API](https://docs.rs/llama-cpp-2/latest/llama_cpp_2/),
+[Pi custom providers](https://pi.dev/docs/latest/custom-provider), [assistant-ui LocalRuntime](https://www.assistant-ui.com/docs/runtimes/custom/local-runtime), and the
+[MCP tools protocol](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
+
 ### 3. CLI mode (headless)
 
 ```bash
@@ -87,6 +117,14 @@ cargo run -p fina-cli -- --help
 ```
 
 stdout is JSON only (pipe it into `jq`); progress goes to stderr as NDJSON.
+
+### MCP server (stdio)
+
+`fina-mcp` is a newline-delimited JSON-RPC 2.0 MCP server. Build it with
+`cargo build -p fina-mcp --release` and configure an MCP host to launch the resulting
+`target/release/fina-mcp` executable over stdio. It advertises all twelve kernel commands and
+dispatches calls through `fina_kernel::api::dispatch_sync`. The desktop chat panel uses a
+smaller read-only tool set directly over Tauri IPC; it does not spawn this server.
 
 ### Other scripts
 
@@ -110,11 +148,11 @@ crates/fina-kernel/     All domain logic. Deps: serde, serde_json, thiserror. No
   tests/                Golden parity, path semantics, toFixed conformance, dep hygiene
 crates/fina-server/     HTTP adapter (actix-web): /health, /api/cmd/{cmd}, /api/stream/{cmd}
 crates/fina-cli/        CLI adapter (clap) over the same dispatcher
-crates/fina-mcp/        Stub — deferred
-src-tauri/              Desktop adapter: #[tauri::command] pass-throughs + Channel progress
+crates/fina-mcp/        MCP JSON-RPC 2.0 stdio server over the shared kernel dispatcher
+src-tauri/              Desktop IPC adapter plus local model manager and in-process llama.cpp inference
 src/                    React frontend (unchanged location)
   api/                  Transport-agnostic command client (Tauri | HTTP)
-  features/             Tiles, workspace, payoff graph, pathcube, attribution, …
+  features/             Tiles, workspace, payoff graph, pathcube, attribution, local-agent UI/runtime, …
   store/                Zustand input/UI state + localStorage persistence
 scripts/                Golden fixture tooling, coverage gates, version stamping
 ```

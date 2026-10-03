@@ -31,6 +31,9 @@ Phase 0 → Phase 6 of the migration are complete and pushed. The repository is
 production-*shaped*: one Rust domain kernel, thin adapters, and parity tests that pin the
 kernel to the original TypeScript implementation. It is **not** production-*priced*: the
 models are deterministic demo engines (see [Known gaps](#known-gaps-and-deliberate-divergences)).
+The desktop app also includes an optional local assistant: Pi agent orchestration runs in the
+webview and calls an in-process Rust `llama.cpp` backend. This desktop service does not change
+the shared kernel command contract and is not available in browser/HTTP mode.
 
 | | |
 | --- | --- |
@@ -84,9 +87,9 @@ The layering rule, stated once:
       └─────────┬───────────────────────────┬───────────────┘
                 │                           │
       ┌─────────▼─────────┐       ┌─────────▼─────────┐
-      │ crates/fina-cli   │       │ crates/fina-mcp   │  stub, deferred
-      │ clap → dispatch   │       │ prints a message, │
-      │                   │       │ exits 1           │
+      │ crates/fina-cli   │       │ crates/fina-mcp   │  JSON-RPC 2.0
+      │ clap → dispatch   │       │ stdio tools       │
+      │                   │       │ list + call       │
       └───────────────────┘       └───────────────────┘
 ```
 
@@ -130,10 +133,12 @@ npm run tauri:dev        # window + IPC; no HTTP backend needed
 npm run tauri:build      # platform bundles
 ```
 
-`src-tauri` registers all twelve commands on the invoke handler. Progress for
+`src-tauri` registers all twelve kernel commands on the invoke handler. Progress for
 `generate_paths` travels over a `tauri::ipc::Channel<ProgressEvent>`; every other command is
 a plain request/response `invoke`. All command bodies are pass-throughs to
-`fina_kernel::dispatch`.
+`fina_kernel::dispatch`. Separate local-agent commands own model downloads, model lifecycle,
+inference streaming, and app-data sessions; these are desktop services, not domain-kernel
+commands.
 
 Because the channel is **required** for `generate_paths`, that command is reached only via
 `FinaTransport.generatePaths` (which creates a channel), never through the generic `call`
@@ -156,12 +161,31 @@ Twelve subcommands, one per command id (kebab-case, with short aliases such as
 pipes into `jq`; progress is NDJSON on stderr; errors are the wire error shape
 (`{"code", "message"}`) on stderr with a non-zero exit.
 
-### MCP mode (stub — deliberately not implemented)
+### Local assistant and model lifecycle (desktop only)
 
-`crates/fina-mcp` prints a deferral message and exits 1. Phase 1 shipped Tauri, HTTP and
-CLI only; MCP is Part II §9 item O-7. When implemented it must expose each kernel command
-as an MCP tool over JSON-RPC 2.0 on stdio, reusing `fina_kernel::api` types verbatim so
-results stay byte-identical to the other transports.
+The workspace header opens a right-side chat panel. The model manager exposes five curated
+Q4_K_M GGUF files, their sizes, context recommendations, embedded-template notes, and upstream
+license links. Downloads are opt-in, cancellable, and verified against the catalogued file
+size and SHA-256 before final rename. The manager also discovers `.gguf` files copied into the
+Tauri app-data `models/` directory. Model loading and token generation run in-process through
+Rust `llama-cpp-2`; there is no inference server or hosted model API. The browser build cannot
+load local files and shows a desktop-only notice.
+
+`@assistant-ui/react` provides the chat UI. `@earendil-works/pi-agent-core` and `pi-ai` run in
+the embedded TypeScript webview, with a custom provider bridging streamed native token events
+to Pi's agent loop. Three read-only kernel tools are registered in the agent:
+`get_branch_stats`, `get_distributions`, and `get_mc_diagnostics`. Agent transcripts are
+persisted as JSONL under app-data `sessions/`; list/load IPC commands exist, though the panel
+does not yet expose session browsing/restoration. The preferred model path is saved as a hint;
+models are not auto-loaded at startup to avoid surprising memory use.
+
+### MCP mode (implemented stdio transport)
+
+`crates/fina-mcp` speaks JSON-RPC 2.0 over newline-delimited stdio, handles MCP initialization
+and tool discovery/calls, and advertises all twelve `fina-kernel` commands as tools. Tool calls
+route through `fina_kernel::api::dispatch_sync`, so this adapter adds no formulas or duplicate
+command implementations. The desktop chat panel currently registers its three read-only tools
+directly against Tauri IPC; it does not launch or connect to the standalone `fina-mcp` process.
 
 ## Command surface
 
@@ -394,7 +418,7 @@ Appendix F):
 - Production Greeks, risk aggregation, model-governance evidence, or certified P&L/PLVA
   reconciliation.
 - Shared/collaborative dashboards or notebook synchronisation, nor notebook import/export.
-- MCP transport (stub only).
+- Embedded MCP client in the desktop chat (the standalone `fina-mcp` stdio server is implemented).
 - Signed/notarised desktop builds (the release pipeline is unsigned; see the README for the
   secrets that enable signing).
 
@@ -408,7 +432,7 @@ Appendix F):
 | Desktop adapter | `src-tauri/src/lib.rs`, `src-tauri/src/commands/` |
 | HTTP adapter | `crates/fina-server/src/{lib,main}.rs`, `crates/fina-server/tests/parity.rs` |
 | CLI adapter | `crates/fina-cli/src/main.rs`, `crates/fina-cli/tests/cli.rs` |
-| MCP stub | `crates/fina-mcp/src/main.rs` |
+| MCP stdio server | `crates/fina-mcp/src/main.rs` |
 | Frontend transport | `src/api/{index,transport,tauriTransport,httpTransport,types}.ts` |
 | Frontend hooks | `src/hooks/index.ts` |
 | State | `src/store/{explorerStore,simulationStore,tradeEconomicsStore,marketDataStore,cashflowStore,valuationExplainStore,explainLedgerStore,dashboardDocsStore}.ts` |
@@ -421,9 +445,10 @@ Appendix F):
 
 # Part II — Migration specification & record
 
-> The remainder of this file is the executable specification that was executed Phase 0 → 6.
-> It was formerly `PHASE1_MIGRATION_PROMPT.md`; its text, section numbers and appendix
-> records are unchanged, and internal references to the old filename now read `FEATURES.md`.
+> The remainder of this file retains the original executable specification used for Phase 0 → 6.
+> It was formerly `PHASE1_MIGRATION_PROMPT.md`; references to the old filename now read
+> `FEATURES.md`. The plan and decisions below are historical; current code status is reported
+> in Part I, which also records the later local-agent and MCP implementation.
 >
 > The TypeScript-era inventory `FEATURE.ts.md` was folded into **Part I** of this file and
 > deleted; every `FEATURE.ts.md` reference below means Part I. Text in this part is left as
@@ -563,7 +588,7 @@ supersedes it. Do not reintroduce these points.
 | "`generatePaths.ts` logic" as if it were a pricing model | It is a *scenario-constrained path synthesiser*. It assigns each path one of 4 scenarios (`ko`, `alive_ki_cash`, `alive_ki_physical`, `alive_no_ki`) then **forces** the price series to satisfy that scenario's KO/KI constraints via clamping and injection. It is not calibrated, not GBM, not a pricer. | Port it as a **deterministic demo engine** and label it as such. Do not claim pricing capability. |
 | Frontend moves to `frontend/` | Moving 45 files breaks `vite.config.ts`, `tsconfig.app.json` (`include: ["src"]`), `tauri.conf.json` (`frontendDist`), Tailwind content globs, and every relative import — for zero functional benefit. | **Keep the frontend at `src/`.** Explicit deviation from draft. |
 | Crate dir `src-core/` | Name/dir mismatch; also `src/`-prefixed dirs collide conceptually with the frontend. | Use `crates/fina-kernel/`. |
-| "Maintain 100% feature parity across all transports" | Only 2 transports ship in Phase 1 (Tauri + HTTP). CLI is a third. MCP is deferred. | "Parity" = **identical JSON for identical input** across the transports that ship, enforced by a test. Not 100% of app features. |
+| "Maintain 100% feature parity across all transports" | At migration time Tauri + HTTP shipped first, CLI followed, and MCP was deferred; the standalone MCP transport was implemented later. | "Parity" = **identical JSON for identical input** across transports sharing the kernel, enforced by tests. Not 100% of app features. |
 | "Frontend unit tests: 75% coverage of React components" | The domain-heavy tiles are thin wrappers; ECharts/XYFlow/AG Grid internals are untestable at unit level. Coverage % on this codebase is a misleading target. | Replace with **behavioural** targets: 100% of `fina-kernel` pure functions; explicit named tests per transport; a floor of 70% on `fina-kernel` and 60% on new frontend bridge/store code. Exclude `*.test.tsx` and chart wrappers from the denominator. |
 | `totalPaths: 100_000` in branch stats | A **display-scale artifact**. Ratios are measured on 100 sample paths then scaled ×1000 to a fictional population. Confirmed: `koTriggered` etc. are `round(count/100 * 100_000)`. | **Preserve the number exactly** for UI parity, but add `samplePathCount: 100` and a `scaled: true` flag to the payload and document it. See §5 I-4. |
 | `gamma` is a risk Greek | In `computeRisk`, `pvUp = base + 0.08`, `pvDown = base - 0.08` about a fixed base, so `pvUp - 2*base + pvDown ≡ 0` ⇒ **gamma is identically 0.00**. Confirmed in golden fixture. | Port verbatim. Do **not** "fix". Document as a known demo artifact in code comment + test. |
@@ -605,8 +630,8 @@ The layering rule, stated once:
       └─────────┬───────────────────────────────────────────┘
                 │
       ┌─────────▼─────────┐        ┌──────────────────┐
-      │ crates/fina-cli   │        │ crates/fina-mcp  │  Phase 2 (stub only)
-      │ clap → core       │        │ JSON-RPC → core  │
+      │ crates/fina-cli   │        │ crates/fina-mcp  │  JSON-RPC 2.0 stdio
+      │ clap → core       │        │ tools → core     │
       └───────────────────┘        └──────────────────┘
 ```
 
@@ -697,7 +722,7 @@ fina-builder/
 │   │       └── fixtures/golden.json  # DONE — 3.1 MB baseline
 │   ├── fina-server/                  # NEW — Actix-web adapter
 │   ├── fina-cli/                     # NEW — clap adapter
-│   └── fina-mcp/                     # NEW — stub only (Phase 2)
+│   └── fina-mcp/                     # JSON-RPC 2.0 stdio tools adapter (implemented later)
 ├── src/                              # UNCHANGED frontend location
 ├── src-tauri/                        # EXISTING — becomes a thin adapter
 └── FEATURE.ts.md                     # renamed from FEATURE.md (DONE)
@@ -1631,7 +1656,7 @@ must cover all four for at least one representative tile:
 | O-4 | `executionContexts.ts` | 3 lines of pure projection; port only if it falls out of Phase 4 naturally. Not required |
 | O-5 | Database / persistence beyond `localStorage` | Phase 2 |
 | O-6 | Auth, multi-user, shared dashboards | Phase 2 |
-| O-7 | A **real** MCP server | Phase 2. Create `crates/fina-mcp` as a stub crate that prints a "not implemented in Phase 1" message, so the workspace member exists and the architecture is visible |
+| O-7 | A **real** MCP server | Deferred from the original Phase 1 plan; subsequently implemented as a JSON-RPC 2.0 stdio server in `crates/fina-mcp` (see Part I) |
 | O-8 | Production pricing, calibrated MC, revaluation engine | Phase 2 |
 | O-9 | Wiring Trade Economics to regenerate paths | Phase 2 (see §3 corrections) |
 | O-10 | Fixing `gamma ≡ 0`, `total_risk ≡ 0`, the 1000× branch-stat scaling, or the two divergent barrier conventions | Document, don't repair |
@@ -1723,7 +1748,7 @@ Phase 1 is complete **only** when every box is checked.
 - [ ] `crates/fina-kernel/Cargo.toml` lists only `serde`, `serde_json`, `thiserror`, `chrono`.
 - [ ] No formula, default, or domain branch exists in any adapter file.
 - [ ] Tauri, HTTP and CLI return identical JSON for an identical request (test-enforced).
-- [ ] `crates/fina-mcp` exists as a documented stub.
+- [x] Original Phase 1 stub requirement was met; that stub was later replaced with the real MCP stdio server described in Part I.
 
 **Behavior preservation**
 - [ ] All 51 tiles render (test-enforced).

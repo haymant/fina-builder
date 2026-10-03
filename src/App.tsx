@@ -1,9 +1,13 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { ThemeProvider } from './features/themes/ThemeProvider'
 import { Workspace } from './features/workspace/components/Workspace'
 import { useSimulationStore } from './store/simulationStore'
 
+const LocalAgentPanel = lazy(() => import('./features/local-agent/LocalAgentPanel').then((module) => ({ default: module.LocalAgentPanel })))
+
 export default function App() {
+  const [localAgentOpen, setLocalAgentOpen] = useState(false)
+  const [hasOpenedLocalAgent, setHasOpenedLocalAgent] = useState(false)
   const status = useSimulationStore((s) => s.status)
   const error = useSimulationStore((s) => s.error)
   const load = useSimulationStore((s) => s.load)
@@ -29,7 +33,8 @@ export default function App() {
           </button>
         </div>
       ) : null}
-      <Workspace />
+      <Workspace onOpenLocalAgent={() => { setHasOpenedLocalAgent(true); setLocalAgentOpen(true) }} />
+      {hasOpenedLocalAgent ? <Suspense fallback={null}><LocalAgentPanel open={localAgentOpen} onClose={() => setLocalAgentOpen(false)} /></Suspense> : null}
     </ThemeProvider>
   )
 }

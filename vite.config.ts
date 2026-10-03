@@ -24,7 +24,7 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    allowedHosts: ['5173-i1f3w3wk4vqmpb4gf4qf4-f4a0e4c8.sg2.manus.computer'],
+    allowedHosts: ['5173-isfrrzvtdzt80v0qqywhj-41cb09c2.sg2.manus.computer'],
   },
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
