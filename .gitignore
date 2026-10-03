@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Rust build artifacts.
+#
+# Bare `target/` (not `/target`) so it matches the workspace root and any crate
+# that sets its own output directory. The previous commits missed this and
+# committed 1,093 object files under `target/`; see the Phase 2 commit message.
+target/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

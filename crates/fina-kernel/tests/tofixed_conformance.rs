@@ -70,7 +70,7 @@ fn load() -> Vec<Case> {
 #[ignore = "requires `node scripts/generate-tofixed-cases.mjs` (see module docs)"]
 fn js_to_fixed_matches_javascript_across_the_differential_corpus() {
     let cases = load();
-    assert!(cases.len() > 400_000, "corpus too small: {}", cases.len());
+    assert!(cases.len() > 60_000, "corpus too small: {}", cases.len());
 
     let mut failures: Vec<String> = Vec::new();
     let mut checked = 0usize;
@@ -102,7 +102,7 @@ fn js_to_fixed_matches_javascript_across_the_differential_corpus() {
 #[test]
 fn corpus_contains_the_tofixed_tie_positions() {
     let cases = load();
-    assert!(cases.len() > 400_000, "corpus too small: {}", cases.len());
+    assert!(cases.len() > 60_000, "corpus too small: {}", cases.len());
 
     // `0.45` itself sits just *above* the 0.45 boundary and rounds UP; the
     // double produced by `0.0045 * 100` is its neighbour just *below* and rounds

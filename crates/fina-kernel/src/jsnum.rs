@@ -267,13 +267,19 @@ pub fn clamp(v: f64, lo: f64, hi: f64) -> f64 {
     if v.is_nan() {
         return f64::NAN;
     }
-    js_round_free_max(lo, js_round_free_min(hi, v))
+    js_max(lo, js_min(hi, v))
 }
 
-// `f64::max`/`f64::min` differ from JS `Math.max`/`Math.min` on NaN, so the
-// helpers are spelled out rather than reused.
+// `f64::max`/`f64::min` differ from JS `Math.max`/`Math.min` on NaN — Rust returns
+// the non-NaN operand, JavaScript returns NaN — so the helpers are spelled out
+// rather than reusing the stdlib methods. Argument order also matters for
+// `-0.0`, which `Math.min(-0, 0)` resolves to `+0` while `f64::min` does not;
+// the kernel's levels are all positive, so that case does not arise.
+
+/// JavaScript `Math.max` for two arguments. NaN propagates.
 #[inline]
-fn js_round_free_max(a: f64, b: f64) -> f64 {
+#[must_use]
+pub fn js_max(a: f64, b: f64) -> f64 {
     if a.is_nan() || b.is_nan() {
         return f64::NAN;
     }
@@ -284,8 +290,10 @@ fn js_round_free_max(a: f64, b: f64) -> f64 {
     }
 }
 
+/// JavaScript `Math.min` for two arguments. NaN propagates.
 #[inline]
-fn js_round_free_min(a: f64, b: f64) -> f64 {
+#[must_use]
+pub fn js_min(a: f64, b: f64) -> f64 {
     if a.is_nan() || b.is_nan() {
         return f64::NAN;
     }
@@ -294,6 +302,32 @@ fn js_round_free_min(a: f64, b: f64) -> f64 {
     } else {
         b
     }
+}
+
+/// JavaScript `Math.min` for three arguments, i.e. `Math.min(a, b, c)`.
+#[inline]
+#[must_use]
+pub fn js_min3(a: f64, b: f64, c: f64) -> f64 {
+    js_min(a, js_min(b, c))
+}
+
+/// JavaScript `Math.floor(v)` as a `usize`, for the non-negative values the
+/// generator produces (`rng() * 40` lands in `0..40`).
+///
+/// # Panics
+/// Panics if `v` is negative, non-finite, or at or above `2^53` (past which an
+/// `f64` can no longer represent consecutive integers, so truncation would not
+/// equal flooring). The generator's inputs are `rng() * 40` and `rng() * 35`,
+/// both in `[0, 40)`.
+#[must_use]
+pub fn js_floor_to_usize(v: f64) -> usize {
+    assert!(
+        (0.0..9_007_199_254_740_992.0).contains(&v),
+        "js_floor_to_usize out of range: {v}"
+    );
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let n = v.floor() as usize;
+    n
 }
 
 /// Sums a slice **left to right**.

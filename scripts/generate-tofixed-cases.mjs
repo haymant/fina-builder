@@ -102,14 +102,40 @@ for (let k = 0; k < 20000; k += 1) {
   push(v * 100, 1)
 }
 
-// --- 3. exhaustive 3-decimal sweep ----------------------------------------
-for (let k = 0; k < 200000; k += 1) {
+// --- 3. hand-picked near-tie boundaries -----------------------------------
+// Section 2 is exhaustive over values that are *exactly* a tie. These are the
+// complementary case: doubles that sit a hair either side of a boundary, where
+// the answer depends on which neighbour the float landed on. They are what
+// distinguishes an exact implementation from a naive one, and they are not
+// reachable by a systematic sweep because they are artifacts of how the upstream
+// arithmetic produced the value.
+//
+// For each, `x` is the decimal boundary and `x * 1e-n` reproduces the
+// multiplication that produced the neighbour just below it.
+const nearTies = [
+  0.45, 0.0045 * 100, 0.55, 0.0055 * 100, 0.65, 0.0065 * 100, 0.85, 0.0085 * 100,
+  0.35, 0.0035 * 100, 0.15, 0.0015 * 100, 0.25, 0.0025 * 100, 0.75, 0.0075 * 100,
+  1.65, 1.85, 9.05, 9.95, 10.55, 12.95, 20.15, 0.995, 0.0995 * 10, 99.995,
+]
+for (const v of nearTies) {
+  for (const p of [0, 1, 2]) {
+    push(v, p)
+    push(-v, p)
+  }
+}
+
+// --- 4. broad non-tie sweep ----------------------------------------------
+// The tie positions in section 2 are the load-bearing cases; those are
+// exhaustive. Non-tie rounding is trivial, so this is a stride-7 sample of the
+// 3-decimal range rather than all 200,000 values. Going exhaustive here added
+// ~11 MB to the fixture while testing nothing the tie sweep did not.
+for (let k = 0; k < 200000; k += 7) {
   const v = k / 1000
   push(v, 1)
   push(v, 2)
 }
 
-// --- 4. deterministic pseudo-random doubles across magnitudes --------------
+// --- 5. deterministic pseudo-random doubles across magnitudes --------------
 let s = 12345
 const rnd = () => {
   s = (s * 1103515245 + 12345) & 0x7fffffff

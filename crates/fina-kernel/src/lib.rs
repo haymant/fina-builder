@@ -63,6 +63,7 @@
 pub mod dates;
 pub mod error;
 pub mod jsnum;
+pub mod path_generator;
 pub mod progress;
 pub mod rng;
 pub mod types;
