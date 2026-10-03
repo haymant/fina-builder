@@ -2,15 +2,24 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
 
+// Vitest-only alias. This MUST NOT apply to `vite build` / `tauri build`:
+// rewriting `@tauri-apps/api/core` unconditionally bundles the throwing test
+// mock into the desktop app, which then fails every command with
+// "unmocked tauri command: register a mock in the test".
+const testAlias: Record<string, string> = process.env.VITEST
+  ? {
+      '@tauri-apps/api/core': new URL(
+        './src/tests/mocks/tauriMock.ts',
+        import.meta.url,
+      ).pathname,
+    }
+  : {}
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   clearScreen: false,
   resolve: {
-    alias: {
-      // §6.2: tests never talk to a real Tauri runtime; both the test files and
-      // tauriTransport resolve this same module.
-      '@tauri-apps/api/core': new URL('./src/tests/mocks/tauriMock.ts', import.meta.url).pathname,
-    },
+    alias: testAlias,
   },
   server: {
     port: 5173,

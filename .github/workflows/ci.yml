@@ -26,6 +26,12 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+      - name: Guard: test mocks must not reach the production bundle
+        run: |
+          if grep -r "unmocked tauri command" dist/; then
+            echo "::error::test mock bundled into production build; check the resolve.alias guard in vite.config.ts"
+            exit 1
+          fi
       - run: npm run test:run
 
   core:
