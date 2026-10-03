@@ -2235,7 +2235,7 @@ mod tests {
     #[test]
     fn progress_advances_on_a_single_monotonic_axis() {
         let (_, events) = generate_with_log(SimulationConfig::demo());
-        assert!(!events.is_empty());
+        assert!(!events.is_empty(), "generate_paths must emit progress");
 
         let mut previous = 0;
         for event in &events {

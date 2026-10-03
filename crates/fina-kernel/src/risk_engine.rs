@@ -590,7 +590,10 @@ mod tests {
         market.correlations.truncate(1);
         market.correlations[0].truncate(1);
         let r = compute_risk(&DEFAULT_TRADE_ECONOMICS, &market).unwrap();
-        assert!(r.cross_gamma.is_empty());
+        assert!(
+            r.cross_gamma.is_empty(),
+            "a single underlying has no cross gamma"
+        );
         assert_eq!(r.bucket_vegas.len(), 6);
     }
 

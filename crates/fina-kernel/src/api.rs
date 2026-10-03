@@ -509,7 +509,7 @@ mod tests {
         );
         let last = events.last().unwrap();
         assert_eq!(last.completed, last.total, "progress must end complete");
-        assert!(!out.is_empty());
+        assert!(!out.is_empty(), "dispatch must return bytes");
     }
 
     /// Non-progress commands never invoke the callback.

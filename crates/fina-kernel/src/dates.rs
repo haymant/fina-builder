@@ -180,7 +180,10 @@ mod tests {
 
     #[test]
     fn count_zero_is_empty() {
-        assert!(demo_dates(0).is_empty());
+        assert!(
+            demo_dates(0).is_empty(),
+            "zero observations must yield no dates"
+        );
     }
 
     #[test]

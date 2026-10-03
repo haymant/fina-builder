@@ -101,7 +101,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 mod tests {
     #[test]
     fn version_is_populated() {
-        assert!(!super::VERSION.is_empty());
+        assert!(
+            !super::VERSION.is_empty(),
+            "VERSION is taken from CARGO_PKG_VERSION"
+        );
     }
 
     #[test]
