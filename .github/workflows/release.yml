@@ -241,32 +241,47 @@ jobs:
         if: matrix.runnable
         shell: bash
         run: "target/${{ matrix.target }}/release/fina-cli${{ matrix.target == 'x86_64-pc-windows-msvc' && '.exe' || '' }} health"
+      # The braces around $VERSION are load-bearing. Without them bash reads
+      # `$VERSION_aarch64-apple-darwin` as a variable called
+      # VERSION_aarch64-apple-darwin's prefix `VERSION_aarch64` (underscores are
+      # legal inside names), which is unset, so the version silently vanishes —
+      # and both Apple targets collapse to the same asset name. PowerShell does
+      # the same with `$env:VERSION_...`.
       - name: Package for unix
         if: matrix.archive == 'tar.gz'
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist-cli
-          cp "target/${{ matrix.target }}/release/fina-cli" "dist-cli/fina-cli_$VERSION_${{ matrix.target }}"
-          tar -C dist-cli -czf "fina-cli_$VERSION_${{ matrix.target }}.tar.gz" .
+          name="fina-cli_${VERSION}_${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/fina-cli" "dist-cli/$name"
+          chmod +x "dist-cli/$name"
+          tar -C dist-cli -czf "dist-cli/$name.tar.gz" "$name"
+          rm "dist-cli/$name"
       - name: Package for linux
         if: matrix.archive == 'raw'
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist-cli
-          cp "target/${{ matrix.target }}/release/fina-cli" "dist-cli/fina-cli_$VERSION_${{ matrix.target }}"
-          chmod +x "dist-cli/fina-cli_$VERSION_${{ matrix.target }}"
+          install -m 755 \
+            "target/${{ matrix.target }}/release/fina-cli" \
+            "dist-cli/fina-cli_${VERSION}_${{ matrix.target }}"
       - name: Package for windows
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
+          $name = "fina-cli_${env:VERSION}_${{ matrix.target }}"
           New-Item -ItemType Directory -Force dist-cli | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/fina-cli.exe" "dist-cli/fina-cli_$env:VERSION_${{ matrix.target }}.exe"
-          Compress-Archive -Path "dist-cli/*" -DestinationPath "fina-cli_$env:VERSION_${{ matrix.target }}.zip"
+          Copy-Item "target/${{ matrix.target }}/release/fina-cli.exe" "dist-cli/$name.exe"
+          Compress-Archive -Path "dist-cli/$name.exe" -DestinationPath "dist-cli/$name.zip"
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
           draft: true
-          files: |
-            dist-cli/*
-            fina-cli_*.zip
+          # Everything is staged in dist-cli/, including the archives, so this one
+          # glob picks up every target.
+          files: dist-cli/*
 
   release-publish:
     name: Publish release
@@ -274,11 +289,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # `gh release` resolves the repository from the git remote, so it fails
+      # with "not a git repository" without a checkout. --repo is passed as well
+      # so the job cannot depend on the checkout's remote name.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
       - name: Publish the draft
         shell: bash
         run: |
           set -euo pipefail
-          gh release edit "$TAG" --draft=false --prerelease="$PRERELEASE" --latest="$LATEST"
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --draft=false --prerelease="$PRERELEASE" --latest="$LATEST"
           echo "Published https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
