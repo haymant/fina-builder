@@ -49,9 +49,13 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     if (get().status === 'loading') return
     set({ status: 'loading', error: null })
     try {
-      const bundle = await fina.call<SimulationBundle>('generate_paths', {
-        config: DEFAULT_SIMULATION_CONFIG,
-      })
+      // `generate_paths` is the streaming command: its Tauri channel is
+      // required, so it must go through `generatePaths` (which supplies one).
+      // Progress is ignored here; under HTTP this uses the SSE endpoint.
+      const bundle = (await fina.generatePaths(
+        { config: DEFAULT_SIMULATION_CONFIG },
+        () => {},
+      )) as SimulationBundle
       set({ status: 'ready', bundle })
     } catch (e) {
       const message = (e as { message?: string }).message ?? String(e)

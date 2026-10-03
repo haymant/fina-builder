@@ -24,7 +24,7 @@ describe('simulationStore', () => {
   })
 
   it('load() transitions to ready with the bundle', async () => {
-    vi.spyOn(fina, 'call').mockResolvedValue(bundle)
+    vi.spyOn(fina, 'generatePaths').mockResolvedValue(bundle)
     await useSimulationStore.getState().load()
     const s = useSimulationStore.getState()
     expect(s.status).toBe('ready')
@@ -33,14 +33,14 @@ describe('simulationStore', () => {
   })
 
   it('is idempotent: a double-load issues one request', async () => {
-    const spy = vi.spyOn(fina, 'call').mockResolvedValue(bundle)
+    const spy = vi.spyOn(fina, 'generatePaths').mockResolvedValue(bundle)
     const load = useSimulationStore.getState().load
     await Promise.all([load(), load()])
     expect(spy).toHaveBeenCalledTimes(1)
   })
 
   it('captures failures as status error + message', async () => {
-    vi.spyOn(fina, 'call').mockRejectedValue({ message: 'server exploded' })
+    vi.spyOn(fina, 'generatePaths').mockRejectedValue({ message: 'server exploded' })
     await useSimulationStore.getState().load()
     const s = useSimulationStore.getState()
     expect(s.status).toBe('error')
@@ -49,7 +49,7 @@ describe('simulationStore', () => {
   })
 
   it('nextPath wraps at both ends', async () => {
-    vi.spyOn(fina, 'call').mockResolvedValue(bundle)
+    vi.spyOn(fina, 'generatePaths').mockResolvedValue(bundle)
     await useSimulationStore.getState().load()
     const store = useSimulationStore.getState()
     store.selectPath(0)
@@ -60,7 +60,7 @@ describe('simulationStore', () => {
   })
 
   it('randomPath stays in range', () => {
-    vi.spyOn(fina, 'call').mockResolvedValue(bundle)
+    vi.spyOn(fina, 'generatePaths').mockResolvedValue(bundle)
     useSimulationStore.setState({ bundle: bundle as never })
     const store = useSimulationStore.getState()
     for (let i = 0; i < 50; i += 1) {

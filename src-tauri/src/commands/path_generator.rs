@@ -9,6 +9,11 @@ use fina_kernel::{ExecutionEvent, FinaErrorWire};
 
 /// `generate_paths` — the only streaming command. Progress events are forwarded
 /// straight to the Tauri channel.
+///
+/// The channel is **required**, so this command must be invoked through
+/// `FinaTransport.generatePaths` (which creates one), not through the generic
+/// `call` path. `simulationStore.load` uses `fina.generatePaths` for exactly
+/// this reason; under HTTP it hits `/api/stream/generate_paths`.
 #[tauri::command]
 pub fn generate_paths(
     req: GeneratePathsRequest,

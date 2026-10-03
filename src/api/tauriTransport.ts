@@ -12,9 +12,9 @@ import { toApiError } from './transport'
 export const tauriTransport: FinaTransport = {
   async call<T>(command: string, request: unknown): Promise<T> {
     try {
-      // `undefined`/`{}` request bodies are fine; commands without inputs take
-      // an empty object.
-      return await invoke<T>(command, { req: request ?? {}, onEvent: undefined })
+      // No `onEvent`: the kernel commands that stream take an optional channel,
+      // and `call` is the non-streaming path. `generatePaths` supplies one.
+      return await invoke<T>(command, { req: request ?? {} })
     } catch (e) {
       throw toApiError(e)
     }

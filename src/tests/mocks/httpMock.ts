@@ -12,6 +12,14 @@ export const server = setupServer(
   http.post('http://127.0.0.1:8787/api/cmd/generate_paths', () =>
     HttpResponse.json(golden().simulationBundle),
   ),
+  // The streaming endpoint the transport's `generatePaths` uses.
+  http.post('http://127.0.0.1:8787/api/stream/generate_paths', () => {
+    const progress = { phase: 'generate_series', completed: 100, total: 100, message: 'done' }
+    const body = `data: ${JSON.stringify(progress)}\n\ndata: ${JSON.stringify(golden().simulationBundle)}\n\n`
+    return HttpResponse.text(body, {
+      headers: { 'Content-Type': 'text/event-stream' },
+    })
+  }),
   http.post('http://127.0.0.1:8787/api/cmd/get_path', async ({ request }) => {
     const body = (await request.json()) as { pathIndex?: number }
     const index = body.pathIndex ?? 1

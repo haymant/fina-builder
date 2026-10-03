@@ -15,13 +15,13 @@ describe('tauriTransport', () => {
     vi.mocked(invoke).mockResolvedValue({ pv: 154.03 })
     const out = await tauriTransport.call('compute_risk', { trade: {}, market: {} })
     expect(out).toEqual({ pv: 154.03 })
-    expect(invoke).toHaveBeenCalledWith('compute_risk', { req: { trade: {}, market: {} }, onEvent: undefined })
+    expect(invoke).toHaveBeenCalledWith('compute_risk', { req: { trade: {}, market: {} } })
   })
 
   it('sends an empty object for commands without inputs', async () => {
     vi.mocked(invoke).mockResolvedValue({ version: '0.1.0' })
     await tauriTransport.call('health', undefined)
-    expect(invoke).toHaveBeenCalledWith('health', { req: {}, onEvent: undefined })
+    expect(invoke).toHaveBeenCalledWith('health', { req: {} })
   })
 
   it('propagates kernel errors in the wire shape', async () => {
