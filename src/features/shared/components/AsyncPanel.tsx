@@ -1,5 +1,5 @@
 // Loading / error panels for tiles whose data arrives from the backend
-// (PHASE1_MIGRATION_PROMPT.md §5d.5): a tile must not crash while the response
+// (FEATURES.md §5d.5): a tile must not crash while the response
 // is in flight, and it must render a compact error strip carrying the error
 // message from the transport layer.
 

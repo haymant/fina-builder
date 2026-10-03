@@ -19,7 +19,7 @@ tauri-build = { version = "2.7.1", features = [] }
 
 [dependencies]
 # The desktop shell is a THIN ADAPTER. All domain logic lives in fina-kernel;
-# see PHASE1_MIGRATION_PROMPT.md section 4. Commands in src/commands/ must be
+# see FEATURES.md section 4. Commands in src/commands/ must be
 # pure pass-throughs: no formulas, no domain defaults, no branching on values.
 fina-kernel = { workspace = true }
 

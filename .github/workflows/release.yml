@@ -1,0 +1,262 @@
+# Release pipeline: tag a version, get Linux/Windows/macOS binaries and a GitHub Release.
+#
+#   git tag -a v0.1.1 -m "0.1.1" && git push origin v0.1.1
+#
+# Jobs, in order:
+#   1. release-create  — validates the tag, stamps the version into the manifests and
+#                       opens a DRAFT release, so a half-built release is never visible
+#                       as "latest".
+#   2. desktop         — Tauri bundles per platform: Linux (AppImage/deb/rpm),
+#                       macOS (dmg, Intel + Apple Silicon), Windows (msi + setup.exe).
+#   3. cli             — `fina-cli` binaries, including a static musl build.
+#   4. release-publish — flips the draft to published. It needs 2 and 3 to be green,
+#                       so a failed platform build can never ship a partial release.
+#
+# Signing: no secrets are required. If the APPLE_* / WINDOWS_* secrets below exist they
+# are picked up automatically by the Tauri CLI and the bundles are signed (and
+# notarised); otherwise the artifacts are unsigned and Gatekeeper/SmartScreen warn.
+
+name: release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build a release from, e.g. v0.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  release-create:
+    name: Validate tag and open draft release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+      prerelease: ${{ steps.validate.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Validate the tag
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tag '$TAG' is not vMAJOR.MINOR.PATCH[-prerelease]"
+            exit 1
+          fi
+          version="${TAG#v}"
+          prerelease=false
+          if [[ "$version" == *-* ]]; then prerelease=true; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Release $TAG -> version $version, prerelease=$prerelease"
+      - name: Open the draft release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; assets are re-uploaded to it."
+            gh release edit "$TAG" --draft --prerelease="$PRERELEASE" --title "$TAG"
+          else
+            gh release create "$TAG" --draft --title "$TAG" \
+              --prerelease="$PRERELEASE" --generate-notes
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE: ${{ steps.validate.outputs.prerelease }}
+
+  desktop:
+    name: Desktop ${{ matrix.label }}
+    needs: release-create
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.release-create.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x86_64
+            os: ubuntu-24.04
+            args: ''
+            targets: ''
+          - label: macos-aarch64
+            os: macos-14
+            args: '--target aarch64-apple-darwin'
+            targets: 'aarch64-apple-darwin'
+          - label: macos-x86_64
+            os: macos-13
+            args: '--target x86_64-apple-darwin'
+            targets: 'x86_64-apple-darwin'
+          - label: windows-x86_64
+            os: windows-latest
+            args: ''
+            targets: ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Rust targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          key: desktop-${{ matrix.label }}
+      - name: Install Tauri Linux prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            build-essential \
+            file
+      - name: Stamp the release version into the manifests
+        run: node scripts/set-version.mjs ${{ needs.release-create.outputs.version }}
+      - name: Build bundles and attach them to the release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional. Present secrets sign (and notarise) the bundles; absent ones
+          # produce an unsigned build.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        with:
+          tagName: ${{ env.TAG }}
+          releaseDraft: true
+          prerelease: ${{ needs.release-create.outputs.prerelease == 'true' }}
+          # Machine-readable asset names: <name>_<version>_<platform>_<arch>.<ext>
+          releaseAssetNamePattern: '[name]_[version]_[platform]_[arch].[ext]'
+          args: ${{ matrix.args }}
+
+  cli:
+    name: CLI ${{ matrix.target }}
+    needs: release-create
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.release-create.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `runnable` marks the targets the runner can actually execute, so the
+          # smoke test below is not attempted for a cross-built binary.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-24.04, archive: raw, runnable: true }
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-24.04, archive: raw, runnable: true }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04, archive: raw, runnable: false }
+          - { target: x86_64-apple-darwin, os: macos-14, archive: tar.gz, runnable: false }
+          - { target: aarch64-apple-darwin, os: macos-14, archive: tar.gz, runnable: false }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, archive: zip, runnable: true }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          key: cli-${{ matrix.target }}
+      - name: Install the aarch64 Linux toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Install the musl toolchain
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+      - name: Stamp the release version into the manifests
+        run: node scripts/set-version.mjs ${{ needs.release-create.outputs.version }}
+      # No --locked: the version stamp above deliberately makes Cargo.lock stale,
+      # so cargo has to rewrite the package versions.
+      - name: Build
+        run: cargo build --release -p fina-cli --target ${{ matrix.target }}
+      - name: Smoke test the binary
+        if: matrix.runnable
+        shell: bash
+        run: "target/${{ matrix.target }}/release/fina-cli${{ matrix.target == 'x86_64-pc-windows-msvc' && '.exe' || '' }} health"
+      - name: Package for unix
+        if: matrix.archive == 'tar.gz'
+        run: |
+          mkdir -p dist-cli
+          cp "target/${{ matrix.target }}/release/fina-cli" "dist-cli/fina-cli_$VERSION_${{ matrix.target }}"
+          tar -C dist-cli -czf "fina-cli_$VERSION_${{ matrix.target }}.tar.gz" .
+      - name: Package for linux
+        if: matrix.archive == 'raw'
+        run: |
+          mkdir -p dist-cli
+          cp "target/${{ matrix.target }}/release/fina-cli" "dist-cli/fina-cli_$VERSION_${{ matrix.target }}"
+          chmod +x "dist-cli/fina-cli_$VERSION_${{ matrix.target }}"
+      - name: Package for windows
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist-cli | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/fina-cli.exe" "dist-cli/fina-cli_$env:VERSION_${{ matrix.target }}.exe"
+          Compress-Archive -Path "dist-cli/*" -DestinationPath "fina-cli_$env:VERSION_${{ matrix.target }}.zip"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          draft: true
+          files: |
+            dist-cli/*
+            fina-cli_*.zip
+
+  release-publish:
+    name: Publish release
+    needs: [release-create, desktop, cli]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Publish the draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --draft=false --prerelease="$PRERELEASE" --latest="$LATEST"
+          echo "Published https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ env.TAG }}
+          PRERELEASE: ${{ needs.release-create.outputs.prerelease }}
+          # A prerelease must not become the default download.
+          LATEST: ${{ needs.release-create.outputs.prerelease == 'true' && 'false' || 'true' }}

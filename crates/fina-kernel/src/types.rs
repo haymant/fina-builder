@@ -148,7 +148,7 @@ pub enum SettlementType {
 /// `generatePaths.ts` (`ki 0.70`, `ko 1.00`, coupon range `0.75..1.00`, monthly
 /// rate `0.008`, notional `100`). [`TradeEconomics`] holds the *UI control*
 /// defaults (`ki 0.60`, `ko 1.00`, coupon range `0.70..1.20`, annual rate `0.12`).
-/// The two deliberately diverge; see `PHASE1_MIGRATION_PROMPT.md` §3.
+/// The two deliberately diverge; see `FEATURES.md` §3.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductBarriers {
@@ -234,7 +234,7 @@ impl PathAttribution {
     /// source uses, then rounds to 2dp.
     ///
     /// The summation order is part of the numeric contract; see
-    /// [`crate::jsnum::sum_ordered`] and `PHASE1_MIGRATION_PROMPT.md` pitfall P-1.
+    /// [`crate::jsnum::sum_ordered`] and `FEATURES.md` pitfall P-1.
     #[must_use]
     pub fn compute_total(&self) -> f64 {
         crate::jsnum::round2(crate::jsnum::sum_ordered(&[
@@ -636,7 +636,7 @@ pub struct FxPair {
 /// The volatility surface parameters.
 ///
 /// A four-number mock, not a surface: nothing in the repository interpolates
-/// it. See `FEATURE.ts.md` on the mock market and vol surface.
+/// it. See `FEATURES.md Part I` on the mock market and vol surface.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VolParams {
@@ -805,7 +805,7 @@ mod tests {
     fn barriers_and_trade_economics_deliberately_differ() {
         // Locked in by design: paths are generated from ProductBarriers while
         // the UI edits TradeEconomics. Merging them would silently change every
-        // generated path. See `PHASE1_MIGRATION_PROMPT.md` section 3.
+        // generated path. See `FEATURES.md` section 3.
         let b = ProductBarriers::default();
         let t = TradeEconomics::default();
         assert_ne!(b.ki_barrier, t.knock_in_barrier);

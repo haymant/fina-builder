@@ -47,7 +47,7 @@
 //!   difference on purpose.
 //!
 //! Both are documented in the TypeScript and preserved verbatim; see
-//! `PHASE1_MIGRATION_PROMPT.md` §4.3 and Appendix E.
+//! `FEATURES.md` §4.3 and Appendix E.
 
 use crate::jsnum::{js_to_fixed_f64, sum_ordered};
 use crate::types::{MarketSnapshot, SimulationPath, TradeEconomics};

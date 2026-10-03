@@ -1,5 +1,5 @@
 //! The wire contract: the request/response shape every transport adapter
-//! speaks, defined once here and reused verbatim (`PHASE1_MIGRATION_PROMPT.md`
+//! speaks, defined once here and reused verbatim (`FEATURES.md`
 //! §5.0, invariant I-3).
 //!
 //! # Why dispatch lives in the kernel

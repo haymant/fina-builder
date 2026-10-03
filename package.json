@@ -18,7 +18,8 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
     "backend:dev": "cargo run -p fina-server",
-    "backend:test": "cargo test --workspace"
+    "backend:test": "cargo test --workspace",
+    "version:set": "node scripts/set-version.mjs"
   },
   "dependencies": {
     "@codemirror/lang-markdown": "^6.5.2",

@@ -18,8 +18,8 @@
 //! - `branch_stats::total_paths` is 1,000x the sample; see
 //!   [`crate::types::BranchStats`].
 //!
-//! Preserved exactly, not repaired. See `FEATURE.ts.md` for the inventory and
-//! `PHASE1_MIGRATION_PROMPT.md` §10 for the full trap list.
+//! Preserved exactly, not repaired. See `FEATURES.md Part I` for the inventory and
+//! `FEATURES.md` §10 for the full trap list.
 //!
 //! # Draw-order contract
 //!
@@ -265,7 +265,7 @@ struct PerformanceSeries {
 /// Generates the complete simulation bundle.
 ///
 /// Deterministic: identical `config` yields identical bytes forever
-/// (`PHASE1_MIGRATION_PROMPT.md` invariant I-2). Verified by the golden parity
+/// (`FEATURES.md` invariant I-2). Verified by the golden parity
 /// test.
 ///
 /// # Errors
@@ -484,7 +484,7 @@ where
 ///
 /// The KO event window is `6 + floor(rng * 40)` while the KI event window is
 /// `8 + floor(rng * 35)`. The asymmetry is a copy-paste artefact in the
-/// original, preserved verbatim — see `PHASE1_MIGRATION_PROMPT.md` pitfall P-4.
+/// original, preserved verbatim — see `FEATURES.md` pitfall P-4.
 fn generate_performance_series(
     scenario: PathScenario,
     rng: &mut Mulberry32,
@@ -679,7 +679,7 @@ impl ScenarioEvents {
     /// The two windows deliberately differ: `ko` is `6 + floor(rng * 40)` and
     /// `ki` is `8 + floor(rng * 35)`. That asymmetry — different offset, different
     /// width — is a copy-paste artefact of the original, preserved verbatim
-    /// (`PHASE1_MIGRATION_PROMPT.md` pitfall P-4).
+    /// (`FEATURES.md` pitfall P-4).
     fn draw(scenario: PathScenario, rng: &mut Mulberry32) -> Self {
         let ko = if scenario == PathScenario::Ko {
             Some(6 + js_floor_to_usize(rng.next_f64() * 40.0))

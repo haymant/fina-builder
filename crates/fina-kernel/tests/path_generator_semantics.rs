@@ -5,7 +5,7 @@
 //! the validation rejects bad input instead of panicking, and that the progress
 //! callback an adapter will bridge to SSE or a Tauri channel behaves.
 //!
-//! Tests 4–13 of `PHASE1_MIGRATION_PROMPT.md` §Phase 2 live here. Tests 1–3 are
+//! Tests 4–13 of `FEATURES.md` §Phase 2 live here. Tests 1–3 are
 //! in `golden_parity.rs`, because they are golden comparisons.
 //!
 //! Where a test restates a golden value it says so. Where it asserts something

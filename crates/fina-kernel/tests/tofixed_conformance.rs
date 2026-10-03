@@ -40,7 +40,7 @@
 //!
 //! The differential test is `#[ignore]`d by default because regenerating the
 //! corpus needs Node. The structural tests below run always.
-//! PHASE1_MIGRATION_PROMPT.md section 6 wires the ignored test into CI.
+//! FEATURES.md section 6 wires the ignored test into CI.
 
 // `excessive_precision` fires on `9.134_999_999_999_999`, but not because the
 // literal names a different double than `9.135` — it names the *same* one, since

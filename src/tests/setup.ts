@@ -1,4 +1,4 @@
-// Vitest setup (PHASE1_MIGRATION_PROMPT.md §6.2): jsdom stubs for the APIs the
+// Vitest setup (FEATURES.md §6.2): jsdom stubs for the APIs the
 // tiles touch, per-test localStorage isolation, and RTL cleanup.
 
 import '@testing-library/jest-dom/vitest'

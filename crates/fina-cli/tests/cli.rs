@@ -1,5 +1,5 @@
 //! Adapter test for `fina-cli`: spawn the real binary and assert the transport
-//! contract (PHASE1_MIGRATION_PROMPT.md §6.1) — stdout carries exactly one JSON
+//! contract (FEATURES.md §6.1) — stdout carries exactly one JSON
 //! document, progress goes to stderr as NDJSON, errors exit non-zero with the
 //! wire shape. No formulas are tested here; the kernel already owns those.
 

@@ -1,7 +1,7 @@
 //! Machine-enforced layering rule: `fina-kernel` must have no transport,
 //! UI, async-runtime or framework dependencies.
 //!
-//! PHASE1_MIGRATION_PROMPT.md §4 makes this a hard constraint (invariant I-8).
+//! FEATURES.md §4 makes this a hard constraint (invariant I-8).
 //! Documenting it is not enough — a stray `rand` or `tokio` in `Cargo.toml` would
 //! let domain code reach for the network, block a thread, or smuggle transport
 //! concerns into the kernel, and every adapter would then diverge. So this is a
@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 /// The complete allowlist of `fina-kernel` dependencies.
 ///
 /// Adding an entry here is a **deliberate act that requires updating
-/// PHASE1_MIGRATION_PROMPT.md §4** and reviewing the rationale. The test
+/// FEATURES.md §4** and reviewing the rationale. The test
 /// `allowlist_matches_the_prompt` cross-checks this list against the document so
 /// the two cannot drift apart silently.
 const ALLOWED: &[&str] = &["serde", "serde_json", "thiserror"];
@@ -118,26 +118,27 @@ fn kernel_dependencies_are_within_the_allowlist() {
 
     assert!(
         violations.is_empty(),
-        "fina-kernel dependency allowlist violated (PHASE1_MIGRATION_PROMPT.md section 4):\n  - {}",
+        "fina-kernel dependency allowlist violated (FEATURES.md section 4):\n  - {}",
         violations.join("\n  - ")
     );
 }
 
 #[test]
-fn allowlist_matches_the_prompt() {
+fn allowlist_matches_the_spec() {
     // Guards against the test drifting from its own documentation: if someone
-    // adds `chrono` to ALLOWED but forgets PHASE1_MIGRATION_PROMPT.md section 4,
-    // this fails.
-    let prompt =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../PHASE1_MIGRATION_PROMPT.md");
-    let text = std::fs::read_to_string(&prompt).expect("PHASE1_MIGRATION_PROMPT.md is readable");
+    // adds `chrono` to ALLOWED but forgets FEATURES.md §4, this fails.
+    //
+    // Anchored on the full heading text, not just `## 4.`: FEATURES.md is now two
+    // documents in one file (Part I inventory, Part II spec), so a bare number
+    // could match a Part I heading added later.
+    let doc = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../FEATURES.md");
+    let text = std::fs::read_to_string(&doc).expect("FEATURES.md is readable");
 
     let section_start = text
-        .find("## 4.")
-        .or_else(|| text.find("\n## 4 "))
-        .expect("prompt has a section 4");
+        .find("## 4. Target architecture")
+        .expect("FEATURES.md Part II has a '## 4. Target architecture' section");
     let section_end = text[section_start..]
-        .find("\n## 5")
+        .find("\n## 5.")
         .map(|i| section_start + i)
         .unwrap_or(text.len());
     let section = &text[section_start..section_end];
@@ -145,8 +146,8 @@ fn allowlist_matches_the_prompt() {
     for dep in ALLOWED {
         assert!(
             section.contains(dep),
-            "dependency `{dep}` is in the test allowlist but PHASE1_MIGRATION_PROMPT.md \
-             section 4 does not mention it. Update the document or remove the dep."
+            "dependency `{dep}` is in the test allowlist but FEATURES.md \
+             Part II §4 does not mention it. Update the document or remove the dep."
         );
     }
 }
@@ -199,7 +200,7 @@ fn golden_fixture_is_committed_and_non_trivial() {
 fn golden_fixture_has_every_section_every_phase_depends_on() {
     // Not a re-implementation check — just that the fixture is parseable JSON
     // with the sections every later phase depends on. Regenerating requires
-    // Node; PHASE1_MIGRATION_PROMPT.md section 6 runs the generator in CI.
+    // Node; FEATURES.md section 6 runs the generator in CI.
     //
     // The paths and branch statistics live under `simulationBundle`, matching the
     // shape of `SimulationBundle` in `fina_kernel::types`.

@@ -12,7 +12,7 @@ license.workspace = true
 # This crate is the single source of truth for domain logic. It must contain
 # NO transport, UI, async-runtime or framework dependencies. If a change here
 # adds anything outside this list, the layering rule in
-# PHASE1_MIGRATION_PROMPT.md section 4 has been violated.
+# FEATURES.md section 4 has been violated.
 #
 #   serde      - wire/domain types
 #   serde_json - golden fixtures + adapter serialization tests

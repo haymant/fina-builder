@@ -1,7 +1,7 @@
 //! Golden parity: the kernel must reproduce the pre-migration TypeScript output
 //! byte-for-byte.
 //!
-//! This is invariant **I-1** from `PHASE1_MIGRATION_PROMPT.md`, and it is the
+//! This is invariant **I-1** from `FEATURES.md`, and it is the
 //! single most important test in the repository. Every other test checks that the
 //! kernel is internally coherent; this one checks that it is *correct* — that the
 //! port is faithful rather than merely plausible.
@@ -870,7 +870,7 @@ fn node_details_serialize_in_payoff_node_order() {
 }
 
 /// Cross-language determinism: a committed digest of the canonical serialization
-/// (`PHASE1_MIGRATION_PROMPT.md` §Phase 2, test 3).
+/// (`FEATURES.md` §Phase 2, test 3).
 ///
 /// `golden.json` compares *parsed values*, which is the right check for numeric
 /// parity but says nothing about the serialization itself. This pins the exact

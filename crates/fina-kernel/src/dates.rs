@@ -2,7 +2,7 @@
 //!
 //! # Why no date library
 //!
-//! ``PHASE1_MIGRATION_PROMPT.md`` originally allowed `chrono` or `time`. This
+//! ``FEATURES.md`` originally allowed `chrono` or `time`. This
 //! module implements the schedule with plain integer arithmetic instead, which
 //! removes a dependency and makes `fina-kernel` easier to lift into a standalone
 //! git submodule (a stated goal for the `fina-*` family).

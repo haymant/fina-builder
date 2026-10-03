@@ -6,7 +6,7 @@
 //! A compact **heuristic**, not a valuation. Every output is a linear
 //! extrapolation in the trade's barriers and coupon, calibrated to return
 //! roughly `103` on the default terms. It is not discounted, not risk-adjusted,
-//! and not calibrated against any data. `FEATURE.ts.md` says so explicitly, and
+//! and not calibrated against any data. `FEATURES.md Part I` says so explicitly, and
 //! that framing is carried over verbatim.
 //!
 //! Three properties of the original are preserved rather than repaired, because

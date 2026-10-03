@@ -1,4 +1,4 @@
-// Test double for `@tauri-apps/api/core` (PHASE1_MIGRATION_PROMPT.md §6.2).
+// Test double for `@tauri-apps/api/core` (FEATURES.md §6.2).
 //
 // Any test importing `tauriTransport` resolves this module via the
 // `resolve.alias` in `vite.config.ts`. The `invoke` spy **throws by default**

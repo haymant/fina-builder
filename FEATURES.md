@@ -1,6 +1,434 @@
-# PHASE 1 MIGRATION PROMPT — `fina-builder` PoC → Production (Rust Core + Hybrid Transports)
+# Fina Builder — Features & Architecture
 
-> **This file is an executable specification for a coding agent.** Every requirement below is
+> **Single source of truth for this repository.** It records what the product does today
+> (Part I) and, in Part II, the executable specification and completion record of the
+> PoC → production migration that produced the current architecture.
+>
+> Part II was formerly `PHASE1_MIGRATION_PROMPT.md`. It was renamed, not rewritten: the
+> section numbers (`§4`, `§6.2`, `§10`, Appendices A–F) are unchanged, so every
+> `FEATURES.md §x.y` reference in the code and tests still points at the same text.
+
+---
+
+## How to read this document
+
+| Part | Contents | Read it when |
+| --- | --- | --- |
+| **Part I — Feature inventory** (this part) | What the application does: the four surfaces, the twelve commands, the kernel modules, the 51-tile UI, the parity/CI/release machinery, and the known gaps. | You want to know what exists, or what to change next. |
+| **Part II — Migration specification & record** | The normative spec that was executed Phase 0 → 6: architecture, invariants, per-phase tasks and exit criteria, testing strategy, pitfalls, and Appendices A–F recording deviations and verified golden values. | You need the reasoning, the exact formulas, or the history of a decision. |
+
+Part II is prescriptive ("must", "do not"); Part I is descriptive ("is", "does not").
+Where they disagree about **behaviour**, Part II §5 (invariants) wins and the discrepancy
+is a bug.
+
+---
+
+# Part I — Feature inventory
+
+## Status
+
+Phase 0 → Phase 6 of the migration are complete and pushed. The repository is
+production-*shaped*: one Rust domain kernel, thin adapters, and parity tests that pin the
+kernel to the original TypeScript implementation. It is **not** production-*priced*: the
+models are deterministic demo engines (see [Known gaps](#known-gaps-and-deliberate-divergences)).
+
+| | |
+| --- | --- |
+| Rust tests | 296 (`cargo test --workspace`) |
+| Frontend tests | 49 (`npm run test:run`) |
+| Coverage (enforced in CI) | kernel 98.4% · server 87.7% · cli 89.1% · tauri 76.2% lines |
+| Parity baseline | `crates/fina-kernel/tests/fixtures/golden.json`, 3.1 MB, md5 `8f2ad79439457e17641797d4eda0592c` |
+
+## Business rationale
+
+Structured-product analysis spans trade terms, path-dependent payoff events, risk,
+cashflows, and valuation explanations. This application brings those views into one
+configurable workspace so developers, quants, traders, validators, and product-control
+users can inspect linked examples and discuss model behaviour.
+
+It is a demonstrator for those workflows. It is not a source of executable prices, official
+valuations, or production risk measures, and the numbers it displays must not be used for
+trading, valuation sign-off, risk limits, or settlement.
+
+## Architecture at a glance
+
+The layering rule, stated once:
+
+> **Transport ≠ business logic.** Every adapter is a mechanical translation
+> (deserialize → call `fina-kernel` → serialize). No adapter contains a formula, a branch on
+> domain data, or a domain default.
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│  React 19 + TypeScript frontend — one codebase                │
+│  src/ (browser build and Tauri build)                        │
+└───────────────┬──────────────────────────────┬───────────────┘
+                │                              │
+      ┌─────────▼─────────┐          ┌─────────▼─────────┐
+      │  Desktop          │          │  Web              │
+      │  Tauri IPC +      │          │  HTTP POST + SSE  │
+      │  Channel stream   │          │                   │
+      └─────────┬─────────┘          └─────────┬─────────┘
+                │                              │
+      ┌─────────▼─────────┐          ┌─────────▼─────────┐
+      │ src-tauri         │          │ crates/fina-server│
+      │ #[tauri::command] │          │ actix-web routes  │
+      └─────────┬─────────┘          └─────────┬─────────┘
+                │            ┌─────────────────┘
+                │            │
+      ┌─────────▼────────────▼───────────────────────────────┐
+      │  crates/fina-kernel — ALL business logic              │
+      │  api · path_generator · economics · risk_engine ·    │
+      │  valuation · diagnostics · execution · jsnum · rng   │
+      │  ZERO transport / UI / framework dependencies        │
+      └─────────┬───────────────────────────┬───────────────┘
+                │                           │
+      ┌─────────▼─────────┐       ┌─────────▼─────────┐
+      │ crates/fina-cli   │       │ crates/fina-mcp   │  stub, deferred
+      │ clap → dispatch   │       │ prints a message, │
+      │                   │       │ exits 1           │
+      └───────────────────┘       └───────────────────┘
+```
+
+`fina-kernel` may depend on `serde`, `serde_json` and `thiserror` — nothing else. This is
+machine-enforced by `crates/fina-kernel/tests/dependency_hygiene.rs`, which also fails if the
+allowlist in that test drifts from the one in Part II §4.
+
+The **wire contract and the command dispatcher live in the kernel**
+(`fina_kernel::api::{CommandId, dispatch, dispatch_sync}`). Every adapter calls the same
+router, which is why Tauri, HTTP and CLI cannot drift: they have no command table of their
+own to drift with.
+
+## Application surfaces
+
+### Web mode (browser + HTTP backend)
+
+Two processes:
+
+```bash
+npm ci
+npm run dev:all          # backend (127.0.0.1:8787) + Vite (127.0.0.1:5173)
+```
+
+| Piece | What it is |
+| --- | --- |
+| `crates/fina-server` (`fina-server`) | actix-web adapter. `GET /health`, `GET /api/version`, `POST /api/cmd/{command}` (single JSON result), `POST /api/stream/{command}` (SSE progress frames then the result frame). CORS is permissive; bind address is `--host`/`--port`, default `127.0.0.1:8787`. |
+| `src/` via Vite | The same frontend the desktop build uses. Detects the HTTP transport and points at `http://127.0.0.1:8787` (override with `VITE_FINA_BASE_URL`). |
+
+Running only `npm run dev` gives you Vite without a backend, and every command fails with
+`ERR_CONNECTION_REFUSED` — start the backend too (`npm run backend:dev`, or use
+`npm run dev:all`).
+
+Transport selection is explicit and overridable: `VITE_FINA_TRANSPORT=tauri|http` forces a
+mode; otherwise `'__TAURI_INTERNALS__' in window` picks Tauri and everything else picks
+HTTP (`src/api/index.ts`).
+
+### Desktop mode (Tauri IPC)
+
+```bash
+npm run tauri:dev        # window + IPC; no HTTP backend needed
+npm run tauri:build      # platform bundles
+```
+
+`src-tauri` registers all twelve commands on the invoke handler. Progress for
+`generate_paths` travels over a `tauri::ipc::Channel<ProgressEvent>`; every other command is
+a plain request/response `invoke`. All command bodies are pass-throughs to
+`fina_kernel::dispatch`.
+
+Because the channel is **required** for `generate_paths`, that command is reached only via
+`FinaTransport.generatePaths` (which creates a channel), never through the generic `call`
+path. `simulationStore.load()` does exactly that.
+
+> Production builds must not contain test doubles. `vite.config.ts` applies the
+> `@tauri-apps/api/core` → `tauriMock.ts` alias **only** under Vitest, and CI fails if the
+> mock's error string appears in `dist/`.
+
+### CLI mode (headless)
+
+```bash
+cargo run -p fina-cli -- generate-paths --seed 42 --paths 100 --out bundle.json
+cargo run -p fina-cli -- compute-risk --trade trade.json --market market.json
+cargo run -p fina-cli -- --help
+```
+
+Twelve subcommands, one per command id (kebab-case, with short aliases such as
+`branch-stats`, `cashflows`, `explain`). **stdout carries only the JSON result**, so it
+pipes into `jq`; progress is NDJSON on stderr; errors are the wire error shape
+(`{"code", "message"}`) on stderr with a non-zero exit.
+
+### MCP mode (stub — deliberately not implemented)
+
+`crates/fina-mcp` prints a deferral message and exits 1. Phase 1 shipped Tauri, HTTP and
+CLI only; MCP is Part II §9 item O-7. When implemented it must expose each kernel command
+as an MCP tool over JSON-RPC 2.0 on stdio, reusing `fina_kernel::api` types verbatim so
+results stay byte-identical to the other transports.
+
+## Command surface
+
+Twelve commands, defined once in `crates/fina-kernel/src/api.rs`. Identical JSON out for
+identical input on every transport — that is invariant I-3, enforced by adapter parity tests
+rather than by convention.
+
+| Command | Request | Response | Stream | Used by |
+| --- | --- | --- | --- | --- |
+| `generate_paths` | `{ config }` | `SimulationBundle` | progress | `simulationStore.load()` |
+| `get_path` | `{ pathIndex }` | `SimulationPath` | — | `useSelectedPath` |
+| `get_branch_stats` | `{}` | `BranchStats` | — | inside the bundle; exposed for CLI/parity |
+| `get_distributions` | `{}` | `SimulationDistributions` | — | inside the bundle; exposed for CLI/parity |
+| `compute_trade_analytics` | `{ trade }` | `TradeAnalytics` | — | `useTradeAnalytics` |
+| `compute_risk` | `{ trade, market }` | `RiskState` | — | `useRiskEngine` |
+| `get_mc_diagnostics` | `{}` | `McDiagnosticsResponse` | — | `useMcDiagnostics` |
+| `build_cashflows` | `{ trade, pathIndex }` | `CashflowResponse` | — | `useCashflows` |
+| `valuation_explain` | `{ trade, market, pathIndex, asOf }` | `ValuationExplain` | — | `useValuationExplain` |
+| `explain_ledger` | `{ trade, market, pathIndex, asOf }` | `ExplainLedger` | — | `useExplainLedger` |
+| `execution_events` | `{ pathIndex }` | `ExecutionEvent[]` | — | `useExecutionEvents` |
+| `health` | `{}` | `{ version, … }` | — | smoke tests, `/health` |
+
+`asOf` is supplied by the caller (today's date in the UI) rather than read from the clock,
+so responses are reproducible.
+
+Errors are one shape everywhere: `{ "code": "...", "message": "..." }` with an HTTP 4xx/5xx
+in the server, a rejected `invoke` in Tauri, and stderr + non-zero exit in the CLI.
+
+## `fina-kernel` features
+
+### Path generation — `path_generator`
+
+- Deterministic, seeded (`Mulberry32`, bit-exact with the TypeScript original): seed 42,
+  100 paths, 60 monthly observations from 2024-01-15 to 2028-12-15.
+- Worst-of Phoenix Autocall over AAPL, MSFT and NVDA, with scenario-constrained paths:
+  each path is assigned one of `ko`, `alive_ki_cash`, `alive_ki_physical`, `alive_no_ki`,
+  and the price series is then clamped/injected to satisfy that scenario's KO and KI
+  constraints. This is a **synthesiser**, not a calibrated stochastic simulation.
+- Per path: dates, observations, worst-of performance, KI/KO flags, KO date index, payoff,
+  redemption / coupon / put / memory-coupon values, settlement type, payoff-graph traversal
+  with node details, and a six-component PV attribution (`parRedemption`, `coupon`,
+  `memoryCoupon`, `downAndInPut`, `funding`, `discounting`, total).
+- Population outputs: `BranchStats` and the four payoff distributions. Progress events are
+  emitted through an `FnMut(ProgressEvent)` callback.
+
+### Trade economics — `economics`
+
+Expected PV, coupon PV, put PV, KO/KI probabilities and redemption for a `TradeEconomics`
+input; used by the trade-design tiles and as the baseline in the economics-impact summary.
+
+### Risk — `risk_engine`
+
+`RiskState` with PV, delta, gamma, vega, theta and FX delta for a trade plus a
+`MarketSnapshot`. Compact heuristic formulas, ported verbatim — including the artifacts
+listed under [known gaps](#known-gaps-and-deliberate-divergences).
+
+### Monte Carlo diagnostics — `diagnostics`
+
+The convergence series (PV, confidence-interval shrinkage, error vs path count, percentile,
+KI/KO probability, distribution stability), the efficiency table and the final row. The
+path-count labels (100,000 / 1,000,000) are **illustrative diagnostic points**; no
+simulation of that size is executed.
+
+### Valuation, cashflows, explain, ledger — `valuation`
+
+- Cashflow schedule and aggregates for one path (fixed 4% discount convention, demo
+  probability/realised flags).
+- Taylor explain and PLVA explain, with the explicit `previousPV`, `plvaPnL`, `totalPLVA`
+  and `*PnL` key spellings preserved.
+- The ten-entry explain ledger and its reconciliation summary.
+
+### Execution lifecycle — `execution`
+
+The per-observation event stream for one path (schedule, observation, execution state). Its
+event names are PascalCase-with-space strings such as `"Coupon Observation"`, so the
+serialisation is written by hand rather than derived.
+
+### Wire contract — `api`
+
+`CommandId` (12 variants), the request types, `dispatch` (callback-based, for streaming) and
+`dispatch_sync` (bytes in, bytes out, for parity tests and the CLI).
+
+### Numeric primitives — `jsnum`, `rng`, `dates`, `progress`, `error`, `types`
+
+- `jsnum` implements JavaScript numeric semantics: `js_to_fixed` on exact rationals,
+  `js_to_fixed_f64`, `js_round` (**not** `f64::round`), and `sum_ordered`, because IEEE-754
+  addition is not associative and the golden fixture pins the order. Validated against a
+  215,775-case `toFixed` corpus.
+- `rng` is `Mulberry32`, consumed in a fixed draw order.
+- `dates` is a ~40-line proleptic-Gregorian month index (the schedule never needs month-end
+  clamping), which is why `chrono`/`time` are not dependencies.
+- `error` maps domain failures to the wire `{code, message}` shape shared by all transports.
+
+### Parity contract
+
+Every numeric result is validated against `tests/fixtures/golden.json`, a capture of the
+original TypeScript implementation. Regenerate it byte-identically with
+`node scripts/generate-golden-fixture.ts` (the TypeScript modules it needs are snapshotted
+under `scripts/golden-src/`). The bundle digest is pinned at
+`a79bf5642aaf9c7d6cb292d27863a79ea173284dec08acbffbb748afeaddaf9f`.
+
+## UI features
+
+The frontend kept its location (`src/`), its 51 tile types and its look. What changed is that
+it **computes nothing**: it holds inputs and UI state and renders responses.
+
+### Shell, state, persistence
+
+- Zustand stores for workspace/dashboard state, trade economics, market data, cashflows,
+  valuation explain, the explain ledger and notebook content.
+- Browser `localStorage`, keys unchanged from the PoC (invariant I-6 — no rename, no shape
+  change, no migration): `fina-workspace`, `fina-trade-economics`, `fina-market-data`,
+  `fina-dashboard-docs`, `fina-notebook-width`.
+- Responsive, draggable and resizable tile layouts; dashboard selection, creation,
+  creation from template, rename, duplication, deletion (browser confirm dialogs).
+
+### Dashboards, templates, tiles, theme
+
+- Six built-in dashboards: Payoff Explorer, PathCube Analytics, Risk Diagnostics, Monte
+  Carlo Diagnostics, Trade Design, Market & Risk.
+- Nine role templates (searchable, filterable by role): Trade Structuring Workspace, Trader
+  Workspace, Model Validation Workspace, Cashflow Workspace, Desk Quant Workspace, Market
+  Risk Workspace, Product Control Workspace, P&L Explain Workspace, Executive Dashboard.
+- **51 tile types** in the catalog, grouped as Payoff Analysis, Path Analysis, Risk
+  Analytics, Distribution Analysis, Monte Carlo Diagnostics, Trade Design, Market & Risk,
+  Market Data, Lifecycle, Cashflow & P&L, and Valuation Explain. (An earlier count of 52 was
+  wrong; see Part II §3.)
+- Dark/light theme toggle with design tokens; path selection (one of 100 paths, next /
+  previous / random) shared across the path-related views.
+
+### Payoff explorer and path views
+
+XYFlow payoff-graph with traversal/state highlighting for the selected path; 60-point
+worst-of performance timeline with KI/KO and coupon-range context; node details for the
+current event/decision; branch-population Sankey; selected-path attribution waterfall;
+payoff histogram and distribution explorer (normalized payoff, coupon, put, worst-of);
+quantile fan; state occupancy; barrier-crossing heatmap; worst-of percentile evolution;
+selected path's position in the population.
+
+### Trade design and market controls
+
+- Trade Economics panel: strike, KI/KO and coupon barriers, coupon rate, maturity, notional,
+  memory-coupon and physical-settlement flags, presets, reset.
+- Trade tiles: summary, economics impact summary, sensitivity tornado, parameter impact
+  matrix.
+- Market Data panel: synthetic spots and OHLC series for AAPL/MSFT/NVDA, editable
+  volatility parameters, FX pairs, correlations, and spot/vol/correlation/FX shock controls.
+- Market & risk tiles: risk summary, Greeks table, bucket vega, spot explorer, volatility
+  surface, correlation matrix, FX explorer, Greeks waterfall, scenario comparison.
+
+These are demonstration inputs and simplified formula outputs. `marketDataStore` and the
+trade store are **input** state (frontend); every derived number is a kernel response.
+
+### PathCube and Monte Carlo displays
+
+Population views as listed above, plus the diagnostic charts: simulation summary, PV
+convergence, confidence-interval shrinkage, error vs path count, percentile convergence,
+KI/KO probability convergence, distribution stability, simulation efficiency, and a
+convergence-health indicator. The traffic light and efficiency figures are educational
+displays, not a validation certificate.
+
+### Lifecycle, cashflow, valuation explain, ledger
+
+- Execution/lifecycle tiles: schedule explorer, observation explorer, execution-state
+  inspector, lifecycle overview. Dates come from the synthetic example — there is no
+  exchange/business-day calendar service.
+- Cashflow and P&L tiles: cashflow summary, timeline, detail; P&L summary and timeline.
+- Valuation explain tiles: summary, master explain waterfall, Taylor explain, PLVA explain.
+- Explain ledger tiles: ledger table, selected-entry explorer, reconciliation summary.
+
+### Dashboard notebook
+
+Per-dashboard guidance and notes with Markdown rendering and editing, search, pinning,
+duplication and deletion, persisted in `localStorage`. It is not collaborative and has no
+import/export.
+
+## Engineering features
+
+| Area | What exists |
+| --- | --- |
+| Kernel tests | 296 across unit tests and integration tests (`golden_parity`, `path_generator_semantics`, `tofixed_conformance`, `dependency_hygiene`). Exact float equality on purpose — an epsilon would hide a rounding or ordering regression. |
+| Frontend tests | 49 Vitest tests (jsdom + MSW + testing-library), including a transport-parity suite that asserts the Tauri and HTTP clients return identical payloads. No Playwright, by design. |
+| Coverage gates | `scripts/gate-coverage.py` enforces kernel ≥ 70%, server ≥ 85%, cli ≥ 80%, tauri ≥ 75% lines. |
+| CI | `.github/workflows/ci.yml`: frontend, Rust core, adapters, coverage, dependency-hygiene — plus a guard that fails if a test mock reaches `dist/`. |
+| Releases | `.github/workflows/release.yml` builds desktop bundles (Linux x64, macOS x64/arm64, Windows x64) and `fina-cli` binaries (Linux gnu/musl/arm64, macOS x64/arm64, Windows x64) on a version tag and publishes one GitHub Release. See the README. |
+| Versioning | `scripts/set-version.mjs` writes one version into `Cargo.toml`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`; CI re-derives it from the tag. |
+
+## Known gaps and deliberate divergences
+
+Documented, not fixed — the migration relocated formulas verbatim on purpose (Part II §5,
+invariant I-1). Anything here that you want *changed* is a new decision, not a bug fix.
+
+**Model artifacts**
+
+- `gamma` is identically `0.00`: `pvUp = base + 0.08`, `pvDown = base - 0.08`, so
+  `pvUp − 2·base + pvDown ≡ 0`.
+- `delta` and `fx_delta` are structural constants, not sensitivities.
+- `total_risk` is `0.0`.
+- `plvaPnL` is `1.0000000000000002` and `state.totalPnL` is `1.7999999999999972` — float
+  artifacts of the original summation order, reproduced exactly.
+- The `explained` waterfall omits `taylor.residual`.
+- `BranchStats` reports `totalPaths: 100_000` scaled up from the 100 materialised paths. The
+  partition identities still hold on the real fixture and the exact seven-key shape is
+  asserted by a test.
+- The paths' hard-coded barriers and `DEFAULT_TRADE_ECONOMICS` are deliberately **two
+  different constant sets**; changing trade controls never regenerates paths.
+
+**Frontend regressions introduced by the migration** (both deliberate, both in Part II
+Appendix F):
+
+- **Scenario Comparison** renders the same `RiskState` three times (Base / Current /
+  Shocked) because no `scenario` kernel command exists yet. That command is the natural next
+  addition.
+- **Sensitivity Tornado** and **Parameter Impact Matrix** each issue seven
+  `compute_trade_analytics` requests (baseline + six one-step bumps). Correct, but chatty.
+
+**Numeric edges**
+
+- `js_to_fixed_f64` reproduces JavaScript's `-0.0` sign. Adapters normalise before
+  serialisation; the divergence is documented in `jsnum`.
+
+## Explicitly not implemented
+
+- A production payoff/pricing model, calibrated stochastic simulation, or revaluation
+  engine.
+- Live market data, curve/calibration services, database, authentication, or remote APIs.
+- Production cashflow/legal settlement processing or business-day calendar integration.
+- Production Greeks, risk aggregation, model-governance evidence, or certified P&L/PLVA
+  reconciliation.
+- Shared/collaborative dashboards or notebook synchronisation, nor notebook import/export.
+- MCP transport (stub only).
+- Signed/notarised desktop builds (the release pipeline is unsigned; see the README for the
+  secrets that enable signing).
+
+## Implementation landmarks
+
+| Area | Main files |
+| --- | --- |
+| Domain kernel | `crates/fina-kernel/src/{api,path_generator,economics,risk_engine,diagnostics,valuation,execution,jsnum,rng,dates,progress,error,types}.rs` |
+| Kernel tests | `crates/fina-kernel/tests/{golden_parity,path_generator_semantics,tofixed_conformance,dependency_hygiene}.rs` |
+| Parity fixture | `crates/fina-kernel/tests/fixtures/golden.json`, generator `scripts/generate-golden-fixture.ts` + snapshot `scripts/golden-src/` |
+| Desktop adapter | `src-tauri/src/lib.rs`, `src-tauri/src/commands/` |
+| HTTP adapter | `crates/fina-server/src/{lib,main}.rs`, `crates/fina-server/tests/parity.rs` |
+| CLI adapter | `crates/fina-cli/src/main.rs`, `crates/fina-cli/tests/cli.rs` |
+| MCP stub | `crates/fina-mcp/src/main.rs` |
+| Frontend transport | `src/api/{index,transport,tauriTransport,httpTransport,types}.ts` |
+| Frontend hooks | `src/hooks/index.ts` |
+| State | `src/store/{explorerStore,simulationStore,tradeEconomicsStore,marketDataStore,cashflowStore,valuationExplainStore,explainLedgerStore,dashboardDocsStore}.ts` |
+| Tile catalog / dispatch | `src/features/dashboards/{types,catalog}.ts`, `src/features/tiles/components/TileRenderer.tsx` |
+| Workspace shell | `src/features/workspace/components/{Workspace,TemplateGallery,NotebookDrawer}.tsx` |
+| Tile implementations | `src/features/{payoff-graph,path-inspector,pathcube,attribution,branch-statistics,distribution,shared}/` |
+| CI / coverage / release | `.github/workflows/{ci,release}.yml`, `scripts/gate-coverage.py`, `scripts/set-version.mjs` |
+
+---
+
+# Part II — Migration specification & record
+
+> The remainder of this file is the executable specification that was executed Phase 0 → 6.
+> It was formerly `PHASE1_MIGRATION_PROMPT.md`; its text, section numbers and appendix
+> records are unchanged, and internal references to the old filename now read `FEATURES.md`.
+>
+> The TypeScript-era inventory `FEATURE.ts.md` was folded into **Part I** of this file and
+> deleted; every `FEATURE.ts.md` reference below means Part I. Text in this part is left as
+> written at the time — including requirements that were later revised, which the Appendix
+> completion records call out explicitly.
+
+> **This part is an executable specification for a coding agent.** Every requirement below is
 > deliberately unambiguous: exact file paths, exact function signatures, exact formulas, exact
 > commands, and explicit acceptance criteria. Where a decision had to be made, the decision is
 > stated with its rationale so it is not re-litigated mid-implementation.

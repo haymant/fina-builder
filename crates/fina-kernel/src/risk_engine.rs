@@ -7,7 +7,7 @@
 //! mean spot. It is **not** a Greeks engine — there is no revaluation, no
 //! bumped-vol surface, no aggregation, no exposure. Three of the seven fields
 //! (`delta`, `gamma`, `pv`) come from a single symmetric bump around one
-//! number, and `vega` is `notional * maturity * 0.35`. `FEATURE.ts.md` lists
+//! number, and `vega` is `notional * maturity * 0.35`. `FEATURES.md Part I` lists
 //! production Greeks as explicitly out of scope.
 //!
 //! # `gamma` is structurally zero
@@ -21,7 +21,7 @@
 //! `pv_up` and `pv_down` are symmetric **about `base` by construction**, so the
 //! numerator cancels to zero for any input: gamma is an artifact of writing a
 //! second-derivative formula around a linear base, not a measured sensitivity.
-//! `PHASE1_MIGRATION_PROMPT.md` §3 and `FEATURE.ts.md` both call this out, and
+//! `FEATURES.md` §3 and `FEATURES.md Part I` both call this out, and
 //! it is preserved verbatim rather than repaired.
 //!
 //! Strictly, "cancels to zero" is a statement about the algebra, not about

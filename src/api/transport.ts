@@ -1,4 +1,4 @@
-// Transport-agnostic command surface over fina-kernel (`PHASE1_MIGRATION_PROMPT.md` §5d).
+// Transport-agnostic command surface over fina-kernel (`FEATURES.md` §5d).
 //
 // Two implementations exist: Tauri IPC and HTTP. Both speak the same commands
 // (names equal to the kernel's `CommandId` wire names), take a request object,

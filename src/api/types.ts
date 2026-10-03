@@ -1,7 +1,7 @@
 // Hand-written TypeScript mirrors of the `fina-kernel` wire types.
 //
 // These are the camelCase shapes the kernel serialises; they are the frontend's
-// single source of truth for domain data (PHASE1_MIGRATION_PROMPT.md §5d).
+// single source of truth for domain data (FEATURES.md §5d).
 // Field names here must match the Rust `#[serde(rename_all = "camelCase")]`
 // output exactly — a mismatch surfaces as `undefined` at runtime, so the golden
 // parity tests exist on the Rust side to keep the kernel honest, and this file

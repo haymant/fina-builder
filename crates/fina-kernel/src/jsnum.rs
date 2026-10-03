@@ -418,7 +418,7 @@ pub fn js_floor_to_usize(v: f64) -> usize {
 ///
 /// The golden fixture pins `taylor.predicted == 1.6860000000000004` — the
 /// trailing `04` is real and depends on this order. See
-/// `PHASE1_MIGRATION_PROMPT.md` pitfall P-1.
+/// `FEATURES.md` pitfall P-1.
 ///
 /// ```
 /// use fina_kernel::jsnum::sum_ordered;

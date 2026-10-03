@@ -10,7 +10,7 @@
 //!
 //! This is the single most misreadable surface in the application: the tile
 //! renders a convergence chart with a "converged" badge, and every number on it
-//! is fabricated. `FEATURE.ts.md` states it directly — *"labels such as 100,000
+//! is fabricated. `FEATURES.md Part I` states it directly — *"labels such as 100,000
 //! or 1,000,000 paths are illustrative diagnostic points, not a simulation
 //! currently executed by the app"* — and that framing is preserved verbatim so
 //! the migration cannot be read as having invented a Monte Carlo engine.

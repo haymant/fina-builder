@@ -21,7 +21,7 @@
 fn main() {
     eprintln!(
         "fina-mcp: MCP transport is deferred to Phase 2. \
-         See PHASE1_MIGRATION_PROMPT.md section 9 item O-7."
+         See FEATURES.md section 9 item O-7."
     );
     std::process::exit(1);
 }

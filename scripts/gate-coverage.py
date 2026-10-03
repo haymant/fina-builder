@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforces the PHASE1_MIGRATION_PROMPT.md §6.1/§6.3 coverage gates on an
+"""Enforces the FEATURES.md §6.1/§6.3 coverage gates on an
 `lcov.info` produced by `cargo llvm-cov --workspace --exclude fina-mcp --lcov`.
 
 Gates (line coverage):

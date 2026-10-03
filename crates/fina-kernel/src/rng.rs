@@ -26,7 +26,7 @@
 //!
 //! The path generator consumes a **fixed number of draws in a fixed order** for
 //! every path. Adding, removing or reordering one draw shifts every subsequent
-//! value for every path and breaks golden parity. See `PHASE1_MIGRATION_PROMPT.md`
+//! value for every path and breaks golden parity. See `FEATURES.md`
 //! pitfall P-3.
 
 /// Mulberry32 — a small, fast, deterministic 32-bit PRNG.

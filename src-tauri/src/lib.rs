@@ -1,7 +1,7 @@
 //! fina-builder desktop shell: a **thin Tauri adapter** over `fina-kernel`.
 //!
 //! All domain logic lives in `fina-kernel`; this crate only translates Tauri
-//! IPC into kernel calls (see `PHASE1_MIGRATION_PROMPT.md` §5c). Commands in
+//! IPC into kernel calls (see `FEATURES.md` §5c). Commands in
 //! `commands/` are pure pass-throughs: no formulas, no defaults, no branching
 //! on domain values.
 

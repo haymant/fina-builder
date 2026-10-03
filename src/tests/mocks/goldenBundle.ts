@@ -1,6 +1,6 @@
 // The committed golden baseline, loaded through Vite's `?raw` so the frontend
 // tests assert against the same witness the Rust golden-parity tests use
-// (PHASE1_MIGRATION_PROMPT.md §6.2).
+// (FEATURES.md §6.2).
 
 import goldenRaw from '../../../crates/fina-kernel/tests/fixtures/golden.json?raw'
 import type { SimulationBundle, TradeAnalytics, RiskState } from '../../api/types'

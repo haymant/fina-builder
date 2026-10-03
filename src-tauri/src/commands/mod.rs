@@ -3,7 +3,7 @@
 //! Every command in this tree is a **pure pass-through**: deserialise the wire
 //! request (`fina_kernel::api::*`), call one kernel function, return the core
 //! type. Zero formulas, zero defaults, zero branching on domain values — the
-//! same wire contract (`PHASE1_MIGRATION_PROMPT.md` §5.0) the CLI and the HTTP
+//! same wire contract (`FEATURES.md` §5.0) the CLI and the HTTP
 //! server speak, so a reviewer can confirm each command is a few lines and
 //! nothing more.
 //!

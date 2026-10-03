@@ -1,4 +1,4 @@
-//! Cross-transport parity (PHASE1_MIGRATION_PROMPT.md §6.1, invariant I-3):
+//! Cross-transport parity (FEATURES.md §6.1, invariant I-3):
 //! the HTTP endpoint must emit the exact JSON bytes `fina_kernel::api::dispatch`
 //! produces, because the CLI and Tauri both call the same dispatch. Any adapter
 //! that reshapes, rounds or defaults differently fails here.

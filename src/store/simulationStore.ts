@@ -1,7 +1,7 @@
 // Simulation data store: the bundle arrives from the backend, exactly once.
 //
 // `simulationStore` replaces the module-level `simulationBundle` singleton from
-// `mock-data/generatePaths.ts` (PHASE1_MIGRATION_PROMPT.md §5d.2): the bundle is
+// `mock-data/generatePaths.ts` (FEATURES.md §5d.2): the bundle is
 // no longer computed in the browser; it is fetched from fina-kernel via the
 // active transport.
 

@@ -36,8 +36,8 @@
 //! The models here are **deterministic demo engines**, not production pricing.
 //! `path_generator` synthesises scenario-constrained paths rather than running a
 //! calibrated stochastic simulation; several outputs are documented constants or
-//! structural artifacts. ``FEATURE.ts.md`` is the authoritative inventory, and
-//! `PHASE1_MIGRATION_PROMPT.md` §10 lists the traps.
+//! structural artifacts. ``FEATURES.md Part I`` is the authoritative inventory, and
+//! `FEATURES.md` §10 lists the traps.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -55,7 +55,7 @@
 // Golden parity means asserting `result == 2.1000000000000000888`, not
 // `abs(a - b) < 1e-9`. An epsilon here would let a `js_round` regression or a
 // reordered sum pass silently, which is precisely the class of bug the fixture
-// exists to catch (`PHASE1_MIGRATION_PROMPT.md` pitfalls P-1, P-2). Production
+// exists to catch (`FEATURES.md` pitfalls P-1, P-2). Production
 // code paths compute values; `assert_eq!` appears only in tests, where bitwise
 // comparison is the correct assertion.
 #![allow(clippy::float_cmp, clippy::excessive_precision)]
