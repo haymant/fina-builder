@@ -25,6 +25,9 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     allowedHosts: ['5173-isfrrzvtdzt80v0qqywhj-41cb09c2.sg2.manus.computer'],
+    watch: {
+      ignored: ['**/dist/**', '**/target/**']
+    }
   },
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
