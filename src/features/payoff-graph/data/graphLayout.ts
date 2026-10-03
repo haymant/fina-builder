@@ -4,7 +4,6 @@ import type { PayoffNodeData } from '../components/PayoffGraphNode'
 
 const NODE_META: { id: PayoffNodeId; label: string; x: number; y: number }[] = [
   { id: 'PathCube', label: 'PathCube', x: 0, y: 120 },
-  { id: 'FixingSchedule', label: 'FixingSchedule', x: 180, y: 40 },
   { id: 'WorstOfPerformance', label: 'WorstOfPerformance', x: 180, y: 140 },
   { id: 'KnockInGate', label: 'KnockInGate', x: 380, y: 40 },
   { id: 'GlobalKOGate', label: 'GlobalKOGate', x: 380, y: 140 },
@@ -18,10 +17,8 @@ const NODE_META: { id: PayoffNodeId; label: string; x: number; y: number }[] = [
 ]
 
 const EDGE_DEFS: [PayoffNodeId, PayoffNodeId][] = [
-  ['PathCube', 'FixingSchedule'],
   ['PathCube', 'WorstOfPerformance'],
-  ['FixingSchedule', 'KnockInGate'],
-  ['WorstOfPerformance', 'KnockInGate'],
+    ['WorstOfPerformance', 'KnockInGate'],
   ['WorstOfPerformance', 'GlobalKOGate'],
   ['KnockInGate', 'RangeAccrual'],
   ['KnockInGate', 'DownAndInPut'],

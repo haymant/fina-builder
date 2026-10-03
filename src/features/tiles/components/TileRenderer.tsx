@@ -8,6 +8,10 @@ import { PayoffGraphPanel } from '../../payoff-graph/components/PayoffGraphPanel
 import { QuantileFanTile, StateOccupancyTile, BarrierHeatmapTile, PathDistributionPositionTile } from '../../pathcube/components/PathCubeTiles'
 import { SimulationSummaryTile, PVConvergenceTile, ConfidenceIntervalShrinkageTile, ErrorVsPathCountTile, PercentileConvergenceTile, KIProbabilityConvergenceTile, KOProbabilityConvergenceTile, DistributionStabilityTile, SimulationEfficiencyTile, ConvergenceHealthTile } from '../../pathcube/components/MCDiagnosticsTiles'
 import { TradeSummaryTile, EconomicsImpactSummaryTile, SensitivityTornadoTile, ParameterImpactMatrixTile } from '../../pathcube/components/TradeDesignTiles'
+import { ExplainLedgerTableTile, ExplainLedgerExplorerTile, ExplainReconciliationTile } from '../../pathcube/components/ExplainLedgerTiles'
+import { ValuationExplainSummaryTile, MasterExplainWaterfallTile, TaylorExplainTile, PLVATile } from '../../pathcube/components/ValuationExplainTiles'
+import { CashflowSummaryTile, CashflowTimelineTile, CashflowDetailTile, PnLSummaryTile, PnLTimelineTile } from '../../pathcube/components/CashflowPnlTiles'
+import { ScheduleExplorerTile, ObservationExplorerTile, ExecutionStateInspectorTile, LifecycleOverviewTile } from '../../pathcube/components/ExecutionLayerTiles'
 import { RiskSummaryTile, GreeksTableTile, BucketVegaTile, SpotPriceExplorerTile, VolatilitySurfaceTile, CorrelationMatrixTile, FXSpotExplorerTile, GreeksWaterfallTile, ScenarioComparisonTile } from '../../pathcube/components/MarketRiskTiles'
 import type { TileType } from '../../dashboards/types'
 import type { ReactElement } from 'react'
@@ -49,5 +53,21 @@ export function TileRenderer({ type }: { type: TileType }) {
     case 'FXSpotExplorer': return wrap(<FXSpotExplorerTile />)
     case 'GreeksWaterfall': return wrap(<GreeksWaterfallTile />)
     case 'ScenarioComparison': return wrap(<ScenarioComparisonTile />)
+    case 'ScheduleExplorer': return wrap(<ScheduleExplorerTile />)
+    case 'ObservationExplorer': return wrap(<ObservationExplorerTile />)
+    case 'ExecutionStateInspector': return wrap(<ExecutionStateInspectorTile />)
+    case 'LifecycleOverview': return wrap(<LifecycleOverviewTile />)
+    case 'CashflowSummary': return wrap(<CashflowSummaryTile />)
+    case 'CashflowTimeline': return wrap(<CashflowTimelineTile />)
+    case 'CashflowDetail': return wrap(<CashflowDetailTile />)
+    case 'PnLSummary': return wrap(<PnLSummaryTile />)
+    case 'PnLTimeline': return wrap(<PnLTimelineTile />)
+    case 'ValuationExplainSummary': return wrap(<ValuationExplainSummaryTile />)
+    case 'MasterExplainWaterfall': return wrap(<MasterExplainWaterfallTile />)
+    case 'TaylorExplain': return wrap(<TaylorExplainTile />)
+    case 'PLVAExplain': return wrap(<PLVATile />)
+    case 'ExplainLedgerTable': return wrap(<ExplainLedgerTableTile />)
+    case 'ExplainLedgerExplorer': return wrap(<ExplainLedgerExplorerTile />)
+    case 'ExplainReconciliation': return wrap(<ExplainReconciliationTile />)
   }
 }

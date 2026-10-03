@@ -53,8 +53,8 @@ export const PayoffGraphPanel = memo(function PayoffGraphPanel() {
 
   return (
     <PanelCard
-      title="Payoff Graph"
-      subtitle={`Traversal · ${path.traversal.join(' → ')}`}
+      title="Payoff Evaluation Graph"
+      subtitle={`Observation output → decision logic → settlement · ${path.traversal.join(' → ')}`}
       className="h-full"
       bodyClassName="relative"
     >

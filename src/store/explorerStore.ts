@@ -37,7 +37,7 @@ type ExplorerState = {
   dashboards: Dashboard[]; selectedDashboardId: string
   setSelectedPathId: (id: string) => void; setSelectedNodeId: (id: PayoffNodeId) => void; setSelectedDateIndex: (index: number) => void
   toggleTheme: () => void; selectRandomPath: () => void; nextPath: (direction: 1 | -1) => void
-  selectDashboard: (id: string) => void; createDashboard: () => void; renameDashboard: (id: string, name: string) => void; deleteDashboard: (id: string) => void; duplicateDashboard: (id: string) => void; updateLayout: (layout: TileLayout[]) => void
+  selectDashboard: (id: string) => void; createDashboard: () => void; createDashboardFromTemplate: (name: string, layout: TileLayout[]) => string; renameDashboard: (id: string, name: string) => void; deleteDashboard: (id: string) => void; duplicateDashboard: (id: string) => void; updateLayout: (layout: TileLayout[]) => void
 }
 
 function load() { try { return JSON.parse(localStorage.getItem('fina-workspace') ?? '{}') as Partial<ExplorerState> } catch { return {} } }
@@ -58,6 +58,7 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   nextPath: (direction) => { const idx = simulationBundle.paths.findIndex((p) => p.id === get().selectedPathId); const next = simulationBundle.paths[(idx + direction + simulationBundle.paths.length) % simulationBundle.paths.length]; if (next) get().setSelectedPathId(next.id) },
   selectDashboard: (id) => { set({ selectedDashboardId: id }); persist({ ...get(), selectedDashboardId: id }) },
   createDashboard: () => { const id = `dashboard-${Date.now()}`; const dashboard = { id, name: 'Untitled Dashboard', layout: [] }; set((s) => ({ dashboards: [...s.dashboards, dashboard], selectedDashboardId: id })); persist({ ...get(), dashboards: [...get().dashboards, dashboard], selectedDashboardId: id }) },
+  createDashboardFromTemplate: (name, layout) => { const id = `dashboard-${Date.now()}`; const dashboard = { id, name, layout }; const dashboards = [...get().dashboards, dashboard]; set({ dashboards, selectedDashboardId: id }); persist({ ...get(), dashboards, selectedDashboardId: id }); return id },
   renameDashboard: (id, name) => { const dashboards = get().dashboards.map((d) => d.id === id ? { ...d, name: name || 'Untitled Dashboard' } : d); set({ dashboards }); persist({ ...get(), dashboards }) },
   deleteDashboard: (id) => { if (get().dashboards.length <= 1) return; const dashboards = get().dashboards.filter((d) => d.id !== id); const selectedDashboardId = get().selectedDashboardId === id ? dashboards[0]!.id : get().selectedDashboardId; set({ dashboards, selectedDashboardId }); persist({ ...get(), dashboards, selectedDashboardId }) },
   duplicateDashboard: (id) => { const source = get().dashboards.find((d) => d.id === id); if (!source) return; const copy = { ...source, id: `dashboard-${Date.now()}`, name: `${source.name} Copy`, layout: source.layout.map((l) => ({ ...l, i: `${l.i}-copy-${Date.now()}` })) }; const dashboards = [...get().dashboards, copy]; set({ dashboards, selectedDashboardId: copy.id }); persist({ ...get(), dashboards, selectedDashboardId: copy.id }) },
