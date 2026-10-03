@@ -93,6 +93,171 @@ pub fn round1(v: f64) -> f64 {
     js_round(v * 1.0e1) / 1.0e1
 }
 
+/// Replicates JavaScript `Number.prototype.toFixed`.
+///
+/// # Why this is not [`js_round`]
+///
+/// `toFixed` does **not** round the binary value; it rounds the number's
+/// **exact decimal expansion**. The two disagree on real fixture data:
+///
+/// ```text
+/// (0.1235).toFixed(1) === "12.3"   // after the *100, i.e. 12.349999999999999645
+/// Math.round(12.35 * 10) / 10     === 12.4   <-- WRONG
+/// ```
+///
+/// 35 of the 6,000 `worstOf` values in `golden.json` land on such a tie, so a
+/// naive implementation silently corrupts the Node Details tiles.
+///
+/// # Semantics
+///
+/// Per ECMA-262: find the integer `n` for which `n / 10^places - |v|` is closest
+/// to zero, **picking the larger `n` on a tie**. So ties round away from zero in
+/// magnitude (`-0.25 -> "-0.3"`), and the sign is taken from `v < 0` — which
+/// means `-0.0` formats as `"0.0"` while `-0.0001` formats as `"-0.00"`.
+///
+/// # Panics
+/// Panics if `places > 17`, or if `|v|` is large enough that the result needs
+/// more than 128 bits of integer part. Every call site in this crate formats a
+/// percentage or a 2dp money amount, so neither can occur.
+///
+/// # Known divergence: magnitudes at or above 1e21
+///
+/// ECMA-262 has a special branch: when `x >= 10^21`, `toFixed` returns the
+/// `Number::toString` form instead of positional digits. So JavaScript gives
+/// `(1e30).toFixed(2) === "1e+30"`, while this function returns
+/// `"1000000000000000019884624838656.00"`.
+///
+/// Reproducing the exponential form would require a shortest-round-trip
+/// decimal formatter for the whole `f64` range — a large amount of machinery
+/// for a case this crate cannot reach. Every value the kernel formats is a
+/// percentage in `0..145` or a money amount under `1100`. The bound is asserted
+/// in `tests/tofixed_conformance.rs` so the divergence stays visible rather than
+/// being discovered later.
+///
+/// ```
+/// use fina_kernel::jsnum::js_to_fixed;
+/// assert_eq!(js_to_fixed(12.349_999_999_999_999, 1), "12.3");
+/// assert_eq!(js_to_fixed(0.25, 1), "0.3");
+/// assert_eq!(js_to_fixed(-0.25, 1), "-0.3");
+/// assert_eq!(js_to_fixed(-0.0, 1), "0.0");
+/// assert_eq!(js_to_fixed(-0.0001, 2), "-0.00");
+/// assert_eq!(js_to_fixed(100.0, 2), "100.00");
+/// ```
+#[must_use]
+pub fn js_to_fixed(v: f64, places: u32) -> String {
+    assert!(
+        places <= 17,
+        "js_to_fixed supports up to 17 decimal places, got {places}"
+    );
+
+    if v.is_nan() {
+        return "NaN".to_string();
+    }
+    if v.is_infinite() {
+        return if v > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
+
+    // Spec: the sign is derived from `v < 0`, so `-0.0` produces no sign.
+    let neg = v < 0.0;
+    let a = v.abs();
+
+    // Exact decomposition: `a == mantissa * 2^exp` with no rounding.
+    let (mantissa, exp) = decompose_f64(a);
+
+    // The scaled integer `n == round(a * 10^places)`, computed exactly:
+    // `a * 10^places == (mantissa * 10^places) * 2^exp`.
+    let num = i128::from(mantissa) * 10i128.pow(places);
+    let n: i128 = if exp >= 0 {
+        let shift = u32::try_from(exp).expect("exp fits in u32");
+        assert!(
+            shift <= 60,
+            "js_to_fixed: |{v}| is too large to format exactly (exp {exp})"
+        );
+        num << shift
+    } else {
+        // k = -exp. Beyond ~120 bits the quotient is always 0, since
+        // `mantissa * 10^places < 2^60`.
+        let k = i64::from(-exp);
+        if k > 120 {
+            0
+        } else {
+            let k = u32::try_from(k).expect("k fits in u32");
+            let half = 1i128 << (k - 1);
+            let divisor = 1i128 << k;
+            // Ties round to the larger integer, matching "pick the larger n".
+            (num + half) / divisor
+        }
+    };
+
+    let digits = n.unsigned_abs().to_string();
+    let places = places as usize;
+    let text = if places == 0 {
+        digits
+    } else if digits.len() > places {
+        let split = digits.len() - places;
+        format!("{}.{}", &digits[..split], &digits[split..])
+    } else {
+        format!("0.{}{}", "0".repeat(places - digits.len()), digits)
+    };
+
+    // `neg` is already `v < 0.0`, which is false for `-0.0`, so `-0.0` formats
+    // as `"0.0"` while `-0.0001` formats as `"-0.00"`. Exactly the spec.
+    if neg {
+        format!("-{text}")
+    } else {
+        text
+    }
+}
+
+/// Splits a finite non-negative `f64` into `mantissa * 2^exp`, exactly.
+fn decompose_f64(a: f64) -> (u64, i32) {
+    let bits = a.to_bits();
+    let raw_exp = ((bits >> 52) & 0x7ff) as i32;
+    let frac = bits & ((1u64 << 52) - 1);
+    if raw_exp == 0 {
+        // Subnormal (or zero): no implicit leading bit.
+        (frac, -1074)
+    } else {
+        (frac | (1u64 << 52), raw_exp - 1075)
+    }
+}
+
+/// JavaScript `Math.min` over a slice. NaN propagates, unlike `f64::min`.
+#[must_use]
+pub fn js_min_slice(values: &[f64]) -> f64 {
+    let mut iter = values.iter();
+    let Some(mut acc) = iter.next().copied() else {
+        return f64::NAN;
+    };
+    for v in iter {
+        if v.is_nan() {
+            return f64::NAN;
+        }
+        if *v < acc {
+            acc = *v;
+        }
+    }
+    acc
+}
+
+/// JavaScript `Math.max` over a slice. NaN propagates, unlike `f64::max`.
+#[must_use]
+pub fn js_max_slice(values: &[f64]) -> f64 {
+    let mut iter = values.iter();
+    let Some(mut acc) = iter.next().copied() else {
+        return f64::NAN;
+    };
+    for v in iter {
+        if v.is_nan() {
+            return f64::NAN;
+        }
+        if *v > acc {
+            acc = *v;
+        }
+    }
+    acc
+}
+
 /// Clamps `v` into `[lo, hi]`, mirroring `Math.max(lo, Math.min(hi, v))`.
 ///
 /// NaN propagates, as it does in JS.
