@@ -1,3 +1,5 @@
+import type { AgentTurnContext } from '@earendil-works/pi-agent-core'
+
 // Regression tests for the local agent's tool-request parser. Small local
 // models wrap the JSON tool call in prose and markdown fences, and they often
 // omit the `mcp_` prefix that the MCP tools carry.
@@ -5,7 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
 import type { Message, TranscriptContext } from '@earendil-works/pi-ai'
-import { createFramePublisher, jsonObjectSlices, mergeTools, normalizeStoredMessages, toNativeMessages, toolRequest } from '../piLocalRuntime'
+import { createFramePublisher, createTurnGuard, jsonObjectSlices, mergeTools, normalizeStoredMessages, toNativeMessages, toolRequest } from '../piLocalRuntime'
 
 const tool = (name: string): AgentTool =>
   ({
@@ -319,5 +321,104 @@ describe('createFramePublisher', () => {
     } finally {
       globalThis.requestAnimationFrame = originalRaf
     }
+  })
+})
+
+// pi-agent-core's `runLoop` is `while (true)`: it keeps going whenever the last
+// assistant message carried a tool call, and only stops early if every result in
+// the batch sets `terminate`, which none of our read-only tools do. Before the
+// prompt was capped, an ever-growing transcript overflowed the 4096-token context
+// and the resulting `stopReason: "error"` exited the loop by accident. With the
+// cap the prompt stays valid forever, so without this guard a model that keeps
+// asking for the same tool never returns — the thread wedges and the session is
+// never saved.
+describe('createTurnGuard', () => {
+  const toolResult = (toolName: string, content: unknown) => ({ toolName, content })
+  // Only `toolResults` matters to the guard; the rest of the turn context is
+  // filled in loosely so these tests stay about the loop bound.
+  const turn = (toolResults: ReturnType<typeof toolResult>[]): AgentTurnContext =>
+    ({
+      message: { role: 'assistant', content: [] },
+      toolResults,
+      context: { messages: [] },
+      newMessages: [],
+    }) as unknown as AgentTurnContext
+
+  it('leaves normal scheduling alone when a turn has no tool results', () => {
+    const guard = createTurnGuard()
+    // undefined preserves the loop's own scheduling; `{action:'continue'}` here
+    // would force another provider request after every plain answer.
+    expect(guard(turn([]))).toBeUndefined()
+  })
+
+  it('allows tool rounds up to the budget', () => {
+    const guard = createTurnGuard({ maxToolRounds: 3 })
+    expect(guard(turn([toolResult('mcp_get_path', { rows: 1 })]))).toBeUndefined()
+    expect(guard(turn([toolResult('mcp_get_distributions', { rows: 2 })]))).toBeUndefined()
+    expect(guard(turn([toolResult('mcp_get_branch_stats', { rows: 3 })]))).toEqual({ action: 'end' })
+  })
+
+  it('stops a verbatim repeated call after one wasted round', () => {
+    const limits: string[] = []
+    const guard = createTurnGuard({ maxToolRounds: 6, onLimit: (reason) => limits.push(reason) })
+
+    expect(guard(turn([toolResult('mcp_get_path', { rows: 1 })]))).toBeUndefined()
+    // Same tool, same result, but a fresh call id — exactly what a loop emits.
+    const repeated = guard(turn([toolResult('mcp_get_path', { rows: 1 })]))
+
+    expect(repeated).toEqual({ action: 'end' })
+    expect(limits).toHaveLength(1)
+    expect(limits[0]).toContain('repeated the same tool call')
+    expect(limits[0]).toContain('mcp_get_path')
+  })
+
+  it('ignores the call id when comparing rounds', () => {
+    const guard = createTurnGuard()
+    const first = turn([{ ...toolResult('mcp_get_path', { rows: 1 }), toolCallId: 'a' } as never])
+    const second = turn([{ ...toolResult('mcp_get_path', { rows: 1 }), toolCallId: 'b' } as never])
+    expect(guard(first)).toBeUndefined()
+    expect(guard(second)).toEqual({ action: 'end' })
+  })
+
+  it('normalizes result order within a round', () => {
+    const guard = createTurnGuard()
+    const a = toolResult('mcp_get_path', { rows: 1 })
+    const b = toolResult('mcp_get_distributions', { rows: 2 })
+    // Parallel execution emits results in completion order, so one batch can
+    // arrive in either order. Sorting makes that the same signature, which is
+    // correct: the model asked for exactly the same thing twice.
+    expect(guard(turn([a, b]))).toBeUndefined()
+    expect(guard(turn([b, a]))).toEqual({ action: 'end' })
+  })
+
+  it('allows a genuinely different tool set on the next round', () => {
+    const guard = createTurnGuard({ maxToolRounds: 4 })
+    expect(guard(turn([toolResult('mcp_get_path', { rows: 1 })]))).toBeUndefined()
+    expect(
+      guard(turn([toolResult('mcp_get_path', { rows: 1 }), toolResult('mcp_get_distributions', { rows: 2 })])),
+    ).toBeUndefined()
+  })
+
+  it('reports the budget when a loop varies the call every round', () => {
+    const limits: string[] = []
+    const guard = createTurnGuard({ maxToolRounds: 2, onLimit: (reason) => limits.push(reason) })
+    expect(guard(turn([toolResult('mcp_get_path', { rows: 1 })]))).toBeUndefined()
+    expect(guard(turn([toolResult('mcp_get_path', { rows: 2 })]))).toEqual({ action: 'end' })
+    expect(limits[0]).toContain('2 tool calls')
+  })
+
+  it('always stops, even when the budget is misconfigured', () => {
+    const guard = createTurnGuard({ maxToolRounds: 0 })
+    expect(guard(turn([toolResult('mcp_get_path', { rows: 1 })]))).toEqual({ action: 'end' })
+  })
+
+  it('keeps a fresh count per guard, since one is built per run', () => {
+    const first = createTurnGuard({ maxToolRounds: 2 })
+    expect(first(turn([toolResult('mcp_get_path', { rows: 1 })]))).toBeUndefined()
+    expect(first(turn([toolResult('mcp_get_distributions', { rows: 2 })]))).toEqual({ action: 'end' })
+
+    // A new prompt must not inherit the previous turn's exhausted budget.
+    const second = createTurnGuard({ maxToolRounds: 2 })
+    expect(second(turn([toolResult('mcp_get_path', { rows: 9 })]))).toBeUndefined()
   })
 })

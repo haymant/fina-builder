@@ -1,4 +1,4 @@
-import { Agent, type AgentTool } from '@earendil-works/pi-agent-core'
+import { Agent, type AgentTool, type FinishTurn } from '@earendil-works/pi-agent-core'
 import {
   createAssistantMessageEventStream,
   Type,
@@ -202,6 +202,69 @@ export function createFramePublisher<T>(produce: () => T, publish: (value: T) =>
       if (hasRaf) cancelAnimationFrame(frame)
       frame = undefined
     },
+  }
+}
+
+/** Tool-call rounds allowed within a single user turn before the run is stopped. */
+export const MAX_TOOL_ROUNDS_PER_TURN = 6
+
+/**
+ * Stable signature of one tool round: which tools ran and what they returned.
+ * The call ids are deliberately excluded — a loop re-issues the *same* call with a
+ * fresh id every time, so including them would make every round look different.
+ */
+function toolRoundSignature(toolResults: readonly { toolName?: string; content?: unknown }[]): string {
+  return toolResults
+    .map((result) => `${result.toolName ?? '?'}:${JSON.stringify(result.content ?? null)}`)
+    .sort()
+    .join('|')
+}
+
+/**
+ * Bound the agent loop.
+ *
+ * `runLoop` in pi-agent-core is `while (true)`: it continues whenever the last
+ * assistant message carried a tool call, and it only stops early when *every*
+ * result in a batch sets `terminate`, which none of our read-only tools do. A
+ * model that keeps asking for the same tool therefore loops forever — each round
+ * a full CPU generation plus a fresh llama context, with no natural endpoint.
+ *
+ * This used to be stopped by accident. The transcript grew until it overflowed the
+ * 4096-token context, the request failed, and `stopReason: "error"` is a hard exit
+ * in the loop. Capping the prompt removed that circuit breaker, so the loop now
+ * spins indefinitely instead of erroring out — the run never ends, the Cancel
+ * button is the only exit, and `save_local_agent_session` is never reached.
+ *
+ * Two independent stops, because either alone is easy to defeat:
+ * - a round budget, for loops that vary the call slightly each time;
+ * - repeat detection, for the common case of one call repeated verbatim, which
+ *   trips after a single wasted round rather than six.
+ *
+ * A turn with no tool results returns `undefined` so the loop's own scheduling is
+ * preserved and a normal answer still ends the run.
+ */
+export function createTurnGuard(options: { maxToolRounds?: number; onLimit?: (reason: string) => void } = {}): FinishTurn {
+  const maxToolRounds = Math.max(1, options.maxToolRounds ?? MAX_TOOL_ROUNDS_PER_TURN)
+  let rounds = 0
+  let lastSignature: string | undefined
+  return (turn) => {
+    if (turn.toolResults.length === 0) return undefined
+    rounds += 1
+    const signature = toolRoundSignature(turn.toolResults)
+    if (signature === lastSignature) {
+      options.onLimit?.(
+        `Stopped: the model repeated the same tool call (${turn.toolResults.map((result) => result.toolName).join(', ')}). Rephrasing the request usually gets a fresh attempt.`,
+      )
+      return { action: 'end' }
+    }
+    lastSignature = signature
+    if (rounds >= maxToolRounds) {
+      options.onLimit?.(
+        `Stopped after ${maxToolRounds} tool calls in one turn to avoid an endless loop. Try asking a narrower question.`,
+      )
+      return { action: 'end' }
+    }
+    return undefined
   }
 }
 
@@ -660,6 +723,17 @@ export function createLocalAgentAdapter({ sessionId, initialMessages, skills = [
         agent.state.tools = tools
         agent.streamFunction = createLocalStream(setLiveText, options.abortSignal, tools)
       }
+
+      // Bound the tool loop for *this* turn. The agent is cached across turns, so
+      // the guard is rebuilt per run to keep its round count from leaking into
+      // the next prompt. `createLoopConfig` reads `finishTurn` when a run starts.
+      agent.finishTurn = createTurnGuard({
+        onLimit: (reason) => {
+          // Surface the stop in the thread: the turn otherwise ends on a bare
+          // tool disclosure with no assistant text explaining the silence.
+          setLiveText(reason)
+        },
+      })
 
       const draftByToolCallId = new Map<string, Extract<Draft, { kind: 'tool' }>>()
       const unsubscribe = agent.subscribe((event) => {

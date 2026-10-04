@@ -272,33 +272,39 @@ The local-agent Rust unit tests are in `src-tauri/src/local_agent.rs`. Add autom
 
 ### Troubleshooting the panel
 
+**The app "stops" (window up, nothing responds) after a tool-heavy turn.** This was not a crash, and no crash signature exists to find: `frontend-errors.log` is empty, `dmesg` has no segfault / OOM-kill / `Killed process` line, and GDB shows the app alive and idle in `ppoll` → `gtk_main_iteration_do`. That is correct — the main thread was never the problem.
+
+The cause is `runLoop` in `@earendil-works/pi-agent-core`. It is `while (true)`: it continues whenever the last assistant message carried a tool call, and it only exits early on `error`/`aborted` or when *every* result in a batch sets `terminate`, which none of our read-only tools do. A model that keeps requesting the same tool therefore never returns.
+
+It used to stop by accident. The transcript grew until it overflowed the 4096-token context, the request failed, and `stopReason: "error"` is a hard exit in the loop. **Capping the prompt removed that circuit breaker**, so the loop now spins against a permanently valid prompt instead of erroring out.
+
+Two things follow, both of which match the reported symptom:
+
+- **The UI wedges rather than errors.** The loop is a microtask chain that never yields to the macrotask queue, so the webview stops servicing anything. Measured in `agentLoopBound.test.ts`: 201 rounds with a `setTimeout(…, 0)` scheduled beforehand still unfired (`timerFired=false`). That is "the whole app stopped" with a healthy OS main thread.
+- **The turn is lost.** `save_local_agent_session` runs after the generator finishes, so an unbounded run never persists. Symptom: no session file newer than the last good turn.
+
+`createTurnGuard` bounds the loop via the agent's `finishTurn` hook, with two independent stops because either alone is easy to defeat — a round budget (`MAX_TOOL_ROUNDS_PER_TURN`) for loops that vary the call, and repeat detection for the common verbatim repeat, which trips after one wasted round. A turn with no tool results returns `undefined` so normal scheduling and plain answers are untouched. The reason is surfaced in the thread, since the turn would otherwise end on a bare tool disclosure. The guard is rebuilt per `run()` because the `Agent` is cached across turns.
+
+If this ever recurs, check whether the guard is actually attached to the run (`createLoopConfig` reads `finishTurn` at run start) before suspecting WebKit.
+
 **Blank / vanished window on Linux.** The Tauri process stays alive — the *web content process* is a separate binary, so attaching GDB to the app shows a healthy idle `ppoll` event loop even while the UI is gone. An idle backtrace that ends in `gtk_main_iteration_do` → `fina_tauri::run` is therefore **not** a crash trace; the tell is that GDB reaches `[Inferior detached]` instead of printing `Program received signal`.
 
-Known negatives for this symptom, so do not re-investigate them:
+Ruled out for this symptom, so do not re-investigate them:
 
 | Check | Result |
 | --- | --- |
 | `frontend-errors.log` | Empty — no JS exception, uncaught rejection, or error-boundary trip. |
-| `dmesg \| grep segfault` | No segfault. The renderer is not faulting. |
+| `dmesg \| grep -iE 'oom\|segfault\|killed process'` | Nothing. Not a fault and not an OOM kill. |
 | `free -h` | 42 Gi available of 61 Gi. Not memory pressure. |
-| `dmesg` OOM lines | `__vm_enough_memory … comm: java, bytes: 103079215104` is a JVM *virtual address space* reservation refused by overcommit, not an OOM kill. There is no `Out of memory: Killed process`. |
+| `dmesg` `__vm_enough_memory … comm: java` | A JVM *virtual address space* reservation refused by overcommit, not a kill. |
+| GDB backtrace | Main thread idle in the GTK event loop. Never the problem. |
 
-So the renderer exits or is killed **without faulting**. That leaves a web process that was killed for being unresponsive, or something outside the app. Separate those with the sampler:
+`scripts/watch-renderer.sh` (or `npm run watch:renderer`) still samples the app and its WebKit helpers if a *genuine* renderer death is ever suspected: `WebKitWebProcess` near 100% CPU before vanishing means it was killed for hanging, 0% means something else killed it.
 
-```bash
-scripts/watch-renderer.sh 0.5
-```
+Two WebKit-side mitigations are in place, neither of which was the cause here:
 
-Reproduce the blanking, then read the last rows: a `WebKitWebProcess` sitting near 100% CPU before it disappears was killed for hanging; one at 0% CPU was killed by something else. This is why the adapter coalesces token updates to one publish per animation frame (`createFramePublisher`) — Rust emits one `llm-token` per token, up to 512 per turn, and each publish re-rendered the entire thread.
-
-To test whether the WebKit GPU path is involved:
-
-```bash
-npm run tauri:dev:stable-webview                    # all three flags
-npm run tauri:dev:stable-webview -- --no-dmabuf     # narrow it down
-```
-
-It sets `WEBKIT_DISABLE_DMABUF_RENDERER`, `WEBKIT_DISABLE_COMPOSITING_MODE`, and `LIBGL_ALWAYS_SOFTWARE` before `tauri dev`.
+- `createFramePublisher` coalesces token updates to one publish per animation frame. Rust emits `llm-token` per token, up to 512 per turn, and each publish re-rendered the entire thread.
+- `npm run tauri:dev:stable-webview` sets `WEBKIT_DISABLE_DMABUF_RENDERER`, `WEBKIT_DISABLE_COMPOSITING_MODE`, and `LIBGL_ALWAYS_SOFTWARE` before `tauri dev`, for GPU-path faults on VMs and remote desktops. Narrow with `-- --no-dmabuf`, `-- --no-compositing`, `-- --no-softwaregl`.
 
 **React errors in the panel.** `PanelErrorBoundary` in `App.tsx` catches a render failure and shows the stack instead of blanking the app; the same message goes to `<app-data>/frontend-errors.log` via `report_frontend_error`, together with any uncaught `window` error or unhandled rejection. Note that assistant-ui client hooks (`useAui`, `useThreadRuntime`, `unstable_useComposerInputHistory`, …) must be called in a component rendered *below* `AssistantRuntimeProvider`, not in the component that returns it.
 
