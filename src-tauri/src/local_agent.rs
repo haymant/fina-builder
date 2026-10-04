@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
     },
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -98,6 +98,9 @@ struct CuratedModel {
 
 #[derive(Default)]
 pub struct LocalAgentRuntime {
+    /// `LlamaBackend::init` may only run once per process, so it is created
+    /// lazily here and shared across every model (re)load.
+    backend: OnceLock<Arc<LlamaBackend>>,
     engine: Arc<Mutex<Option<LoadedModel>>>,
     downloads: Arc<Mutex<HashMap<String, CancellationToken>>>,
     generations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
@@ -106,7 +109,7 @@ pub struct LocalAgentRuntime {
 struct LoadedModel {
     // Drop the model before its backend.
     model: LlamaModel,
-    backend: LlamaBackend,
+    backend: Arc<LlamaBackend>,
     file_name: String,
     recommended_context: u32,
 }
@@ -395,8 +398,24 @@ pub async fn load_model(
     let preferred_path = path.to_string_lossy().into_owned();
     let model_path = path.clone();
     let engine = state.engine.clone();
+    // Initialize the process-wide llama.cpp backend at most once. Reusing the
+    // existing handle is what lets a second `Load model` succeed instead of
+    // failing with `BackendAlreadyInitialized`.
+    let backend = match state.backend.get() {
+        Some(backend) => backend.clone(),
+        None => {
+            let candidate = Arc::new(
+                LlamaBackend::init().map_err(|e| format!("Could not initialize llama.cpp: {e}"))?,
+            );
+            let _ = state.backend.set(candidate);
+            state
+                .backend
+                .get()
+                .ok_or("Could not initialize llama.cpp: backend unavailable")?
+                .clone()
+        }
+    };
     tauri::async_runtime::spawn_blocking(move || {
-        let backend = LlamaBackend::init().map_err(|e| format!("Could not initialize llama.cpp: {e}"))?;
         let params = LlamaModelParams::default();
         let model = LlamaModel::load_from_file(&backend, &model_path, &params).map_err(|e| format!("Model could not be loaded (the GGUF may be corrupt or exceed available memory): {e}"))?;
         let file_name = model_path.file_name().and_then(|s| s.to_str()).unwrap_or("local model").to_string();
@@ -711,6 +730,59 @@ pub fn get_preferred_model(app: AppHandle) -> Result<Option<String>, String> {
         .get("preferredModelPath")
         .and_then(Value::as_str)
         .map(str::to_string))
+}
+
+/// Resolve the `fina-mcp` stdio server binary so the webview can spawn it as an
+/// MCP sidecar. Precedence: explicit `FINA_MCP_BIN` override, the packaged
+/// sidecar next to the app executable, then a workspace `target/` build for
+/// `npm run tauri:dev` and tests.
+#[tauri::command]
+pub fn get_mcp_server_path(app: AppHandle) -> Result<String, String> {
+    if let Ok(explicit) = std::env::var("FINA_MCP_BIN") {
+        if std::path::Path::new(&explicit).is_file() {
+            return Ok(explicit);
+        }
+    }
+    let exe_name = if cfg!(windows) {
+        "fina-mcp.exe"
+    } else {
+        "fina-mcp"
+    };
+    // Packaged sidecars live in the bundle's resource directory.
+    if let Ok(resources) = app.path().resource_dir() {
+        for candidate in [
+            resources.join(exe_name),
+            resources.join("binaries").join(exe_name),
+        ] {
+            if candidate.is_file() {
+                return Ok(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let sidecar = dir.join(exe_name);
+            if sidecar.is_file() {
+                return Ok(sidecar.to_string_lossy().into_owned());
+            }
+        }
+    }
+    // Dev fallback: the workspace target directory, preferring a debug build.
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    for profile in ["debug", "release"] {
+        let candidate = std::path::Path::new(manifest)
+            .join("..")
+            .join("target")
+            .join(profile)
+            .join(exe_name);
+        if candidate.is_file() {
+            return Ok(candidate.to_string_lossy().into_owned());
+        }
+    }
+    Err(
+        "fina-mcp binary not found. Build it with `cargo build -p fina-mcp`, or set FINA_MCP_BIN."
+            .into(),
+    )
 }
 
 #[cfg(test)]

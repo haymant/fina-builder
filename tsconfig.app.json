@@ -16,6 +16,13 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
+    /* pi-mcp's package `exports` map blocks deep imports, but its root entry
+       re-exports the browser-unsafe stdio transport. The shim imports the
+       individual modules directly; map those paths here for type resolution. */
+    "paths": {
+      "@earendil-works/pi-mcp/dist/*": ["./node_modules/@earendil-works/pi-mcp/dist/*"]
+    },
+
     /* Linting */
     "noUnusedLocals": true,
     "noUnusedParameters": true,

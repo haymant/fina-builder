@@ -123,8 +123,9 @@ stdout is JSON only (pipe it into `jq`); progress goes to stderr as NDJSON.
 `fina-mcp` is a newline-delimited JSON-RPC 2.0 MCP server. Build it with
 `cargo build -p fina-mcp --release` and configure an MCP host to launch the resulting
 `target/release/fina-mcp` executable over stdio. It advertises all twelve kernel commands and
-dispatches calls through `fina_kernel::api::dispatch_sync`. The desktop chat panel uses a
-smaller read-only tool set directly over Tauri IPC; it does not spawn this server.
+dispatches calls through `fina_kernel::api::dispatch_sync`. The desktop chat panel spawns this
+server as a bundled Tauri sidecar (via `@earendil-works/pi-mcp`) and exposes all of its tools
+to the local model alongside three built-in read-only Tauri tools.
 
 ### Other scripts
 

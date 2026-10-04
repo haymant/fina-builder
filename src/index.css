@@ -34,3 +34,36 @@
 .notebook-note-item:last-child { border-bottom:0; } .notebook-note-item.active { background: color-mix(in srgb, var(--theme-primary) 12%, transparent); color:var(--theme-text); } .notebook-note-item span { display:flex; align-items:center; gap:4px; } .notebook-note-item small { font-size:9px; }
 .notebook-note-detail { margin-top:10px; } .template-modal { width:min(900px,94vw); max-height:86vh; overflow:auto; border:1px solid var(--theme-border); border-radius:14px; background:var(--theme-panel); box-shadow:0 24px 80px rgba(0,0,0,.4); }
 .template-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; padding:16px; } .template-card { border:1px solid var(--theme-border); border-radius:10px; background:var(--theme-background); padding:14px; }
+
+/* Local agent chat panel: theme-aware surfaces so the drawer follows the app light/dark toggle. */
+.agent-backdrop { background: color-mix(in srgb, var(--theme-background) 58%, transparent); }
+.agent-panel { background: var(--theme-panel); color: var(--theme-text); border-color: var(--theme-border); }
+.agent-surface { border: 1px solid var(--theme-border); background: var(--theme-background); }
+.agent-surface-soft { border: 1px solid var(--theme-border); background: color-mix(in srgb, var(--theme-panel) 70%, var(--theme-background)); }
+.agent-border { border-color: var(--theme-border); }
+.agent-title { color: var(--theme-text); }
+.agent-text { color: var(--theme-text); }
+.agent-muted { color: var(--theme-muted); }
+.agent-accent { color: var(--theme-primary); }
+.agent-accent-strong { color: color-mix(in srgb, var(--theme-primary) 62%, var(--theme-text)); }
+.agent-accent-bg { background: color-mix(in srgb, var(--theme-primary) 15%, var(--theme-panel)); }
+.agent-accent-hover:hover { background: color-mix(in srgb, var(--theme-primary) 10%, transparent); }
+.agent-bubble { border: 1px solid var(--theme-border); background: var(--theme-background); color: var(--theme-text); }
+.agent-bubble-user { background: var(--theme-primary); color: #fff; }
+.agent-progress-track { background: var(--theme-border); }
+.agent-progress-fill { background: var(--theme-primary); }
+.agent-error { border: 1px solid color-mix(in srgb, var(--theme-danger) 42%, transparent); background: color-mix(in srgb, var(--theme-danger) 18%, var(--theme-panel)); color: var(--theme-text); }
+.agent-button { border: 1px solid var(--theme-border); background: var(--theme-background); color: var(--theme-muted); transition: .15s; }
+.agent-button:hover { border-color: var(--theme-primary); color: var(--theme-primary); }
+.agent-button[data-active=true] { border-color: var(--theme-primary); background: color-mix(in srgb, var(--theme-primary) 16%, transparent); color: var(--theme-primary); }
+.agent-primary { border: 1px solid color-mix(in srgb, var(--theme-primary) 55%, var(--theme-border)); background: color-mix(in srgb, var(--theme-primary) 14%, transparent); color: var(--theme-primary); }
+.agent-primary:hover { border-color: var(--theme-primary); }
+.agent-primary-solid { background: var(--theme-primary); color: #fff; }
+.agent-primary-solid:hover { background: color-mix(in srgb, var(--theme-primary) 86%, #000); }
+.agent-danger { color: var(--theme-danger); }
+.agent-danger-hover:hover { border-color: var(--theme-danger); color: var(--theme-danger); }
+.agent-notice { border: 1px solid color-mix(in srgb, var(--theme-warning) 42%, transparent); background: color-mix(in srgb, var(--theme-warning) 14%, var(--theme-panel)); color: var(--theme-text); }
+.agent-select { color-scheme: dark; border: 1px solid var(--theme-border); background: var(--theme-background); color: var(--theme-text); outline: none; }
+.agent-select option { background: var(--theme-panel); color: var(--theme-text); }
+.agent-select:focus { border-color: var(--theme-primary); }
+html.light .agent-select { color-scheme: light; }

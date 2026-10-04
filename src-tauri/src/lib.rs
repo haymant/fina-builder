@@ -24,6 +24,7 @@ fn health() -> Result<HealthResponse, FinaErrorWire> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_shell::init())
         .manage(local_agent::LocalAgentRuntime::default())
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -63,6 +64,7 @@ pub fn run() {
             local_agent::list_local_agent_sessions,
             local_agent::load_local_agent_session,
             local_agent::get_preferred_model,
+            local_agent::get_mcp_server_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");
