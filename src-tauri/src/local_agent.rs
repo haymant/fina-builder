@@ -596,11 +596,23 @@ fn generate(
         return Err("The model tokenizer returned an empty prompt".into());
     }
     let context_size = loaded.recommended_context.max(1024);
-    if tokens.len() as u32 + request.max_tokens > context_size {
+    // Keep the request validation aligned with the actual generation limit.
+    // The frontend currently sends 512, but stale clients may send a larger
+    // value; checking the clamped value avoids rejecting safe requests while
+    // still guaranteeing room for every generated token.
+    let max_tokens = request.max_tokens.clamp(1, 2048);
+    if tokens.len() as u32 + max_tokens > context_size {
         return Err(format!("Conversation too long for the configured {context_size}-token context; start a new chat or reduce history"));
     }
-    let ctx_params =
-        LlamaContextParams::default().with_n_ctx(std::num::NonZeroU32::new(context_size));
+    let ctx_params = LlamaContextParams::default()
+        .with_n_ctx(std::num::NonZeroU32::new(context_size))
+        // llama.cpp defaults n_batch to a much smaller prompt-processing
+        // batch. Passing a larger prompt to decode then hits a GGML_ASSERT
+        // and aborts the entire Tauri process instead of returning Result.
+        // The prompt has already been checked against this same context, so
+        // using the context size here is safe and prevents native aborts.
+        .with_n_batch(context_size)
+        .with_n_ubatch(context_size);
     let mut ctx: LlamaContext = loaded
         .model
         .new_context(&loaded.backend, ctx_params)
@@ -618,7 +630,7 @@ fn generate(
         LlamaSampler::chain_simple([LlamaSampler::temp(0.25), LlamaSampler::dist(42)]);
     let mut decoder = UTF_8.new_decoder();
     let mut text = String::new();
-    let max_tokens = request.max_tokens.clamp(1, 2048) as usize;
+    let max_tokens = max_tokens as usize;
     // The prompt occupies positions 0..n_tokens, so generation starts at
     // `batch.n_tokens()` and advances by one per sampled token.
     let first_position = batch.n_tokens();
