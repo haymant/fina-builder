@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
+    "tauri:dev:stable-webview": "bash scripts/dev-linux-stable-webview.sh",
     "tauri:build": "tauri build",
     "mcp:sidecar": "bash scripts/build-mcp-sidecar.sh",
     "lint": "oxlint",

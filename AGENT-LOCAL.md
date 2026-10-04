@@ -268,6 +268,21 @@ cargo test -p payoff-explorer -p fina-mcp
 
 The local-agent Rust unit tests are in `src-tauri/src/local_agent.rs`. Add automated tests for new command validation, session serialization/versioning, cancellation/error behavior, and tool allowlisting; add UI/adapter tests for model states and thread restoration rather than relying only on compilation.
 
+### Troubleshooting the panel
+
+**Blank / vanished window on Linux.** The Tauri process usually stays alive — the *web content process* (`WebKitWebProcess`) is a separate binary, so attaching GDB to the app shows a healthy idle `ppoll` event loop even while the UI is gone. An idle backtrace that ends in `gtk_main_iteration_do` → `fina_tauri::run` is therefore **not** a crash trace; the tell is that GDB reaches `[Inferior detached]` instead of printing `Program received signal`.
+
+Use the stable-webview launcher to test whether the WebKit renderer is at fault:
+
+```bash
+npm run tauri:dev:stable-webview                    # all three flags
+npm run tauri:dev:stable-webview -- --no-dmabuf     # narrow it down
+```
+
+It sets `WEBKIT_DISABLE_DMABUF_RENDERER`, `WEBKIT_DISABLE_COMPOSITING_MODE`, and `LIBGL_ALWAYS_SOFTWARE` before `tauri dev`. WebKitGTK's DMABuf accelerated renderer and GL compositing are the usual culprits on VMs, remote desktops, and machines without a working GPU driver. If blanking stops with the flags set, the crash is in the WebKit renderer, not app code. Confirm independently with `dmesg | grep -iE 'segfault|WebKitWebProcess' | tail -20`.
+
+**React errors in the panel.** `PanelErrorBoundary` in `App.tsx` catches a render failure and shows the stack instead of blanking the app; the same message goes to `<app-data>/frontend-errors.log` via `report_frontend_error`, together with any uncaught `window` error or unhandled rejection. Note that assistant-ui client hooks (`useAui`, `useThreadRuntime`, `unstable_useComposerInputHistory`, …) must be called in a component rendered *below* `AssistantRuntimeProvider`, not in the component that returns it.
+
 ## Extension guidance
 
 1. **Keep ownership clear.** Put model loading, filesystem access, checksums, and native inference in `src-tauri/src/local_agent.rs`. Put presentation and Pi/assistant-ui orchestration in `src/features/local-agent/`. Keep product-domain formulas in `fina-kernel`, not in the Tauri local-agent module.
