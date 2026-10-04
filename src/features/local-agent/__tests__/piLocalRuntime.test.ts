@@ -82,4 +82,14 @@ describe('toolRequest', () => {
       args: {},
     })
   })
+
+  it('parses the model echo of a rendered toolCall object', () => {
+    const echoed = '{"toolCall":{"arguments":{},"id":"59e8cb72","name":"mcp_get_mc_diagnostics","type":"toolCall"}}'
+    expect(toolRequest(echoed, tools)).toEqual({ name: 'mcp_get_mc_diagnostics', args: {} })
+  })
+
+  it('parses a toolCall echo without the mcp prefix', () => {
+    const echoed = '{"toolCall":{"name":"compute_risk","arguments":{"x":2}}}'
+    expect(toolRequest(echoed, tools)).toEqual({ name: 'mcp_compute_risk', args: { x: 2 } })
+  })
 })

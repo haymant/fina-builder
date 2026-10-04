@@ -29,6 +29,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createLocalAgentAdapter, storedMessagesToThreadMessages } from './piLocalRuntime'
+import { ToolCallDisclosure } from './ToolCallDisclosure'
 import { getMcpConnection, resetMcpConnection, type McpConnection } from './mcpClient'
 import { ComposerSourceMenu } from './ComposerSourceMenu'
 import { loadAgentSkills, type AgentSkill } from './skills'
@@ -72,6 +73,20 @@ function formatRelative(epochSeconds: number) {
   const days = Math.floor(hours / 24)
   if (days < 7) return `${days}d ago`
   return new Date(epochSeconds * 1000).toLocaleDateString()
+}
+
+/** A short chip for a tool call's primary argument (keys, pathIndex, etc.). */
+function describeToolArgs(args: unknown): string {
+  if (typeof args !== 'object' || args === null) return ''
+  const entries = Object.entries(args as Record<string, unknown>)
+  if (entries.length === 0) return ''
+  const [key, value] = entries[0]
+  const display = typeof value === 'string' ? value : JSON.stringify(value)
+  return `${key}: ${display}`.slice(0, 60)
+}
+
+function truncateForDisplay(text: string, max = 4000): string {
+  return text.length > max ? `${text.slice(0, max)}\n… (${text.length - max} more characters)` : text
 }
 
 function IconButton({
@@ -249,18 +264,45 @@ function ChatThread({
           </ThreadPrimitive.Empty>
           <ThreadPrimitive.Messages>
             {({ message }) => {
-              const text = message.content.map((part) => (part.type === 'text' ? part.text : '')).filter(Boolean).join('\n')
+              const parts = message.content
+              const text = parts.map((part) => (part.type === 'text' ? part.text : '')).filter(Boolean).join('\n')
+              const toolParts = parts.filter(
+                (part): part is Extract<typeof part, { type: 'tool-call' }> => part.type === 'tool-call',
+              )
+              const hasContent = Boolean(text) || toolParts.length > 0
               return (
                 <div
                   key={message.id}
-                  className={`max-w-[92%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-xs leading-5 ${
-                    message.role === 'user'
-                      ? 'agent-bubble-user ml-auto rounded-br-sm'
-                      : 'agent-bubble mr-auto rounded-bl-sm'
-                  }`}
+                  className={`flex max-w-[92%] flex-col gap-2 ${message.role === 'user' ? 'ml-auto items-end' : 'mr-auto items-stretch'}`}
                 >
-                  {text || (message.role === 'assistant' ? '…' : '')}
-                  {message.role === 'assistant' ? <MessagePrimitive.Error /> : null}
+                  {toolParts.map((part) => {
+                    const running = part.result === undefined && !part.isError
+                    const resultText = typeof part.result === 'string' ? part.result : part.result === undefined ? '' : JSON.stringify(part.result, null, 2)
+                    return (
+                      <ToolCallDisclosure
+                        key={part.toolCallId}
+                        label={`Called ${part.toolName}`}
+                        activeLabel={`Calling ${part.toolName}…`}
+                        query={describeToolArgs(part.args)}
+                        request={part.argsText ?? JSON.stringify(part.args ?? {}, null, 2)}
+                        result={resultText ? truncateForDisplay(resultText) : ''}
+                        running={running}
+                        isError={part.isError}
+                      />
+                    )
+                  })}
+                  {text || (!hasContent && message.role === 'assistant') ? (
+                    <div
+                      className={`whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-xs leading-5 ${
+                        message.role === 'user'
+                          ? 'agent-bubble-user rounded-br-sm'
+                          : 'agent-bubble rounded-bl-sm'
+                      }`}
+                    >
+                      {text || '…'}
+                      {message.role === 'assistant' ? <MessagePrimitive.Error /> : null}
+                    </div>
+                  ) : null}
                 </div>
               )
             }}

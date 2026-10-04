@@ -59,6 +59,7 @@ The local-agent subsystem is separate from the kernel's financial/domain logic. 
 | `src/features/local-agent/piLocalRuntime.ts` | Pi Agent tools/system prompt, MCP tool loading and merge, skills injection, robust tool-request parsing, per-session Agent map, per-session assistant-ui adapter factory, stored-message→thread-message mapping for restore, Tauri token-event subscription, and native inference calls. |
 | `src/features/local-agent/mcpClient.ts` | Thin Tauri-command wrapper for `mcp_list_tools` / `mcp_call_tool`, memoized tool list, and MCP-tool→`AgentTool` adaptation. |
 | `src/features/local-agent/ComposerSourceMenu.tsx` | Composer `+` menu: MCP server → tools drill-down, skills list, and `/{name}` insertion. |
+| `src/features/local-agent/ToolCallDisclosure.tsx` | Assistant-ui Tool call element: collapsed tool-call row that expands to request/result. |
 | `src/features/local-agent/skills.ts` | Frontend helper types and Tauri wrappers for file-based skills (`list_agent_skills`, `skills_dir`). |
 | `src-tauri/src/skills.rs` | Scans `skills/*/SKILL.md`, parses YAML frontmatter, and returns skill records. |
 | `skills/<name>/SKILL.md` | Skill definitions (frontmatter + instruction body). |
@@ -136,6 +137,8 @@ Tool planning is implemented as a constrained text protocol, not native llama fu
 Pi's sequential tool execution then runs the matched `AgentTool`, which either invokes a Tauri command or calls `mcp_call_tool`. Update the system-prompt builder and parser together with any loadout change. Do not treat model-generated JSON as trusted input.
 
 Built-in kernel tools and MCP tools are merged by `mergeTools`: when the MCP server exposes a tool whose normalized name matches a built-in, the MCP tool wins so the model never sees two tools that do the same thing. Built-ins survive only as a fallback when the server is unavailable. When a turn completes, tool results are replayed to native inference as prefixed `user` turns (the portable choice across GGUF chat templates).
+
+The adapter surfaces tool calls to assistant-ui as real `tool-call` message parts: the adapter subscribes to Pi's `tool_execution_start` / `tool_execution_end` events and yields `{type:'tool-call', toolCallId, toolName, args, argsText, result, isError}` alongside the streamed text. `LocalAgentPanel` renders those parts with `ToolCallDisclosure` (the assistant-ui Tool call element: a collapsed chevron/label/query-chip/checkmark row that expands to the raw request and result). The assistant's pre-tool protocol JSON is stripped from the text stream so the thread never shows the raw `{"tool":...}` payload. `toolRequest` also tolerates the model echoing a rendered `{"toolCall":{...}}` object.
 
 ### MCP integration
 

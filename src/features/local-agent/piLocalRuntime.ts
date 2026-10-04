@@ -9,7 +9,7 @@ import {
 } from '@earendil-works/pi-ai'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { ChatModelAdapter, ChatModelRunOptions, ChatModelRunResult, ThreadMessageLike } from '@assistant-ui/react'
+import type { ChatModelAdapter, ChatModelRunOptions, ChatModelRunResult, TextMessagePart, ThreadMessageLike, ToolCallMessagePart } from '@assistant-ui/react'
 import { getMcpConnection } from './mcpClient'
 import type { AgentSkill } from './skills'
 
@@ -113,31 +113,35 @@ TOOL CALL FORMAT: To call a tool, reply with exactly one JSON object and nothing
 Use the exact tool name from the list. Do not add prose, explanations, or markdown code fences around the JSON. Wait for the tool result before answering. If no tool is needed, answer normally in plain language.`
 }
 
-class AsyncTextQueue {
-  private items: string[] = []
-  private waiters: Array<(value: IteratorResult<string>) => void> = []
-  private closed = false
+/** A "re-render requested" signal; the adapter re-yields its accumulated parts. */
+class ChangeSignal {
+  private pending = false
+  private waiters: Array<() => void> = []
+  private isClosed = false
 
-  push(value: string) {
+  get closed() {
+    return this.isClosed
+  }
+
+  notify() {
+    if (this.isClosed) return
     const waiter = this.waiters.shift()
-    if (waiter) waiter({ value, done: false })
-    else this.items.push(value)
+    if (waiter) waiter()
+    else this.pending = true
   }
 
   close() {
-    this.closed = true
-    for (const waiter of this.waiters.splice(0)) waiter({ value: undefined, done: true })
+    this.isClosed = true
+    for (const waiter of this.waiters.splice(0)) waiter()
   }
 
-  [Symbol.asyncIterator](): AsyncIterator<string> {
-    return {
-      next: () => {
-        const value = this.items.shift()
-        if (value !== undefined) return Promise.resolve({ value, done: false })
-        if (this.closed) return Promise.resolve({ value: undefined, done: true })
-        return new Promise((resolve) => this.waiters.push(resolve))
-      },
+  wait(): Promise<void> {
+    if (this.pending) {
+      this.pending = false
+      return Promise.resolve()
     }
+    if (this.isClosed) return Promise.resolve()
+    return new Promise((resolve) => this.waiters.push(resolve))
   }
 }
 
@@ -147,9 +151,6 @@ function contentText(content: unknown): string {
   return content
     .map((part) => {
       if (typeof part === 'object' && part !== null && 'text' in part) return String(part.text)
-      if (typeof part === 'object' && part !== null && 'arguments' in part) {
-        return JSON.stringify({ toolCall: part })
-      }
       return ''
     })
     .filter(Boolean)
@@ -247,7 +248,14 @@ export function toolRequest(text: string, tools: AgentTool[]): { name: string; a
       continue
     }
     if (typeof value !== 'object' || value === null) continue
-    const item = value as { tool?: unknown; arguments?: unknown; name?: unknown }
+    const outer = value as Record<string, unknown>
+    // Accept the plain protocol object and the model's common echo of an
+    // already-rendered tool-call part: {"toolCall":{"name":"...","arguments":{}}}.
+    const item = (typeof outer.toolCall === 'object' && outer.toolCall !== null ? outer.toolCall : outer) as {
+      tool?: unknown
+      arguments?: unknown
+      name?: unknown
+    }
     const requested = typeof item.tool === 'string' ? item.tool : typeof item.name === 'string' ? item.name : undefined
     if (!requested) continue
     const tool = resolveTool(requested, tools)
@@ -359,18 +367,55 @@ export type LocalAgentAdapterOptions = {
 
 /**
  * Convert stored Pi transcript messages into the shape assistant-ui renders.
- * Only user/assistant text turns are shown; tool results are replayed to the
- * Pi agent from `initialMessages` instead.
+ * Assistant tool calls become tool-call parts (paired with the following
+ * `toolResult`), user/assistant text becomes text; system turns are dropped.
  */
 export function storedMessagesToThreadMessages(raw: readonly unknown[]): ThreadMessageLike[] {
   const result: ThreadMessageLike[] = []
+  // Pi tool results arrive as a separate `toolResult` message after the
+  // assistant turn; index them by toolCallId so they attach to the call.
+  const resultsByCallId = new Map<string, { result: unknown; isError: boolean }>()
   for (const item of raw) {
     if (typeof item !== 'object' || item === null) continue
-    const role = (item as { role?: unknown }).role
-    if (role !== 'user' && role !== 'assistant') continue
-    const text = contentText((item as { content?: unknown }).content)
-    if (!text) continue
-    result.push({ role, content: text })
+    const message = item as { role?: unknown; toolCallId?: unknown; content?: unknown; isError?: unknown }
+    if (message.role === 'toolResult' && typeof message.toolCallId === 'string') {
+      resultsByCallId.set(message.toolCallId, {
+        result: contentText(message.content),
+        isError: message.isError === true,
+      })
+    }
+  }
+
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue
+    const message = item as { role?: unknown; content?: unknown }
+    if (message.role === 'user') {
+      const text = contentText(message.content)
+      if (text) result.push({ role: 'user', content: text })
+    } else if (message.role === 'assistant') {
+      const content = Array.isArray(message.content) ? message.content : []
+      const parts: Array<TextMessagePart | ToolCallMessagePart> = []
+      for (const rawPart of content) {
+        if (typeof rawPart !== 'object' || rawPart === null) continue
+        const part = rawPart as { type?: unknown; text?: unknown; id?: unknown; name?: unknown; arguments?: unknown }
+        if (part.type === 'text' && typeof part.text === 'string') {
+          parts.push({ type: 'text', text: part.text })
+        } else if (part.type === 'toolCall' && typeof part.name === 'string') {
+          const callId = typeof part.id === 'string' ? part.id : crypto.randomUUID()
+          const settled = resultsByCallId.get(callId)
+          parts.push({
+            type: 'tool-call',
+            toolCallId: callId,
+            toolName: part.name,
+            args: (part.arguments ?? {}) as never,
+            argsText: JSON.stringify(part.arguments ?? {}),
+            result: settled?.result as never,
+            isError: settled?.isError,
+          })
+        }
+      }
+      if (parts.length > 0) result.push({ role: 'assistant', content: parts })
+    }
   }
   return result
 }
@@ -378,11 +423,27 @@ export function storedMessagesToThreadMessages(raw: readonly unknown[]): ThreadM
 export function createLocalAgentAdapter({ sessionId, initialMessages, skills = [], onSaved }: LocalAgentAdapterOptions): ChatModelAdapter {
   return {
     async *run(options: ChatModelRunOptions): AsyncGenerator<ChatModelRunResult, void> {
-      const queue = new AsyncTextQueue()
+      const signal = new ChangeSignal()
       let liveText = ''
-      const pushText = (text: string) => {
+
+      // Accumulated assistant-ui content parts for the in-flight assistant turn.
+      // Text and tool-call parts are both surfaced so the thread renders a
+      // tool-call disclosure instead of the raw request JSON. These are mutable
+      // drafts converted to immutable parts on each yield.
+      type Draft =
+        | { kind: 'text'; text: string }
+        | { kind: 'tool'; toolCallId: string; toolName: string; args: unknown; argsText: string; result?: unknown; isError?: boolean }
+      const drafts: Draft[] = []
+      let textDraft: Extract<Draft, { kind: 'text' }> | undefined
+      const publish = () => signal.notify()
+      const setLiveText = (text: string) => {
         liveText = text
-        queue.push(text)
+        if (textDraft) textDraft.text = text
+        else {
+          textDraft = { kind: 'text', text }
+          drafts.push(textDraft)
+        }
+        publish()
       }
 
       // Resolve the tool loadout once per adapter: the built-in kernel tools
@@ -407,31 +468,80 @@ export function createLocalAgentAdapter({ sessionId, initialMessages, skills = [
             messages: seed as never,
           },
           sessionId,
-          streamFn: createLocalStream(pushText, options.abortSignal, tools),
+          streamFn: createLocalStream(setLiveText, options.abortSignal, tools),
           toolExecution: 'sequential',
         })
         agentsBySession.set(sessionId, agent)
       } else {
         // Keep the tool loadout current if the MCP server was (re)connected.
         agent.state.tools = tools
-        agent.streamFunction = createLocalStream(pushText, options.abortSignal, tools)
+        agent.streamFunction = createLocalStream(setLiveText, options.abortSignal, tools)
       }
+
+      const draftByToolCallId = new Map<string, Extract<Draft, { kind: 'tool' }>>()
       const unsubscribe = agent.subscribe((event) => {
         if (event.type === 'tool_execution_start') {
-          pushText(`Calling local tool ${event.toolName}…`)
+          // The assistant's pre-tool text is the constrained JSON request (or a
+          // stray echo). Drop it so the thread shows the tool call, not the
+          // protocol payload, and start a fresh text part for the follow-up.
+          if (textDraft) {
+            const index = drafts.indexOf(textDraft)
+            const looksLikeProtocol = textDraft.text.trim().startsWith('{') || textDraft.text.includes('"tool"')
+            if (looksLikeProtocol && index >= 0) drafts.splice(index, 1)
+            textDraft = undefined
+          }
+          const draft: Extract<Draft, { kind: 'tool' }> = {
+            kind: 'tool',
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            args: event.args ?? {},
+            argsText: JSON.stringify(event.args ?? {}),
+          }
+          draftByToolCallId.set(event.toolCallId, draft)
+          drafts.push(draft)
+          publish()
+        } else if (event.type === 'tool_execution_end') {
+          const draft = draftByToolCallId.get(event.toolCallId)
+          if (draft) {
+            draft.result = event.result
+            draft.isError = event.isError === true
+            publish()
+          }
         }
       })
 
+      const snapshot = (): ChatModelRunResult => ({
+        content: drafts.map((draft): TextMessagePart | ToolCallMessagePart =>
+          draft.kind === 'text'
+            ? { type: 'text', text: draft.text }
+            : {
+                type: 'tool-call',
+                toolCallId: draft.toolCallId,
+                toolName: draft.toolName,
+                args: draft.args as never,
+                argsText: draft.argsText,
+                result: draft.result as never,
+                isError: draft.isError,
+              },
+        ),
+      })
+
       const runPromise = agent.prompt(userText)
-      void runPromise.then(() => queue.close(), () => queue.close())
+      void runPromise.then(
+        () => signal.close(),
+        () => signal.close(),
+      )
       try {
-        for await (const text of queue) {
-          yield { content: [{ type: 'text', text }] }
+        while (!signal.closed) {
+          await signal.wait()
+          yield snapshot()
         }
         await runPromise
+        // Fall back to the agent's final assistant text if streaming missed it.
         const finalMessage = [...agent.state.messages].reverse().find((message) => message.role === 'assistant')
         const finalText = finalMessage ? contentText(finalMessage.content) : liveText
-        if (finalText) yield { content: [{ type: 'text', text: finalText }] }
+        if (finalText && finalText !== liveText) setLiveText(finalText)
+        yield snapshot()
         await invoke('save_local_agent_session', {
           sessionId,
           title: userText.slice(0, 80) || 'Local chat',
