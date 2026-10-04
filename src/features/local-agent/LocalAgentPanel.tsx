@@ -28,7 +28,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { createLocalAgentAdapter, resetLocalAgentSession, storedMessagesToThreadMessages } from './piLocalRuntime'
+import { createLocalAgentAdapter, resetLocalAgentSession, storedMessagesToThreadMessages, toolResultDisplayText } from './piLocalRuntime'
 import { ToolCallDisclosure } from './ToolCallDisclosure'
 import { getMcpConnection, resetMcpConnection, type McpConnection } from './mcpClient'
 import { ComposerSourceMenu } from './ComposerSourceMenu'
@@ -89,20 +89,14 @@ const MAX_TOOL_RESULT_DISPLAY_CHARS = 4000
 const toolResultTextCache = new Map<string, string>()
 
 /**
- * Tool results can be tens of kilobytes (e.g. a full payoff path). Stringify
- * once per toolCallId and cache it: re-stringifying on every render for every
- * message in a long chat is what stalls and kills the webview.
+ * Tool results can be tens of kilobytes (e.g. a full payoff path). Flatten and
+ * cache once per toolCallId: re-stringifying on every render for every message
+ * in a long chat is what stalls and kills the webview.
  */
 function toolResultText(toolCallId: string, result: unknown): string {
   const cached = toolResultTextCache.get(toolCallId)
   if (cached !== undefined) return cached
-  let text = ''
-  try {
-    if (typeof result === 'string') text = result
-    else if (result !== undefined && result !== null) text = JSON.stringify(result, null, 2) ?? ''
-  } catch {
-    text = ''
-  }
+  let text = toolResultDisplayText(result)
   if (text.length > MAX_TOOL_RESULT_DISPLAY_CHARS) {
     text = `${text.slice(0, MAX_TOOL_RESULT_DISPLAY_CHARS)}\n… (${text.length - MAX_TOOL_RESULT_DISPLAY_CHARS} more characters)`
   }

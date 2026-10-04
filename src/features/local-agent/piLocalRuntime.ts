@@ -94,11 +94,42 @@ export function mergeTools(builtIns: AgentTool[], mcpTools: AgentTool[]): AgentT
   return [...remainingBuiltIns, ...mcpTools]
 }
 
-function describeTools(tools: AgentTool[]): string {
-  return tools.map((tool) => `- ${tool.name}: ${tool.description ?? tool.label ?? ''}`).join('\n')
+/**
+ * Render one tool's parameters as a compact `name (type, required): doc` list.
+ *
+ * The model can only fill in arguments it was told about. Listing names and
+ * descriptions alone made every call arrive as `{}`, which the MCP server then
+ * rejected with "must have required properties" — the schema was on the tool
+ * object all along, `describeTools` just dropped it.
+ */
+function describeParameters(tool: AgentTool): string | undefined {
+  const schema = tool.parameters as { properties?: unknown; required?: unknown } | undefined
+  const properties = schema?.properties
+  if (typeof properties !== 'object' || properties === null) return undefined
+  const entries = Object.entries(properties as Record<string, unknown>)
+  if (entries.length === 0) return undefined
+  const required = Array.isArray(schema?.required) ? (schema.required as unknown[]).map(String) : []
+  const fields = entries.map(([name, raw]) => {
+    const property = (typeof raw === 'object' && raw !== null ? raw : {}) as { type?: unknown; description?: unknown }
+    const type = typeof property.type === 'string' ? property.type : 'any'
+    const flag = required.includes(name) ? ', required' : ''
+    const doc = typeof property.description === 'string' ? property.description.trim().slice(0, 120) : ''
+    return `${name} (${type}${flag})${doc ? `: ${doc}` : ''}`
+  })
+  return fields.join('; ')
 }
 
-function buildSystemPrompt(tools: AgentTool[], skills: readonly AgentSkill[]): string {
+function describeTools(tools: AgentTool[]): string {
+  return tools
+    .map((tool) => {
+      const summary = tool.description ?? tool.label ?? ''
+      const parameters = describeParameters(tool)
+      return `- ${tool.name}: ${summary}\n    arguments: ${parameters ?? 'none'}`
+    })
+    .join('\n')
+}
+
+export function buildSystemPrompt(tools: AgentTool[], skills: readonly AgentSkill[]): string {
   const skillSection = skills.length > 0
     ? `\n\nActive skills (apply their guidance):\n${skills.map((skill) => `- ${skill.name}: ${skill.instructions}`).join('\n')}`
     : ''
@@ -109,8 +140,8 @@ Tools you may call (read-only):
 ${describeTools(tools)}
 
 TOOL CALL FORMAT: To call a tool, reply with exactly one JSON object and nothing else:
-{"tool":"<tool-name>","arguments":{}}
-Use the exact tool name from the list. Do not add prose, explanations, or markdown code fences around the JSON. Wait for the tool result before answering. If no tool is needed, answer normally in plain language.`
+{"tool":"<tool-name>","arguments":{"<parameter>":<value>}}
+Use the exact tool name from the list. Copy every parameter named under that tool's "arguments" line, using the exact name and type given, and always include the ones marked required. Send "arguments":{} ONLY for a tool whose arguments line says none. Do not add prose, explanations, or markdown code fences around the JSON. Wait for the tool result before answering. If no tool is needed, answer normally in plain language.`
 }
 
 /**
@@ -280,6 +311,64 @@ function contentText(content: unknown): string {
     .join('\n')
 }
 
+/** `JSON.stringify` that survives circular refs and BigInt instead of throwing. */
+function safeStringify(value: unknown): string {
+  const seen = new WeakSet<object>()
+  try {
+    return (
+      JSON.stringify(
+        value,
+        (_key, entry) => {
+          if (typeof entry === 'bigint') return entry.toString()
+          if (typeof entry === 'object' && entry !== null) {
+            if (seen.has(entry)) return '[circular]'
+            seen.add(entry)
+          }
+          return entry
+        },
+        2,
+      ) ?? ''
+    )
+  } catch {
+    return '[unserializable tool result]'
+  }
+}
+
+/**
+ * Flatten a tool result into the text the disclosure shows.
+ *
+ * Pi hands back the whole MCP envelope — `{content:[{type,text}], details}` —
+ * and stringifying that verbatim filled the Result box with protocol noise
+ * instead of the answer. Prefer the text blocks, then any structured payload,
+ * and fall back to JSON only when there is nothing readable. A payload that
+ * cannot be stringified used to render as an empty box with no explanation.
+ */
+export function toolResultDisplayText(result: unknown): string {
+  if (result === undefined || result === null) return ''
+  if (typeof result === 'string') return result
+  if (typeof result === 'object') {
+    const envelope = result as { content?: unknown; structuredContent?: unknown; details?: unknown }
+    const isEnvelope = 'content' in envelope || 'structuredContent' in envelope || 'details' in envelope
+    if (envelope.content !== undefined) {
+      const text = contentText(envelope.content)
+      if (text) return text
+    }
+    for (const key of ['structuredContent', 'details'] as const) {
+      const value = envelope[key]
+      if (value === undefined || value === null) continue
+      if (typeof value === 'string') return value
+      const json = safeStringify(value)
+      // An empty object carries no information; prefer showing nothing over
+      // showing `{}` where the user expects the answer.
+      if (json && json !== '{}' && json !== '[]' && json !== 'null') return json
+    }
+    // A well-formed envelope with nothing readable inside it: say nothing
+    // rather than echo the protocol shape back at the user.
+    if (isEnvelope) return ''
+  }
+  return safeStringify(result)
+}
+
 function toPiMessage(message: ChatModelRunOptions['messages'][number]) {
   const role = message.role === 'assistant' ? 'assistant' : 'user'
   return { role, content: contentText(message.content), timestamp: Date.now() }
@@ -351,15 +440,25 @@ function safeJson(value: unknown): string {
 const MAX_NATIVE_MESSAGE_CHARS = 2400
 
 /**
+ * The system prompt carries the tool list and the tool-call format, so
+ * truncating it to a message-sized budget silently removes the instructions
+ * that make tool calling work at all: with the full 12-tool catalog it runs
+ * ~3.1k characters, and the call-format block sits at the very end. It gets a
+ * generous cap of its own because active skills are appended to it, and the
+ * transcript budget below still accounts for whatever it ends up costing.
+ */
+const MAX_NATIVE_SYSTEM_CHARS = 6000
+
+/**
  * Whole-transcript budget (~3k tokens of the 4096-token context). Older
  * non-system messages are dropped, newest first, so a long chat keeps working
  * instead of failing every turn with "conversation too long".
  */
 const MAX_NATIVE_TOTAL_CHARS = 12000
 
-function clampForNative(content: string): string {
-  if (content.length <= MAX_NATIVE_MESSAGE_CHARS) return content
-  return `${content.slice(0, MAX_NATIVE_MESSAGE_CHARS)}\n… (truncated: ${content.length - MAX_NATIVE_MESSAGE_CHARS} more characters)`
+function clampForNative(content: string, max = MAX_NATIVE_MESSAGE_CHARS): string {
+  if (content.length <= max) return content
+  return `${content.slice(0, max)}\n… (truncated: ${content.length - max} more characters)`
 }
 
 /**
@@ -372,8 +471,11 @@ function clampForNative(content: string): string {
 export function toNativeMessages(context: TranscriptContext) {
   const clamped = context.messages
     .map((message) => {
-      const content = clampForNative(contentText(message.content))
-      if (message.role === 'system') return { role: 'system', content }
+      const raw = contentText(message.content)
+      if (message.role === 'system') {
+        return { role: 'system', content: clampForNative(raw, MAX_NATIVE_SYSTEM_CHARS) }
+      }
+      const content = clampForNative(raw)
       if (message.role === 'assistant') return { role: 'assistant', content }
       if (message.role === 'toolResult') return { role: 'user', content: `Tool result:\n${content}` }
       return { role: 'user', content }
@@ -760,7 +862,9 @@ export function createLocalAgentAdapter({ sessionId, initialMessages, skills = [
         } else if (event.type === 'tool_execution_end') {
           const draft = draftByToolCallId.get(event.toolCallId)
           if (draft) {
-            draft.result = event.result
+            // Flatten the MCP envelope here so the thread carries display text,
+            // matching what the restored-transcript path already produces.
+            draft.result = toolResultDisplayText(event.result)
             draft.isError = event.isError === true
             publisher.publish()
           }

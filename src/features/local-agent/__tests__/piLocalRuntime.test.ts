@@ -7,7 +7,7 @@ import type { AgentTurnContext } from '@earendil-works/pi-agent-core'
 import { describe, expect, it } from 'vitest'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
 import type { Message, TranscriptContext } from '@earendil-works/pi-ai'
-import { createFramePublisher, createTurnGuard, jsonObjectSlices, mergeTools, normalizeStoredMessages, toNativeMessages, toolRequest } from '../piLocalRuntime'
+import { buildSystemPrompt, createFramePublisher, createTurnGuard, jsonObjectSlices, mergeTools, normalizeStoredMessages, toNativeMessages, toolRequest, toolResultDisplayText } from '../piLocalRuntime'
 
 const tool = (name: string): AgentTool =>
   ({
@@ -420,5 +420,149 @@ describe('createTurnGuard', () => {
     // A new prompt must not inherit the previous turn's exhausted budget.
     const second = createTurnGuard({ maxToolRounds: 2 })
     expect(second(turn([toolResult('mcp_get_path', { rows: 9 })]))).toBeUndefined()
+  })
+})
+
+describe('buildSystemPrompt', () => {
+  const schemaTool = (name: string, schema: unknown): AgentTool =>
+    ({
+      name,
+      label: name,
+      description: `Read ${name}.`,
+      parameters: schema as never,
+      execute: async () => ({ content: [], details: undefined }),
+    }) as unknown as AgentTool
+
+  it('tells the model every parameter name, type, and which are required', () => {
+    // Regression: arguments arrived as `{}` because the prompt listed only
+    // tool names and descriptions, so the model had no way to learn that
+    // `mcp_get_path` needs `pathIndex`.
+    const prompt = buildSystemPrompt(
+      [
+        schemaTool('mcp_get_path', {
+          type: 'object',
+          properties: { pathIndex: { type: 'integer', description: 'Index of the path' }, steps: { type: 'number' } },
+          required: ['pathIndex'],
+        }),
+      ],
+      [],
+    )
+    expect(prompt).toContain('pathIndex (integer, required): Index of the path')
+    expect(prompt).toContain('steps (number)')
+  })
+
+  it('never shows an empty arguments object as the example to copy', () => {
+    // The literal `{"tool":"...","arguments":{}}` was copied verbatim by the
+    // model, producing an empty call for every tool that takes parameters.
+    const prompt = buildSystemPrompt(
+      [schemaTool('mcp_get_path', { type: 'object', properties: { pathIndex: { type: 'integer' } }, required: ['pathIndex'] })],
+      [],
+    )
+    expect(prompt).toContain('{"tool":"<tool-name>","arguments":{"<parameter>":<value>}}')
+    expect(prompt).not.toContain('"arguments":{}}')
+    expect(prompt).toContain('ONLY for a tool whose arguments line says none')
+  })
+
+  it('marks a parameterless tool as taking no arguments', () => {
+    const prompt = buildSystemPrompt([schemaTool('mcp_health', { type: 'object', properties: {} })], [])
+    expect(prompt).toContain('- mcp_health: Read mcp_health.')
+    expect(prompt).toContain('arguments: none')
+  })
+})
+
+describe('toolResultDisplayText', () => {
+  it('unwraps the MCP content envelope instead of printing the protocol JSON', () => {
+    // This is the exact shape that filled the Result box with JSON noise.
+    const envelope = {
+      content: [{ type: 'text', text: 'The Fina Kernel is running with the version 0.1.0.' }],
+      details: {},
+    }
+    expect(toolResultDisplayText(envelope)).toBe('The Fina Kernel is running with the version 0.1.0.')
+  })
+
+  it('surfaces a validation error message as readable text', () => {
+    const envelope = {
+      content: [
+        {
+          type: 'text',
+          text: 'Validation failed for tool "mcp_get_path":\n  - pathIndex: must have required properties pathIndex\n\nReceived arguments:\n{}',
+        },
+      ],
+      details: {},
+    }
+    const text = toolResultDisplayText(envelope)
+    expect(text).toContain('must have required properties pathIndex')
+    expect(text).not.toContain('"content"')
+  })
+
+  it('joins multiple text blocks and ignores non-text parts', () => {
+    const envelope = { content: [{ type: 'text', text: 'one' }, { type: 'image' }, { type: 'text', text: 'two' }] }
+    expect(toolResultDisplayText(envelope)).toBe('one\ntwo')
+  })
+
+  it('falls back to structured content when there are no text blocks', () => {
+    const envelope = { content: [], structuredContent: { alive: 3 } }
+    expect(toolResultDisplayText(envelope)).toContain('"alive": 3')
+  })
+
+  it('reports nothing rather than echoing an empty envelope', () => {
+    expect(toolResultDisplayText({ content: [], details: {} })).toBe('')
+  })
+
+  it('passes a plain string through and reports nothing for no result', () => {
+    expect(toolResultDisplayText('already text')).toBe('already text')
+    expect(toolResultDisplayText(undefined)).toBe('')
+    expect(toolResultDisplayText(null)).toBe('')
+  })
+
+  it('survives a circular payload instead of rendering an empty box', () => {
+    const circular: Record<string, unknown> = { name: 'loop' }
+    circular.self = circular
+    expect(toolResultDisplayText({ content: [], details: circular })).toContain('[circular]')
+  })
+})
+
+describe('toNativeMessages system-prompt budget', () => {
+  it('keeps the tool-call format intact when the catalog makes the prompt long', () => {
+    // Regression: the system prompt is ~3.1k characters with the full 12-tool
+    // catalog and the call-format block sits last, so clamping it to the
+    // 2400-char message budget cut off the instructions that make tool calling
+    // work at all.
+    const schemaTool = (name: string, schema: unknown): AgentTool =>
+      ({
+        name,
+        label: name,
+        description: `Read ${name} from the demo workspace.`,
+        parameters: schema as never,
+        execute: async () => ({ content: [], details: undefined }),
+      }) as unknown as AgentTool
+    const tools = Array.from({ length: 12 }, (_, index) =>
+      schemaTool(`mcp_tool_${index}`, {
+        type: 'object',
+        properties: { pathIndex: { type: 'integer', description: '1-based generated path index.' } },
+        required: ['pathIndex'],
+      }),
+    )
+    const prompt = buildSystemPrompt(tools, [])
+    expect(prompt.length).toBeGreaterThan(2400)
+
+    const context = { messages: [{ role: 'system', content: prompt }] } as unknown as TranscriptContext
+    const [system] = toNativeMessages(context)
+    expect(system.role).toBe('system')
+    expect(system.content).toContain('TOOL CALL FORMAT')
+    expect(system.content).toContain('"arguments":{"<parameter>":<value>}}')
+    expect(system.content).not.toContain('truncated:')
+    // Every tool's parameters must survive, not just the first few.
+    expect(system.content).toContain('mcp_tool_11')
+    expect(system.content).toContain('pathIndex (integer, required)')
+  })
+
+  it('still truncates an oversized ordinary message', () => {
+    const context = {
+      messages: [{ role: 'user', content: 'x'.repeat(5000) }],
+    } as unknown as TranscriptContext
+    const [user] = toNativeMessages(context)
+    expect(user.content.length).toBeLessThan(5000)
+    expect(user.content).toContain('truncated:')
   })
 })
