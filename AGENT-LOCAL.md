@@ -141,7 +141,9 @@ A single `get_path` call returns a whole payoff path: ~50k characters, roughly 1
 | `MAX_NATIVE_TOTAL_CHARS` | 12000 | `piLocalRuntime.toNativeMessages` | Whole-transcript window: system messages are kept, older turns are dropped newest-first so a long chat stays inside the context instead of failing every turn. |
 | `MAX_TOOL_RESULT_DISPLAY_CHARS` | 4000 | `LocalAgentPanel.toolResultText` | Rendered disclosure text is stringified once per `toolCallId` and cached, so re-rendering a long chat does not re-stringify every result. |
 
-Rust still rejects an over-long prompt with `Conversation too long for the configured N-token context`, which the thread now surfaces through `MessagePrimitive.Error` even when the assistant turn produced no text.
+Rust still rejects an over-long prompt with `Conversation too long for the configured N-token context`, which the thread now surfaces through `MessagePrimitive.Error` even when the assistant turn produced no text. Before that, the rejected turn saved as an assistant message with `content: []` and `stopReason: "error"`, so it rendered as an empty bubble and looked like the app had silently stopped working — inspect `~/.local/share/com.fina.payoff-explorer/sessions/*.jsonl` to see those.
+
+Sessions written **before** these caps still hold the raw payload (a real `get_path` record was 28 kB of `content` plus 17 kB of `details`). `normalizeStoredMessages` clamps those on load, so an old chat becomes usable and is rewritten in capped form on the next save. `resetLocalAgentSession(sessionId)` drops the cached Pi agent when switching or starting a chat — without it, reopening a session reused the previous in-memory agent and kept the old transcript instead of the one just read from disk.
 
 Tool planning is implemented as a constrained text protocol, not native llama function calling: the system prompt lists every active tool (drawn from the merged loadout) and asks for exactly one JSON object of the form `{"tool":"<tool-name>","arguments":{}}`.
 

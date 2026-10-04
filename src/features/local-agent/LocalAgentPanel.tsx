@@ -28,7 +28,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { createLocalAgentAdapter, storedMessagesToThreadMessages } from './piLocalRuntime'
+import { createLocalAgentAdapter, resetLocalAgentSession, storedMessagesToThreadMessages } from './piLocalRuntime'
 import { ToolCallDisclosure } from './ToolCallDisclosure'
 import { getMcpConnection, resetMcpConnection, type McpConnection } from './mcpClient'
 import { ComposerSourceMenu } from './ComposerSourceMenu'
@@ -734,6 +734,9 @@ export function LocalAgentPanel({ open, onClose }: { open: boolean; onClose: () 
   }
 
   const startNewChat = useCallback(() => {
+    // Drop any cached agent so the new chat starts from an empty transcript
+    // rather than reusing a previous agent for a recycled id.
+    resetLocalAgentSession()
     setActiveSessionId(newSessionId())
     setActiveSessionMessages([])
     setChatKey((value) => value + 1)
@@ -744,6 +747,9 @@ export function LocalAgentPanel({ open, onClose }: { open: boolean; onClose: () 
     setError('')
     try {
       const messages = await invoke<unknown[]>('load_local_agent_session', { sessionId })
+      // Rebuild the agent from what we just loaded instead of reusing the
+      // in-memory one left over from the previously open chat.
+      resetLocalAgentSession(sessionId)
       setActiveSessionId(sessionId)
       setActiveSessionMessages(messages)
       setChatKey((value) => value + 1)

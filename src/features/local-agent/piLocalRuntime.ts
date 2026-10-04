@@ -10,7 +10,7 @@ import {
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { ChatModelAdapter, ChatModelRunOptions, ChatModelRunResult, TextMessagePart, ThreadMessageLike, ToolCallMessagePart } from '@assistant-ui/react'
-import { getMcpConnection } from './mcpClient'
+import { getMcpConnection, MAX_TOOL_RESULT_CHARS } from './mcpClient'
 import type { AgentSkill } from './skills'
 
 type NativeTokenEvent = { generationId: string; delta: string; text: string }
@@ -180,6 +180,62 @@ function contentText(content: unknown): string {
 function toPiMessage(message: ChatModelRunOptions['messages'][number]) {
   const role = message.role === 'assistant' ? 'assistant' : 'user'
   return { role, content: contentText(message.content), timestamp: Date.now() }
+}
+
+/**
+ * Clamp a restored transcript's oversized tool results.
+ *
+ * Sessions written before the tool-result cap still contain the full payload
+ * (`get_path` stored 28 kB of `content` plus 19 kB of `details`). Reopening
+ * one of those chats re-seeds the agent with the oversized transcript, so every
+ * later turn fails with "Conversation too long" again — the cap at the MCP
+ * boundary only helps chats started after it shipped. Normalizing on load means
+ * an old chat becomes usable and is rewritten in capped form on the next save.
+ */
+export function normalizeStoredMessages(raw: readonly unknown[]): unknown[] {
+  return raw.map((item) => {
+    if (typeof item !== 'object' || item === null) return item
+    const envelope = item as { type?: unknown; message?: unknown }
+    // Sessions wrap each Pi message in a { id, type, message } envelope.
+    const body = (envelope.type === 'message' && envelope.message ? envelope.message : item) as Record<string, unknown>
+    if (body.role !== 'toolResult') return item
+
+    const capped = { ...body }
+    if (typeof capped.content === 'string') {
+      capped.content = capForRestore(capped.content)
+    } else if (Array.isArray(capped.content)) {
+      capped.content = capped.content.map((part) =>
+        typeof part === 'object' && part !== null && typeof (part as { text?: unknown }).text === 'string'
+          ? { ...part, text: capForRestore((part as { text: string }).text) }
+          : part,
+      )
+    }
+    if (capped.details !== undefined && capped.details !== null) {
+      // Only stringify when the serialized form is actually too big: the UI
+      // reads `details` as an object, so a small result must keep its shape.
+      if (typeof capped.details === 'string') {
+        capped.details = capForRestore(capped.details)
+      } else {
+        const json = safeJson(capped.details)
+        capped.details = json.length > MAX_TOOL_RESULT_CHARS ? capForRestore(json) : capped.details
+      }
+    }
+    return envelope.type === 'message' ? { ...envelope, message: capped } : capped
+  })
+}
+
+/** Cap a restored tool result to the same budget a fresh call would get. */
+function capForRestore(text: string): string {
+  if (text.length <= MAX_TOOL_RESULT_CHARS) return text
+  return `${text.slice(0, MAX_TOOL_RESULT_CHARS)}\n… (${text.length - MAX_TOOL_RESULT_CHARS} more characters truncated; call the tool again with a narrower request for the rest)`
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? ''
+  } catch {
+    return ''
+  }
 }
 
 /**
@@ -410,6 +466,18 @@ function createLocalStream(
 
 const agentsBySession = new Map<string, Agent>()
 
+/**
+ * Drop a cached agent so the next prompt rebuilds it from the transcript it is
+ * given. Call this when switching or starting a chat: without it, reopening a
+ * session reuses the *previous* in-memory agent for that id, so a restored
+ * chat silently keeps the old (possibly oversized) transcript instead of what
+ * was just loaded from disk.
+ */
+export function resetLocalAgentSession(sessionId?: string): void {
+  if (sessionId === undefined) agentsBySession.clear()
+  else agentsBySession.delete(sessionId)
+}
+
 export type LocalAgentAdapterOptions = {
   /** Stable id for the loaded/active chat session; also the session file name in Rust. */
   sessionId: string
@@ -530,7 +598,9 @@ export function createLocalAgentAdapter({ sessionId, initialMessages, skills = [
       const history = messages.map(toPiMessage)
       let agent = agentsBySession.get(sessionId)
       if (!agent) {
-        const seed = initialMessages && initialMessages.length > 0 ? initialMessages : history
+        // Normalize on load so a chat stored before the tool-result cap does not
+        // re-seed the agent with a transcript that overflows the context.
+        const seed = initialMessages && initialMessages.length > 0 ? normalizeStoredMessages(initialMessages) : history
         agent = new Agent({
           initialState: {
             systemPrompt,

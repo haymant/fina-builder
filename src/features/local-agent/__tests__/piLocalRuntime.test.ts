@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
 import type { Message, TranscriptContext } from '@earendil-works/pi-ai'
-import { jsonObjectSlices, mergeTools, toNativeMessages, toolRequest } from '../piLocalRuntime'
+import { jsonObjectSlices, mergeTools, normalizeStoredMessages, toNativeMessages, toolRequest } from '../piLocalRuntime'
 
 const tool = (name: string): AgentTool =>
   ({
@@ -158,5 +158,61 @@ describe('toNativeMessages', () => {
 
   it('drops empty turns', () => {
     expect(toNativeMessages(context([user('   '), user('real question')]))).toEqual([{ role: 'user', content: 'real question' }])
+  })
+})
+
+// Sessions written before the tool-result cap still hold the full `get_path`
+// payload (28 kB of `content` plus 19 kB of `details`). Reopening one of those
+// chats re-seeded the agent with the oversized transcript, so every later turn
+// failed with "Conversation too long" again. Observed in a real session file.
+describe('normalizeStoredMessages', () => {
+  const envelope = (message: Record<string, unknown>) => ({ id: 'm0', type: 'message', message })
+
+  it('caps an oversized text block on a restored tool result', () => {
+    const [row] = normalizeStoredMessages([
+      envelope({
+        role: 'toolResult',
+        toolCallId: 'call-1',
+        toolName: 'mcp_get_path',
+        content: [{ type: 'text', text: 'x'.repeat(28_040) }],
+        details: { dates: Array.from({ length: 200 }, (_, i) => `2024-01-${String(i).padStart(3, '0')} coupon ${i} settled in cash`) },
+      }),
+    ]) as Array<{ message: { content: Array<{ text: string }>; details: unknown } }>
+
+    const text = row.message.content[0].text
+    expect(text.length).toBeLessThan(4_200)
+    expect(text).toContain('24040 more characters truncated')
+    expect(typeof row.message.details).toBe('string')
+    expect(String(row.message.details)).toContain('more characters truncated')
+  })
+
+  it('caps a plain string content and leaves small results alone', () => {
+    const [big, small] = normalizeStoredMessages([
+      envelope({ role: 'toolResult', content: 'y'.repeat(9_000), details: null }),
+      envelope({ role: 'toolResult', content: 'plain text result', details: { ok: true } }),
+    ]) as Array<{ message: { content: string; details: unknown } }>
+
+    expect(big.message.content).toContain('5000 more characters truncated')
+    expect(small.message.content).toBe('plain text result')
+    expect(small.message.details).toEqual({ ok: true })
+  })
+
+  it('passes non-tool messages through untouched', () => {
+    const input = [
+      envelope({ role: 'user', content: [{ type: 'text', text: 'call get_path' }] }),
+      envelope({ role: 'assistant', content: [{ type: 'text', text: 'z'.repeat(50_000) }] }),
+      { role: 'user', content: 'bare message', timestamp: 0 },
+    ]
+    expect(normalizeStoredMessages(input)).toEqual(input)
+  })
+
+  it('does not throw on a payload it cannot serialize', () => {
+    // Cannot come off disk (JSON.parse makes no cycles) but the guard must hold
+    // rather than throwing inside the agent seed.
+    const details: Record<string, unknown> = { big: 'w'.repeat(9_000) }
+    details.self = details
+    expect(() =>
+      normalizeStoredMessages([envelope({ role: 'toolResult', content: 'small', details })]),
+    ).not.toThrow()
   })
 })
