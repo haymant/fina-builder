@@ -79,6 +79,14 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p fina-cli -p fina-server
+      # `payoff-explorer`'s build script (tauri-build) validates every
+      # `bundle.externalBin` resource at compile time and fails the build if one
+      # is missing: "resource path `binaries/fina-mcp-<triple>` doesn't exist".
+      # `src-tauri/binaries/` is gitignored and normally staged by
+      # `beforeBuildCommand`, which only runs for `tauri build`/`tauri dev` — so
+      # plain `cargo clippy`/`cargo test` has to stage it explicitly.
+      - name: Stage the fina-mcp sidecar
+        run: ./scripts/build-mcp-sidecar.sh
       # The Tauri crate needs the GTK/GLib/WebKit system libraries to even build;
       # the script is the single source of truth for that list and is a no-op
       # elsewhere. See scripts/ci/install-tauri-linux-deps.sh.
@@ -107,6 +115,11 @@ jobs:
       # shell, so this job needs the same system libraries as the adapters job.
       - name: Install Tauri Linux prerequisites
         run: ./scripts/ci/install-tauri-linux-deps.sh
+      # Same reason as the `adapters` job: tauri-build refuses to compile
+      # `payoff-explorer` while a declared `bundle.externalBin` resource is
+      # missing, and `cargo llvm-cov` compiles that crate.
+      - name: Stage the fina-mcp sidecar
+        run: ./scripts/build-mcp-sidecar.sh
       - name: Rust coverage
         run: |
           cargo llvm-cov --workspace --exclude fina-mcp --lcov --output-path lcov.info

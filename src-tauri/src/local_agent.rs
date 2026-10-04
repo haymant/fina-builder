@@ -299,10 +299,10 @@ pub fn list_local_models(app: AppHandle) -> Result<Vec<LocalModel>, String> {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
         if !path.is_file()
-            || path
+            || !path
                 .extension()
                 .and_then(|e| e.to_str())
-                .is_none_or(|e| !e.eq_ignore_ascii_case("gguf"))
+                .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
         {
             continue;
         }
@@ -328,7 +328,7 @@ pub fn list_local_models(app: AppHandle) -> Result<Vec<LocalModel>, String> {
             license_url: catalog.map(|m| m.license_url.to_string()),
         });
     }
-    models.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    models.sort_by_key(|a| a.name.to_lowercase());
     Ok(models)
 }
 
@@ -403,14 +403,14 @@ pub async fn start_model_download(
         let _ = app.emit("model-download-finished", json!({"modelId": model_id, "path": final_path}));
         Ok(())
     }.await;
-    if outcome.is_err() {
+    if let Err(error) = &outcome {
         if let Ok(paths) = app_paths(&app) {
             let partial = PathBuf::from(paths.models_dir).join(format!("{}.part", model.file_name));
             let _ = tokio::fs::remove_file(partial).await;
         }
         let _ = app.emit(
             "model-download-error",
-            json!({"modelId": model_id, "message": outcome.as_ref().unwrap_err()}),
+            json!({"modelId": model_id, "message": error}),
         );
     }
     if let Ok(mut jobs) = state.downloads.lock() {
@@ -445,10 +445,10 @@ fn allowed_model_path(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
         .map_err(|e| format!("Model file not found: {e}"))?;
     if !candidate.starts_with(&root)
         || !candidate.is_file()
-        || candidate
+        || !candidate
             .extension()
             .and_then(|e| e.to_str())
-            .is_none_or(|e| !e.eq_ignore_ascii_case("gguf"))
+            .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
     {
         return Err("Choose a .gguf file inside the application models folder".into());
     }
@@ -487,7 +487,7 @@ pub async fn load_model(
         let model = LlamaModel::load_from_file(&backend, &model_path, &params).map_err(|e| format!("Model could not be loaded (the GGUF may be corrupt or exceed available memory): {e}"))?;
         let file_name = model_path.file_name().and_then(|s| s.to_str()).unwrap_or("local model").to_string();
         let catalog = CATALOG.iter().find(|m| m.file_name == file_name);
-        let recommended_context = catalog.map(|m| m.recommended_context).unwrap_or_else(|| model.n_ctx_train().min(4096).max(1024));
+        let recommended_context = catalog.map(|m| m.recommended_context).unwrap_or_else(|| model.n_ctx_train().clamp(1024, 4096));
         let loaded = LoadedModel { model, backend, file_name, recommended_context };
         *engine.lock().map_err(|_| "Model engine state is unavailable")? = Some(loaded);
         Ok::<(), String>(())
@@ -618,9 +618,11 @@ fn generate(
         LlamaSampler::chain_simple([LlamaSampler::temp(0.25), LlamaSampler::dist(42)]);
     let mut decoder = UTF_8.new_decoder();
     let mut text = String::new();
-    let max_tokens = request.max_tokens.clamp(1, 2048);
-    let mut position = batch.n_tokens();
-    for _ in 0..max_tokens {
+    let max_tokens = request.max_tokens.clamp(1, 2048) as usize;
+    // The prompt occupies positions 0..n_tokens, so generation starts at
+    // `batch.n_tokens()` and advances by one per sampled token.
+    let first_position = batch.n_tokens();
+    for position in (first_position..).take(max_tokens) {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
@@ -649,9 +651,8 @@ fn generate(
         }
         batch.clear();
         batch
-            .add(token, position as i32, &[0], true)
+            .add(token, position, &[0], true)
             .map_err(|e| e.to_string())?;
-        position += 1;
         ctx.decode(&mut batch)
             .map_err(|e| format!("Token decoding failed: {e}"))?;
     }
@@ -746,7 +747,7 @@ pub fn list_local_agent_sessions(app: AppHandle) -> Result<Vec<SessionSummary>, 
             message_count: lines.count(),
         });
     }
-    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
     Ok(sessions)
 }
 
