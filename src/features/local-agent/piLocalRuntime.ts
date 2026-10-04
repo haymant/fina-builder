@@ -113,35 +113,55 @@ TOOL CALL FORMAT: To call a tool, reply with exactly one JSON object and nothing
 Use the exact tool name from the list. Do not add prose, explanations, or markdown code fences around the JSON. Wait for the tool result before answering. If no tool is needed, answer normally in plain language.`
 }
 
-/** A "re-render requested" signal; the adapter re-yields its accumulated parts. */
-class ChangeSignal {
-  private pending = false
-  private waiters: Array<() => void> = []
+/**
+ * A single-slot async queue for the latest assistant part snapshot. Producers
+ * overwrite the slot (only the newest snapshot matters); the consumer awaits the
+ * next one. Terminal states close the queue so the generator ends deterministically.
+ */
+class LatestSnapshotQueue<T> {
+  private slot: { value: T } | undefined
+  private waiter: (() => void) | undefined
   private isClosed = false
 
   get closed() {
     return this.isClosed
   }
 
-  notify() {
+  push(value: T) {
     if (this.isClosed) return
-    const waiter = this.waiters.shift()
-    if (waiter) waiter()
-    else this.pending = true
+    if (this.waiter) {
+      const waiter = this.waiter
+      this.waiter = undefined
+      this.slot = { value }
+      waiter()
+      return
+    }
+    this.slot = { value }
   }
 
   close() {
+    if (this.isClosed) return
     this.isClosed = true
-    for (const waiter of this.waiters.splice(0)) waiter()
+    const waiter = this.waiter
+    this.waiter = undefined
+    waiter?.()
   }
 
-  wait(): Promise<void> {
-    if (this.pending) {
-      this.pending = false
-      return Promise.resolve()
+  /** Resolves with the next snapshot, or `undefined` once closed and drained. */
+  take(): Promise<T | undefined> {
+    if (this.slot) {
+      const value = this.slot.value
+      this.slot = undefined
+      return Promise.resolve(value)
     }
-    if (this.isClosed) return Promise.resolve()
-    return new Promise((resolve) => this.waiters.push(resolve))
+    if (this.isClosed) return Promise.resolve(undefined)
+    return new Promise((resolve) => {
+      this.waiter = () => {
+        const value = this.slot?.value
+        this.slot = undefined
+        resolve(value)
+      }
+    })
   }
 }
 
@@ -423,7 +443,7 @@ export function storedMessagesToThreadMessages(raw: readonly unknown[]): ThreadM
 export function createLocalAgentAdapter({ sessionId, initialMessages, skills = [], onSaved }: LocalAgentAdapterOptions): ChatModelAdapter {
   return {
     async *run(options: ChatModelRunOptions): AsyncGenerator<ChatModelRunResult, void> {
-      const signal = new ChangeSignal()
+      const queue = new LatestSnapshotQueue<ChatModelRunResult>()
       let liveText = ''
 
       // Accumulated assistant-ui content parts for the in-flight assistant turn.
@@ -435,7 +455,22 @@ export function createLocalAgentAdapter({ sessionId, initialMessages, skills = [
         | { kind: 'tool'; toolCallId: string; toolName: string; args: unknown; argsText: string; result?: unknown; isError?: boolean }
       const drafts: Draft[] = []
       let textDraft: Extract<Draft, { kind: 'text' }> | undefined
-      const publish = () => signal.notify()
+      const snapshot = (): ChatModelRunResult => ({
+        content: drafts.map((draft): TextMessagePart | ToolCallMessagePart =>
+          draft.kind === 'text'
+            ? { type: 'text', text: draft.text }
+            : {
+                type: 'tool-call',
+                toolCallId: draft.toolCallId,
+                toolName: draft.toolName,
+                args: draft.args as never,
+                argsText: draft.argsText,
+                result: draft.result as never,
+                isError: draft.isError,
+              },
+        ),
+      })
+      const publish = () => queue.push(snapshot())
       const setLiveText = (text: string) => {
         liveText = text
         if (textDraft) textDraft.text = text
@@ -510,31 +545,16 @@ export function createLocalAgentAdapter({ sessionId, initialMessages, skills = [
         }
       })
 
-      const snapshot = (): ChatModelRunResult => ({
-        content: drafts.map((draft): TextMessagePart | ToolCallMessagePart =>
-          draft.kind === 'text'
-            ? { type: 'text', text: draft.text }
-            : {
-                type: 'tool-call',
-                toolCallId: draft.toolCallId,
-                toolName: draft.toolName,
-                args: draft.args as never,
-                argsText: draft.argsText,
-                result: draft.result as never,
-                isError: draft.isError,
-              },
-        ),
-      })
-
       const runPromise = agent.prompt(userText)
       void runPromise.then(
-        () => signal.close(),
-        () => signal.close(),
+        () => queue.close(),
+        () => queue.close(),
       )
       try {
-        while (!signal.closed) {
-          await signal.wait()
-          yield snapshot()
+        for (;;) {
+          const next = await queue.take()
+          if (next === undefined) break
+          yield next
         }
         await runPromise
         // Fall back to the agent's final assistant text if streaming missed it.

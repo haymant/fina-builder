@@ -4,7 +4,6 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
-  useAui,
   useLocalRuntime,
   type ThreadMessageLike,
 } from '@assistant-ui/react'
@@ -239,17 +238,6 @@ function ChatThread({
     [sessionId, initialPiMessages, activeSkills, onSaved],
   )
   const runtime = useLocalRuntime(adapter, { initialMessages: displayMessages })
-  const aui = useAui()
-
-  // Insert `/{token}` into the composer, replacing a trailing partial token so
-  // repeated picks do not stack. Falls back to appending when the composer is
-  // empty or ends in whitespace.
-  const insertToken = (token: string) => {
-    const current = aui.composer.getState().text
-    const replaced = current.replace(/\S*$/, token)
-    const next = current.length === 0 || /\s$/.test(current) ? `${current}${token}` : replaced
-    aui.composer.setText(next.endsWith(' ') ? next : `${next} `)
-  }
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -327,7 +315,6 @@ function ChatThread({
                   onToggleSkill={onToggleSkill}
                   onRetryConnection={onRetryConnection}
                   onRefreshSkills={onRefreshSkills}
-                  onInsert={insertToken}
                 />
                 <ModelPicker loadedName={loadedName} models={models} onSelect={onSelectModel} onManage={onManageModels} />
               </div>

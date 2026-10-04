@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Bot, ChevronRight, Hammer, Plus, RefreshCw, Server, Wrench } from 'lucide-react'
+import { useAui } from '@assistant-ui/react'
 import type { AgentSkill } from './skills'
 import type { McpConnection } from './mcpClient'
 
@@ -12,8 +13,6 @@ export type ComposerMenuProps = {
   onToggleSkill: (id: string) => void
   onRetryConnection: () => void
   onRefreshSkills: () => void
-  /** Insert `/{name}` tokens into the composer for a chosen tool or skill. */
-  onInsert: (token: string) => void
 }
 
 type MenuView = 'root' | 'servers' | 'tools' | 'skills'
@@ -72,11 +71,11 @@ export function ComposerSourceMenu({
   onToggleSkill,
   onRetryConnection,
   onRefreshSkills,
-  onInsert,
 }: ComposerMenuProps) {
   const [open, setOpen] = useState(false)
   const [view, setView] = useState<MenuView>('root')
   const rootRef = useRef<HTMLDivElement>(null)
+  const aui = useAui()
 
   useEffect(() => {
     if (!open) return
@@ -100,8 +99,23 @@ export function ComposerSourceMenu({
       ? 'connecting…'
       : 'unavailable'
 
+  // Insert `/{name}` into the composer, replacing a trailing partial token so
+  // repeated picks do not stack. Runs inside the composer scope, so
+  // `aui.composer` is always the active thread composer.
+  const insertToken = (name: string) => {
+    const token = `/${name}`
+    let current = ''
+    try {
+      current = aui.composer.getState().text
+    } catch {
+      current = ''
+    }
+    const next = current.length === 0 || /\s$/.test(current) ? `${current}${token}` : current.replace(/\S*$/, token)
+    aui.composer.setText(next.endsWith(' ') ? next : `${next} `)
+  }
+
   const choose = (name: string) => {
-    onInsert(`/${name}`)
+    insertToken(name)
     setOpen(false)
   }
 

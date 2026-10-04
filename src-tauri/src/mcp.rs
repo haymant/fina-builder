@@ -253,9 +253,10 @@ impl McpRuntime {
         })
     }
 
-    /// Drop the connection so the next call respawns the server.
-    pub fn reset(&self) {
-        if let Ok(mut guard) = self.process.lock() {
+    /// Non-blocking reset for async command handlers: if a call currently holds
+    /// the connection, leave it alone rather than stalling a runtime worker.
+    pub fn try_reset(&self) {
+        if let Ok(mut guard) = self.process.try_lock() {
             *guard = None;
         }
     }
@@ -311,5 +312,12 @@ mod tests {
         // Reuse: a second call should not respawn and should still work.
         let again = runtime.call_tool("health", json!({})).expect("second call");
         assert!(!again.is_error);
+
+        // A larger, argument-less demo tool (the shape the chat calls).
+        let distributions = runtime
+            .call_tool("get_distributions", json!({}))
+            .expect("get_distributions");
+        assert!(!distributions.is_error);
+        assert!(distributions.structured_content.is_some());
     }
 }

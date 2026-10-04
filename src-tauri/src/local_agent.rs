@@ -865,7 +865,7 @@ pub async fn mcp_call_tool(
 /// Drop the MCP connection so the next call respawns the server.
 #[tauri::command]
 pub fn mcp_reset(state: State<'_, LocalAgentRuntime>) -> Result<(), String> {
-    state.mcp_handle().reset();
+    state.mcp_handle().try_reset();
     Ok(())
 }
 
