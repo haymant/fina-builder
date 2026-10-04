@@ -137,6 +137,15 @@ pub struct LocalAgentRuntime {
     engine: Arc<Mutex<Option<LoadedModel>>>,
     downloads: Arc<Mutex<HashMap<String, CancellationToken>>>,
     generations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    /// Rust-owned connection to the bundled `fina-mcp` stdio server.
+    mcp: Arc<crate::mcp::McpRuntime>,
+}
+
+impl LocalAgentRuntime {
+    /// Shared handle to the MCP runtime for `spawn_blocking` closures.
+    pub fn mcp_handle(&self) -> Arc<crate::mcp::McpRuntime> {
+        self.mcp.clone()
+    }
 }
 
 struct LoadedModel {
@@ -816,6 +825,48 @@ pub fn get_mcp_server_path(app: AppHandle) -> Result<String, String> {
         "fina-mcp binary not found. Build it with `cargo build -p fina-mcp`, or set FINA_MCP_BIN."
             .into(),
     )
+}
+
+/// Connect to the bundled `fina-mcp` server (if needed) and return its
+/// advertised tools. The child process is owned by the Rust runtime.
+#[tauri::command]
+pub async fn mcp_list_tools(
+    app: AppHandle,
+    state: State<'_, LocalAgentRuntime>,
+) -> Result<Value, String> {
+    let binary = get_mcp_server_path(app)?;
+    let mcp = state.mcp_handle();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (server, version, tools) = mcp.list_tools(&binary)?;
+        Ok::<Value, String>(json!({
+            "server": server,
+            "version": version,
+            "tools": tools,
+        }))
+    })
+    .await
+    .map_err(|e| format!("MCP worker failed: {e}"))?
+}
+
+/// Invoke one MCP tool through the Rust-owned connection.
+#[tauri::command]
+pub async fn mcp_call_tool(
+    state: State<'_, LocalAgentRuntime>,
+    name: String,
+    arguments: Option<Value>,
+) -> Result<crate::mcp::McpCallResult, String> {
+    let mcp = state.mcp_handle();
+    let arguments = arguments.unwrap_or_else(|| json!({}));
+    tauri::async_runtime::spawn_blocking(move || mcp.call_tool(&name, arguments))
+        .await
+        .map_err(|e| format!("MCP worker failed: {e}"))?
+}
+
+/// Drop the MCP connection so the next call respawns the server.
+#[tauri::command]
+pub fn mcp_reset(state: State<'_, LocalAgentRuntime>) -> Result<(), String> {
+    state.mcp_handle().reset();
+    Ok(())
 }
 
 #[cfg(test)]

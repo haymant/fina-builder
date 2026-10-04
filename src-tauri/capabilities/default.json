@@ -7,28 +7,6 @@
   ],
   "permissions": [
     "core:default",
-    "opener:allow-open-path",
-    {
-      "identifier": "shell:allow-spawn",
-      "allow": [
-        {
-          "name": "binaries/fina-mcp",
-          "sidecar": true,
-          "args": true
-        }
-      ]
-    },
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "binaries/fina-mcp",
-          "sidecar": true,
-          "args": true
-        }
-      ]
-    },
-    "shell:allow-kill",
-    "shell:allow-stdin-write"
+    "opener:allow-open-path"
   ]
 }

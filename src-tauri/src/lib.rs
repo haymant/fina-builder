@@ -7,6 +7,7 @@
 
 pub mod commands;
 pub mod local_agent;
+pub mod mcp;
 
 use fina_kernel::api::HealthResponse;
 use fina_kernel::FinaErrorWire;
@@ -24,7 +25,6 @@ fn health() -> Result<HealthResponse, FinaErrorWire> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_shell::init())
         .manage(local_agent::LocalAgentRuntime::default())
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -65,6 +65,9 @@ pub fn run() {
             local_agent::load_local_agent_session,
             local_agent::get_preferred_model,
             local_agent::get_mcp_server_path,
+            local_agent::mcp_list_tools,
+            local_agent::mcp_call_tool,
+            local_agent::mcp_reset,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

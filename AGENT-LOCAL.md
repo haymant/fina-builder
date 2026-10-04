@@ -23,7 +23,7 @@ App.tsx: lazy-load LocalAgentPanel on first open; keep mounted after first open
     │       ▼
     │   Pi Agent per assistant-ui thread
     │       ├── built-in read-only Tauri/kernel tools
-    │       ├── fina-mcp tools (spawned as a Tauri sidecar)
+    │       ├── fina-mcp tools (via Rust-owned MCP process)
     │       └── custom streamFn
     │               │ Tauri invoke + `llm-token` events
     ▼               ▼
@@ -35,16 +35,19 @@ LocalAgentPanel ─── Tauri IPC ─── src-tauri/src/local_agent.rs
                                                ▼
                                       loaded GGUF + embedded chat template
 
-piLocalRuntime ── @earendil-works/pi-mcp McpClient ── Tauri shell plugin
-                                                        │ spawns sidecar
-                                                        ▼
-                                            crates/fina-mcp (stdio JSON-RPC)
-                                                        │ dispatch_sync
-                                                        ▼
-                                                    fina-kernel
+piLocalRuntime ── Tauri IPC (mcp_list_tools / mcp_call_tool)
+      │
+      ▼
+src-tauri/src/mcp.rs ── spawns + owns fina-mcp stdio process
+                                      │ JSON-RPC initialize/tools/list/tools/call
+                                      ▼
+                            crates/fina-mcp (stdio JSON-RPC)
+                                      │ dispatch_sync
+                                      ▼
+                                  fina-kernel
 ```
 
-The local-agent subsystem is separate from the kernel's financial/domain logic. Existing Tauri commands under `src-tauri/src/commands/` remain adapters to `fina-kernel`; local-agent commands manage desktop infrastructure and invoke the native model runtime. The `crates/fina-mcp` stdio server **is** connected: the embedded Pi agent spawns it as a Tauri sidecar (`bundle.externalBin`) and consumes its advertised tools through `@earendil-works/pi-mcp`. The three built-in kernel tools remain as a fast path that does not depend on the sidecar.
+The local-agent subsystem is separate from the kernel's financial/domain logic. Existing Tauri commands under `src-tauri/src/commands/` remain adapters to `fina-kernel`; local-agent commands manage desktop infrastructure and invoke the native model runtime. The `crates/fina-mcp` stdio server **is** connected: the Rust runtime (`src-tauri/src/mcp.rs`) spawns and owns the process, performs the MCP handshake, and exposes `mcp_list_tools` / `mcp_call_tool` to the frontend. The three built-in kernel tools remain as a fast path that does not depend on the server.
 
 ## Source map and ownership
 
@@ -54,14 +57,15 @@ The local-agent subsystem is separate from the kernel's financial/domain logic. 
 | `src/App.tsx` | Opens the panel and lazy-loads its chunk only after first use. It retains the panel component after first open so its in-memory runtime survives closing/reopening the drawer during the app process. |
 | `src/features/local-agent/LocalAgentPanel.tsx` | Model discovery/catalog UI, download progress and cancellation, load/change model, open model directory, chat rendering, composer (icon send/stop, model picker), header new-chat and chat-history controls, and user-visible errors. |
 | `src/features/local-agent/piLocalRuntime.ts` | Pi Agent tools/system prompt, MCP tool loading and merge, skills injection, robust tool-request parsing, per-session Agent map, per-session assistant-ui adapter factory, stored-message→thread-message mapping for restore, Tauri token-event subscription, and native inference calls. |
-| `src/features/local-agent/mcpClient.ts` | Memoized `@earendil-works/pi-mcp` `McpClient` connection, the Tauri-shell-plugin `McpTransport`, and MCP-tool→`AgentTool` adaptation. |
+| `src/features/local-agent/mcpClient.ts` | Thin Tauri-command wrapper for `mcp_list_tools` / `mcp_call_tool`, memoized tool list, and MCP-tool→`AgentTool` adaptation. |
 | `src/features/local-agent/ComposerSourceMenu.tsx` | Composer `+` menu: MCP server (with hover tool list and retry) and inline skill toggles. |
 | `src/features/local-agent/skills.ts` | Built-in agent skill registry (instruction blocks injected into the system prompt). |
-| `src-tauri/src/local_agent.rs` | Catalog source of truth, local filesystem operations, model download/verification, loaded-model state, inference/cancellation, session/config JSONL, and MCP sidecar path resolution. |
+| `src-tauri/src/local_agent.rs` | Catalog source of truth, local filesystem operations, model download/verification, loaded-model state, inference/cancellation, session/config JSONL, and MCP server path resolution plus commands. |
 | `crates/fina-mcp/src/main.rs` | Newline-delimited JSON-RPC 2.0 MCP stdio server dispatching to `fina-kernel`'s shared command dispatcher. |
+| `src-tauri/src/mcp.rs` | Rust-owned `fina-mcp` process: spawn, MCP handshake, `tools/list`, `tools/call`, and reconnect. |
 | `scripts/build-mcp-sidecar.sh` | Builds `fina-mcp` and stages it as a triple-suffixed Tauri sidecar under `src-tauri/binaries/`. |
 | `src-tauri/src/lib.rs` | Owns `LocalAgentRuntime` as Tauri state and registers the local-agent commands alongside the app's other commands. |
-| `src-tauri/capabilities/default.json` | Tauri permissions: model-directory opener plus scoped sidecar spawn/kill/stdin for `fina-mcp`. |
+| `src-tauri/capabilities/default.json` | Tauri permissions: `core:default` plus the model-directory opener. No shell permissions (Rust owns the MCP process). |
 
 ## Runtime and data flow
 
@@ -73,7 +77,7 @@ The panel detects Tauri through `window.__TAURI_INTERNALS__`. In non-Tauri brows
 
 The chat composer follows the assistant-ui composer convention: text field plus a toolbar row with a `+` source menu and the model picker on the left and a round send icon button that swaps to a stop (square) icon while a run is in flight. Changing the active model and opening the model manager both live in that toolbar / its popover. The `+` menu (`ComposerSourceMenu`) opens two categories: `MCP server` lists the registered server and, on hover, that server's tools; `Skills` lists the built-in skills inline as toggles. When the sidecar is unavailable the MCP category shows the error and a retry button. `New chat` and a chat-history browser are icon buttons in the panel header.
 
-Skills (`src/features/local-agent/skills.ts`) are named instruction blocks from the agent-skills convention. Toggling one in the `+` menu injects its `instructions` into the system prompt; skills only shape the prompt and never grant new capabilities. The active set is per-panel state passed into the adapter.
+Skills (`src/features/local-agent/skills.ts`) are named instruction blocks from the agent-skills convention. They are a **static TypeScript registry** — there is no `SKILL.md` discovery or file loading; add entries to `AGENT_SKILLS` to define one. Toggling one in the `+` menu injects its `instructions` into the system prompt; skills only shape the prompt and never grant new capabilities. The active set is per-panel state passed into the adapter.
 
 ### 2. Model discovery, download, and loading
 
@@ -111,7 +115,7 @@ Rust uses the GGUF's embedded chat template (`chat_template` plus `apply_chat_te
 
 The agent loadout has two sources, resolved on the first prompt of each adapter:
 
-**Built-in tools** (no sidecar dependency), invoked directly through Tauri:
+**Built-in tools** (no MCP dependency), invoked directly through Tauri:
 
 | Tool | Tauri command | Result source |
 | --- | --- | --- |
@@ -119,7 +123,7 @@ The agent loadout has two sources, resolved on the first prompt of each adapter:
 | `get_distributions` | `get_distributions` | Payoff distribution summary from the kernel demo bundle. |
 | `get_mc_diagnostics` | `get_mc_diagnostics` | Kernel's illustrative MC diagnostics. |
 
-**MCP tools**, every tool `fina-mcp` advertises via `tools/list` (currently all twelve kernel commands: `generate_paths`, `get_path`, `get_branch_stats`, `get_distributions`, `compute_trade_analytics`, `compute_risk`, `get_mc_diagnostics`, `build_cashflows`, `valuation_explain`, `explain_ledger`, `execution_events`, `health`). `piLocalRuntime.loadMcpTools` connects with `@earendil-works/pi-mcp`'s `McpClient` over a custom transport and wraps each tool as a pi-agent-core `AgentTool` named `mcp_<tool>` (providers cap tool names at 64 chars of `[A-Za-z0-9_-]`). If the sidecar cannot be spawned, the chat logs a warning and continues with only the built-in tools.
+**MCP tools**, every tool `fina-mcp` advertises via `tools/list` (currently all twelve kernel commands: `generate_paths`, `get_path`, `get_branch_stats`, `get_distributions`, `compute_trade_analytics`, `compute_risk`, `get_mc_diagnostics`, `build_cashflows`, `valuation_explain`, `explain_ledger`, `execution_events`, `health`). `piLocalRuntime.loadMcpTools` calls `mcp_list_tools` and wraps each tool as a pi-agent-core `AgentTool` named `mcp_<tool>` (providers cap tool names at 64 chars of `[A-Za-z0-9_-]`). If the server cannot start, the chat logs a warning and continues with only the built-in tools.
 
 The chat does not yet pass the UI's edited trade/market settings into these tools; MCP calls that take `trade`/`market` arguments must supply them in the tool arguments.
 
@@ -127,19 +131,21 @@ Tool planning is implemented as a constrained text protocol, not native llama fu
 
 `toolRequest` must stay tolerant of real model output. Small local models wrap the JSON in prose and markdown fences, so it scans the reply for brace-balanced `{...}` slices (`jsonObjectSlices`) instead of parsing the whole string. It also resolves requested names against the loadout: exact matches win, and a bare name such as `get_mc_diagnostics` maps to its `mcp_`-prefixed tool. That resolution is covered by unit tests in `src/features/local-agent/__tests__/piLocalRuntime.test.ts`.
 
-Pi's sequential tool execution then runs the matched `AgentTool`, which either invokes a Tauri command or calls `client.callTool`. Update the system-prompt builder and parser together with any loadout change. Do not treat model-generated JSON as trusted input.
+Pi's sequential tool execution then runs the matched `AgentTool`, which either invokes a Tauri command or calls `mcp_call_tool`. Update the system-prompt builder and parser together with any loadout change. Do not treat model-generated JSON as trusted input.
 
-Built-in kernel tools and MCP tools are merged by `mergeTools`: when the MCP server exposes a tool whose normalized name matches a built-in, the MCP tool wins so the model never sees two tools that do the same thing. Built-ins survive only as a fallback when the sidecar is unavailable. When a turn completes, tool results are replayed to native inference as prefixed `user` turns (the portable choice across GGUF chat templates).
+Built-in kernel tools and MCP tools are merged by `mergeTools`: when the MCP server exposes a tool whose normalized name matches a built-in, the MCP tool wins so the model never sees two tools that do the same thing. Built-ins survive only as a fallback when the server is unavailable. When a turn completes, tool results are replayed to native inference as prefixed `user` turns (the portable choice across GGUF chat templates).
 
-### MCP sidecar integration
+### MCP integration
 
-`crates/fina-mcp` is a newline-delimited JSON-RPC 2.0 MCP server over stdio. It is built into the desktop bundle as a Tauri sidecar:
+`crates/fina-mcp` is a newline-delimited JSON-RPC 2.0 MCP server over stdio. The desktop app ships it as a Tauri sidecar and the **Rust runtime owns the process**:
 
 - `scripts/build-mcp-sidecar.sh` runs `cargo build -p fina-mcp` and stages `target/debug/fina-mcp` at `src-tauri/binaries/fina-mcp-<target-triple>` (the path Tauri's `bundle.externalBin` requires). It runs from `beforeDevCommand` and `beforeBuildCommand`, and standalone via `npm run mcp:sidecar`.
-- `src-tauri/capabilities/default.json` grants `shell:allow-spawn` / `shell:allow-execute` scoped to the `fina-mcp` sidecar, plus `shell:allow-kill` and `shell:allow-stdin-write`.
-- `get_mcp_server_path` resolves the binary (env override → resource dir → next to the exe → workspace `target/`) for a clear preflight error; the actual spawn uses `Command.sidecar('binaries/fina-mcp')`. The name passed to `Command.sidecar` **must exactly equal** the `bundle.externalBin` entry (`binaries/fina-mcp`): the shell plugin matches that string, and the capability scope `name` must match it too. The plugin then reduces it to the basename (`fina-mcp`) to locate the staged binary next to the executable.
+- `get_mcp_server_path` resolves the binary (env override → resource dir → next to the exe → workspace `target/`).
+- `src-tauri/src/mcp.rs` spawns the resolved binary, performs `initialize` + `notifications/initialized`, and serves requests on a background reader thread with per-id response routing. It exposes `mcp_list_tools`, `mcp_call_tool`, and `mcp_reset`. The process is held in `LocalAgentRuntime` for the app lifetime.
 
-`src/features/local-agent/mcpClient.ts` owns the connection. pi-mcp's bundled `StdioTransport` cannot run in the webview (it uses `node:child_process`), so `TauriSidecarTransport` implements `McpTransport` over the Tauri shell plugin: it spawns the sidecar, re-frames stdout lines with `parseJsonRpcMessage`, and writes requests to the child's stdin. The connection is memoized for the app process and shared by all chat sessions; `resetMcpConnection` drops it to force a reconnect.
+`src/features/local-agent/mcpClient.ts` is a thin wrapper: it calls `mcp_list_tools`, adapts each tool to a pi-agent-core `AgentTool` named `mcp_<tool>` (using `toLlmContent` for result content), and memoizes the list per app process. Tool execution goes through `mcp_call_tool`. `resetMcpConnection` clears the cache and calls `mcp_reset` so the next call respawns the server.
+
+**Why not the webview shell plugin:** an earlier revision spawned the sidecar from the webview via `@tauri-apps/plugin-shell`, which required a `shell:allow-spawn` capability scoped to the exact `externalBin` string. That scope check proved fragile and the process was never spawned in practice, so the connection now lives entirely in Rust. The webview no longer needs any shell permission; `capabilities/default.json` grants only `core:default` and the opener.
 
 ### 4. App data and sessions
 
@@ -177,7 +183,10 @@ All commands below are registered in `src-tauri/src/lib.rs`. Rust command argume
 | `list_local_agent_sessions` | Returns session IDs, titles, modified time, and message count. |
 | `load_local_agent_session` | `sessionId`; returns stored Pi message objects used to restore a chat. |
 | `get_preferred_model` | Returns the saved preferred model path, if present. |
-| `get_mcp_server_path` | Resolves the `fina-mcp` sidecar binary for a clear preflight error; the spawn itself uses the shell plugin. |
+| `get_mcp_server_path` | Resolves the `fina-mcp` sidecar binary for the Rust MCP client. |
+| `mcp_list_tools` | Starts (if needed) the `fina-mcp` process and returns server info plus `tools/list`. |
+| `mcp_call_tool` | `name`, `arguments`; calls one MCP tool and returns its content. |
+| `mcp_reset` | Drops the MCP connection so the next call respawns the server. |
 
 ### Events
 
@@ -194,9 +203,9 @@ All commands below are registered in `src-tauri/src/lib.rs`. Rust command argume
 - After an optional model download, prompts and inference stay local; this code does not send prompts to a hosted inference API.
 - Curated model artifacts come from third-party HTTPS hosts. Their licenses/terms are upstream, linked in the model selector; local availability does not change those terms.
 - Local path validation is rooted at the app-managed models directory. Session IDs are validated before constructing session paths.
-- The agent exposes the built-in read-only kernel tools plus every tool `fina-mcp` advertises. Expanding this to mutating or external-action tools changes product behavior and needs explicit product design, validation, and user-facing affordances. The sidecar itself is scoped in `capabilities/default.json` to the single `fina-mcp` binary.
+- The agent exposes the built-in read-only kernel tools plus every tool `fina-mcp` advertises. Expanding this to mutating or external-action tools changes product behavior and needs explicit product design, validation, and user-facing affordances. The MCP process is owned by Rust and is not reachable from the webview.
 - Outputs are based on synthetic/demo data and illustrative diagnostics. Retain the system-prompt and UI disclaimers when changing the assistant.
-- The embedded chat connects to `fina-mcp` over stdio as a Tauri sidecar (in-process, no network). To add other MCP servers, add a scoped sidecar/command and a transport in `mcpClient.ts`; do not assume an arbitrary stdio process is reachable.
+- The embedded chat runs `fina-mcp` over stdio as a child process owned by the Rust runtime (in-process, no network). To add other MCP servers, extend `src-tauri/src/mcp.rs` and the `mcp_*` commands; do not expose shell spawning to the webview.
 
 ## Current constraints and gaps
 

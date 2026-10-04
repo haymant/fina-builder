@@ -517,9 +517,8 @@ export function LocalAgentPanel({ open, onClose }: { open: boolean; onClose: () 
     }
   }, [open, refresh])
 
-  // Connect to the bundled fina-mcp sidecar so the composer `+` menu can list
-  // the server and its tools. The connection is memoized in mcpClient, so this
-  // shares the same client the chat adapter uses.
+  // Load the MCP tool list for the composer `+` menu. The Rust runtime owns the
+  // `fina-mcp` process; this just calls `mcp_list_tools`.
   const connectMcp = useCallback(() => {
     if (!isTauri) return
     // Defer the first state update so calling this from an effect does not
