@@ -106,20 +106,22 @@ jobs:
           # macos-15/macos-14/macos-latest are Apple Silicon runners; the Intel
           # image is `macos-15-intel` (macos-13 was retired by GitHub).
           #
-          # `minimumSystemVersion` in tauri.conf.json (10.15) makes the Tauri CLI
-          # export `MACOSX_DEPLOYMENT_TARGET`, which llama.cpp's ggml needs:
-          # std::filesystem is unavailable before 10.15. `deploymentTarget` below
-          # only keys the rust-cache so a stale CMake tree is never reused.
+          # `minimumSystemVersion` in tauri.conf.json (11.0) makes the Tauri CLI
+          # export `MACOSX_DEPLOYMENT_TARGET`. llama.cpp's ggml needs >= 10.15
+          # for std::filesystem; 11.0 also matches the Rust aarch64 target
+          # default so ggml and the final link agree (a lower ggml target links
+          # without `___isPlatformVersionAtLeast`). `deploymentTarget` below only
+          # keys the rust-cache so a stale CMake tree is never reused.
           - label: macos-aarch64
             os: macos-15
             args: '--target aarch64-apple-darwin --bundles dmg'
             targets: 'aarch64-apple-darwin'
-            deploymentTarget: '10.15'
+            deploymentTarget: '11.0'
           - label: macos-x86_64
             os: macos-15-intel
             args: '--target x86_64-apple-darwin --bundles dmg'
             targets: 'x86_64-apple-darwin'
-            deploymentTarget: '10.15'
+            deploymentTarget: '11.0'
           - label: windows-x86_64
             os: windows-2025
             args: '--bundles msi,nsis'

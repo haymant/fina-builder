@@ -29,7 +29,7 @@
     "active": true,
     "targets": "all",
     "macOS": {
-      "minimumSystemVersion": "10.15"
+      "minimumSystemVersion": "11.0"
     },
     "externalBin": [
       "binaries/fina-mcp"
