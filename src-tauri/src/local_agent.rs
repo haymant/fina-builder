@@ -244,6 +244,31 @@ pub fn get_app_paths(app: AppHandle) -> Result<AppPaths, String> {
     app_paths(&app)
 }
 
+/// Persist a frontend error so a webview failure is diagnosable after the fact.
+/// Also mirrored to stderr, which `tauri dev` shows in the terminal.
+#[tauri::command]
+pub fn report_frontend_error(
+    app: AppHandle,
+    context: String,
+    message: String,
+) -> Result<(), String> {
+    let line = format!(
+        "[{}] {context}: {message}\n",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default()
+    );
+    eprintln!("frontend-error {}", line.trim_end());
+    if let Ok(paths) = app_paths(&app) {
+        let path = std::path::PathBuf::from(paths.app_data_dir).join("frontend-errors.log");
+        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = std::io::Write::write_all(&mut file, line.as_bytes());
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn curated_model_catalog() -> Vec<Value> {
     CATALOG

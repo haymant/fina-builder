@@ -4,7 +4,8 @@
 
 import { describe, expect, it } from 'vitest'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
-import { jsonObjectSlices, mergeTools, toolRequest } from '../piLocalRuntime'
+import type { Message, TranscriptContext } from '@earendil-works/pi-ai'
+import { jsonObjectSlices, mergeTools, toNativeMessages, toolRequest } from '../piLocalRuntime'
 
 const tool = (name: string): AgentTool =>
   ({
@@ -91,5 +92,71 @@ describe('toolRequest', () => {
   it('parses a toolCall echo without the mcp prefix', () => {
     const echoed = '{"toolCall":{"name":"compute_risk","arguments":{"x":2}}}'
     expect(toolRequest(echoed, tools)).toEqual({ name: 'mcp_compute_risk', args: { x: 2 } })
+  })
+})
+
+// A full payoff path from `get_path` is ~50k characters (~13k tokens). Feeding
+// that back verbatim overflowed the 4096-token context, so the first tool call
+// succeeded and every later turn in the same chat failed. `toNativeMessages`
+// must clamp per-message content and window the whole transcript.
+const context = (messages: Message[]): TranscriptContext => ({ messages }) as TranscriptContext
+
+const user = (text: string): Message => ({ role: 'user', content: text, timestamp: 0 })
+const toolResult = (text: string): Message =>
+  ({ role: 'toolResult', toolCallId: 'call-1', toolName: 'mcp_get_path', content: text, isError: false }) as unknown as Message
+
+describe('toNativeMessages', () => {
+  it('clamps an oversized tool result and marks the truncation', () => {
+    const messages = toNativeMessages(context([toolResult('x'.repeat(50_801))]))
+    expect(messages).toHaveLength(1)
+    expect(messages[0].role).toBe('user')
+    expect(messages[0].content).toContain('Tool result:\n')
+    expect(messages[0].content).toContain('truncated:')
+    expect(messages[0].content.length).toBeLessThan(3_000)
+  })
+
+  it('leaves a small message untouched', () => {
+    expect(toNativeMessages(context([user('call get_path')]))).toEqual([{ role: 'user', content: 'call get_path' }])
+  })
+
+  it('keeps the system message and drops the oldest turns first', () => {
+    const system = { role: 'system', content: 'You are the payoff agent.' } as Message
+    const many = Array.from({ length: 20 }, (_, index) => user(`turn-${index} ${'y'.repeat(1_500)}`))
+    const messages = toNativeMessages(context([system, ...many]))
+
+    expect(messages[0]).toEqual({ role: 'system', content: 'You are the payoff agent.' })
+    // The newest turn always survives, the oldest does not.
+    expect(messages.at(-1)?.content).toContain('turn-19')
+    expect(messages.some((message) => message.content.includes('turn-0 '))).toBe(false)
+  })
+
+  it('preserves order with the newest turn last', () => {
+    const many = Array.from({ length: 8 }, (_, index) => user(`turn-${index} ${'z'.repeat(40_000)}`))
+    const messages = toNativeMessages(context(many))
+    expect(messages.at(-1)?.content).toContain('turn-7')
+    expect(messages.every((message) => message.content.includes('truncated:'))).toBe(true)
+    const keptOrder = messages.map((message) => Number(/turn-(\d+)/.exec(message.content)?.[1]))
+    expect(keptOrder).toEqual([...keptOrder].sort((a, b) => a - b))
+  })
+
+  it('stays inside the transcript budget for a long tool-heavy chat', () => {
+    const messages = toNativeMessages(
+      context([
+        user('call get_path'),
+        toolResult('p'.repeat(50_000)),
+        { role: 'assistant', content: [{ type: 'text', text: 'Here is path 1.' }] } as Message,
+        user('and path 2?'),
+        toolResult('p'.repeat(50_000)),
+        { role: 'assistant', content: [{ type: 'text', text: 'Here is path 2.' }] } as Message,
+        user('thanks'),
+      ]),
+    )
+    const total = messages.reduce((sum, message) => sum + message.content.length, 0)
+    expect(total).toBeLessThanOrEqual(12_000)
+    expect(messages.at(-1)?.content).toBe('thanks')
+  })
+
+  it('drops empty turns', () => {
+    expect(toNativeMessages(context([user('   '), user('real question')]))).toEqual([{ role: 'user', content: 'real question' }])
   })
 })

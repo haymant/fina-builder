@@ -130,6 +130,19 @@ The agent loadout has two sources, resolved on the first prompt of each adapter:
 
 The chat does not yet pass the UI's edited trade/market settings into these tools; MCP calls that take `trade`/`market` arguments must supply them in the tool arguments.
 
+#### Payload limits
+
+A single `get_path` call returns a whole payoff path: ~50k characters, roughly 13k tokens against a 4096-token context. Carrying that untrimmed had two consequences: the next turn's prompt overflowed the context and every later tool call in the same chat failed, and the webview held and re-rendered a 50k string per tool call. Three caps keep a long chat working:
+
+| Cap | Value | Where | Why |
+| --- | --- | --- | --- |
+| `MAX_TOOL_RESULT_CHARS` | 4000 | `mcpClient.capLlmContent` / `capToolDetails` | The webview and the model never see more than 4k characters of a tool result. Blocks share one budget; images pass through. |
+| `MAX_NATIVE_MESSAGE_CHARS` | 2400 | `piLocalRuntime.toNativeMessages` | Last line of defence per message, with an explicit truncation marker the model can see. |
+| `MAX_NATIVE_TOTAL_CHARS` | 12000 | `piLocalRuntime.toNativeMessages` | Whole-transcript window: system messages are kept, older turns are dropped newest-first so a long chat stays inside the context instead of failing every turn. |
+| `MAX_TOOL_RESULT_DISPLAY_CHARS` | 4000 | `LocalAgentPanel.toolResultText` | Rendered disclosure text is stringified once per `toolCallId` and cached, so re-rendering a long chat does not re-stringify every result. |
+
+Rust still rejects an over-long prompt with `Conversation too long for the configured N-token context`, which the thread now surfaces through `MessagePrimitive.Error` even when the assistant turn produced no text.
+
 Tool planning is implemented as a constrained text protocol, not native llama function calling: the system prompt lists every active tool (drawn from the merged loadout) and asks for exactly one JSON object of the form `{"tool":"<tool-name>","arguments":{}}`.
 
 `toolRequest` must stay tolerant of real model output. Small local models wrap the JSON in prose and markdown fences, so it scans the reply for brace-balanced `{...}` slices (`jsonObjectSlices`) instead of parsing the whole string. It also resolves requested names against the loadout: exact matches win, and a bare name such as `get_mc_diagnostics` maps to its `mcp_`-prefixed tool. That resolution is covered by unit tests in `src/features/local-agent/__tests__/piLocalRuntime.test.ts`.
@@ -194,6 +207,7 @@ All commands below are registered in `src-tauri/src/lib.rs`. Rust command argume
 | `mcp_reset` | Drops the MCP connection so the next call respawns the server. |
 | `list_agent_skills` | Scans `skills/*/SKILL.md` and returns skill records. |
 | `skills_dir` | Returns the managed skills directory (app-data `skills/`). |
+| `report_frontend_error` | `context`, `message`; appends a webview error to `frontend-errors.log` in app data and mirrors it to stderr. Called from the global `window` handlers in `main.tsx` and from the panel error boundary. |
 
 ### Events
 
@@ -219,7 +233,8 @@ All commands below are registered in `src-tauri/src/lib.rs`. Rust command argume
 - Tauri desktop only; browser mode cannot load local files or execute native inference.
 - The panel offers eight curated Q4_K_M models and local discovery only inside the app-managed models folder. There is no arbitrary filesystem picker, resume-download support, or custom model catalog UI.
 - Model load/unload and context/sampler settings are not fully user-configurable. Models are not automatically loaded at startup. `unload_model` exists but has no panel control.
-- Frontend sends a 512-token cap. Rust allows up to 2048 for other callers, checks context fit, and does not expose a context-trimming strategy.
+- Frontend sends a 512-token cap. Rust allows up to 2048 for other callers, checks context fit, and does not expose a context-trimming strategy. The frontend applies the trimming itself (`MAX_NATIVE_MESSAGE_CHARS` / `MAX_NATIVE_TOTAL_CHARS`); if a caller bypasses those caps, Rust still rejects the prompt with a context error.
+- Tool results are truncated to `MAX_TOOL_RESULT_CHARS` for both the model and the UI, so a model cannot see the tail of a large payoff path. The full payload stays available through the Rust commands.
 - Native kernel tools inspect demo outputs; current assistant tools do not accept the user's transient trade/market inputs (MCP tools that need `trade`/`market` arguments must be given them in the call).
 - The MCP tool loadout is resolved once per adapter at first prompt. A tool-list change on a running server is not observed until a new chat/adapter is created.
 - Session browsing/restoration is in-process only: chats are restored from the Rust JSONL store when opened, but there is no automatic re-selection of the most recent chat on app restart.

@@ -51,6 +51,7 @@ pub fn run() {
             commands::valuation::valuation_explain,
             commands::valuation::explain_ledger,
             local_agent::get_app_paths,
+            local_agent::report_frontend_error,
             local_agent::curated_model_catalog,
             local_agent::list_local_models,
             local_agent::open_models_folder,

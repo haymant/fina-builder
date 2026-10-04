@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import { toLlmContent, type CallToolResult } from '@earendil-works/pi-mcp'
+import { toLlmContent, type CallToolResult, type LlmContent } from '@earendil-works/pi-mcp'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
 import { Type } from 'typebox'
 
@@ -51,6 +51,57 @@ async function callTool(name: string, args: Record<string, unknown>, signal?: Ab
   return invoke<McpCallResponse>('mcp_call_tool', { name, arguments: args })
 }
 
+/**
+ * Cap what a tool result hands back. `get_path` returns a whole payoff path —
+ * ~50k characters, ~13k tokens. Passing that through untrimmed exhausts the
+ * model's 4096-token context on the *next* turn, writes a 50k string into every
+ * saved session, and makes the webview re-render a 50k string per message on
+ * every render. Truncating here keeps the first turn succeeding and later turns
+ * working; `fina-mcp` still returns the full payload to any other consumer.
+ */
+export const MAX_TOOL_RESULT_CHARS = 4000
+
+function truncate(text: string, max = MAX_TOOL_RESULT_CHARS): string {
+  if (text.length <= max) return text
+  return `${text.slice(0, max)}\n… (${text.length - max} more characters truncated; call the tool again with a narrower request for the rest)`
+}
+
+/**
+ * Truncate text blocks in order against one shared budget, leaving images
+ * alone (they cost context but not characters). A block that crosses the
+ * budget keeps whatever budget is left; once the budget is spent, later text
+ * blocks collapse to their truncation marker so the model still sees that more
+ * content existed.
+ */
+export function capLlmContent(blocks: LlmContent[]): LlmContent[] {
+  let remaining = MAX_TOOL_RESULT_CHARS
+  return blocks.map((block) => {
+    if (block.type === 'image') return block
+    if (block.text.length <= remaining) {
+      remaining -= block.text.length
+      return block
+    }
+    const capped = truncate(block.text, Math.max(remaining, 0))
+    remaining = 0
+    return { type: 'text', text: capped }
+  })
+}
+
+/** Cap a tool payload for the UI, without mangling the shape of small results. */
+export function capToolDetails(details: unknown): unknown {
+  if (details === undefined || details === null) return details
+  if (typeof details === 'string') return truncate(details)
+  try {
+    const json = JSON.stringify(details)
+    if (json === undefined || json.length <= MAX_TOOL_RESULT_CHARS) return details
+    // Large enough that the raw object is not worth carrying through the IPC
+    // bridge: the disclosure shows the head, and the model sees the same text.
+    return truncate(json)
+  } catch {
+    return '[unserializable tool result]'
+  }
+}
+
 function adaptTool(tool: McpToolInfo): AgentTool {
   return {
     name: toolName(tool.name),
@@ -63,12 +114,15 @@ function adaptTool(tool: McpToolInfo): AgentTool {
     }) as never,
     execute: async (_toolCallId, params, signal) => {
       const result = await callTool(tool.name, params as Record<string, unknown>, signal)
-      return {
-        content: toLlmContent({
+      const content = capLlmContent(
+        toLlmContent({
           content: result.content as CallToolResult['content'],
           structuredContent: result.structuredContent as CallToolResult['structuredContent'],
-        }) as never,
-        details: result.structuredContent as never,
+        }),
+      )
+      return {
+        content: content as never,
+        details: capToolDetails(result.structuredContent) as never,
         isError: result.isError === true,
       }
     },

@@ -183,21 +183,57 @@ function toPiMessage(message: ChatModelRunOptions['messages'][number]) {
 }
 
 /**
+ * Cap a single message's content before it is sent to native inference. A
+ * tool result can be tens of kilobytes (~13k tokens for a full payoff path),
+ * which overflows the model's 4096-token context and makes every later turn
+ * in the chat fail. The full result stays in the UI; the model sees a head
+ * with an explicit truncation marker.
+ */
+const MAX_NATIVE_MESSAGE_CHARS = 2400
+
+/**
+ * Whole-transcript budget (~3k tokens of the 4096-token context). Older
+ * non-system messages are dropped, newest first, so a long chat keeps working
+ * instead of failing every turn with "conversation too long".
+ */
+const MAX_NATIVE_TOTAL_CHARS = 12000
+
+function clampForNative(content: string): string {
+  if (content.length <= MAX_NATIVE_MESSAGE_CHARS) return content
+  return `${content.slice(0, MAX_NATIVE_MESSAGE_CHARS)}\n… (truncated: ${content.length - MAX_NATIVE_MESSAGE_CHARS} more characters)`
+}
+
+/**
  * Build the message array for native inference. Tool results are delivered as
  * user turns with an explicit prefix: `LlamaChatMessage` carries only role and
  * content, and many GGUF chat templates expect a tool_call_id on real `tool`
  * turns, so a prefixed user turn is the portable choice across the catalog.
+ * A character-budgeted window keeps the prompt inside the model's context.
  */
-function toNativeMessages(context: TranscriptContext) {
-  return context.messages
+export function toNativeMessages(context: TranscriptContext) {
+  const clamped = context.messages
     .map((message) => {
-      const content = contentText(message.content)
+      const content = clampForNative(contentText(message.content))
       if (message.role === 'system') return { role: 'system', content }
       if (message.role === 'assistant') return { role: 'assistant', content }
       if (message.role === 'toolResult') return { role: 'user', content: `Tool result:\n${content}` }
       return { role: 'user', content }
     })
     .filter((message) => message.content.trim().length > 0)
+
+  const system = clamped.filter((message) => message.role === 'system')
+  const conversation = clamped.filter((message) => message.role !== 'system')
+  const budget = MAX_NATIVE_TOTAL_CHARS - system.reduce((sum, message) => sum + message.content.length, 0)
+
+  const kept: typeof conversation = []
+  let used = 0
+  for (let i = conversation.length - 1; i >= 0; i -= 1) {
+    const message = conversation[i]
+    if (used + message.content.length > budget && kept.length > 0) break
+    kept.unshift(message)
+    used += message.content.length
+  }
+  return [...system, ...kept]
 }
 
 /**

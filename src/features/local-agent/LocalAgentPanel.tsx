@@ -4,6 +4,7 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  unstable_useComposerInputHistory,
   useLocalRuntime,
   type ThreadMessageLike,
 } from '@assistant-ui/react'
@@ -84,8 +85,30 @@ function describeToolArgs(args: unknown): string {
   return `${key}: ${display}`.slice(0, 60)
 }
 
-function truncateForDisplay(text: string, max = 4000): string {
-  return text.length > max ? `${text.slice(0, max)}\n… (${text.length - max} more characters)` : text
+const MAX_TOOL_RESULT_DISPLAY_CHARS = 4000
+const toolResultTextCache = new Map<string, string>()
+
+/**
+ * Tool results can be tens of kilobytes (e.g. a full payoff path). Stringify
+ * once per toolCallId and cache it: re-stringifying on every render for every
+ * message in a long chat is what stalls and kills the webview.
+ */
+function toolResultText(toolCallId: string, result: unknown): string {
+  const cached = toolResultTextCache.get(toolCallId)
+  if (cached !== undefined) return cached
+  let text = ''
+  try {
+    if (typeof result === 'string') text = result
+    else if (result !== undefined && result !== null) text = JSON.stringify(result, null, 2) ?? ''
+  } catch {
+    text = ''
+  }
+  if (text.length > MAX_TOOL_RESULT_DISPLAY_CHARS) {
+    text = `${text.slice(0, MAX_TOOL_RESULT_DISPLAY_CHARS)}\n… (${text.length - MAX_TOOL_RESULT_DISPLAY_CHARS} more characters)`
+  }
+  if (toolResultTextCache.size > 200) toolResultTextCache.clear()
+  toolResultTextCache.set(toolCallId, text)
+  return text
 }
 
 function IconButton({
@@ -238,6 +261,9 @@ function ChatThread({
     [sessionId, initialPiMessages, activeSkills, onSaved],
   )
   const runtime = useLocalRuntime(adapter, { initialMessages: displayMessages })
+  // Terminal-style history: ArrowUp recalls previously sent user messages,
+  // ArrowDown steps back toward the newest.
+  const history = unstable_useComposerInputHistory()
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -265,21 +291,20 @@ function ChatThread({
                 >
                   {toolParts.map((part) => {
                     const running = part.result === undefined && !part.isError
-                    const resultText = typeof part.result === 'string' ? part.result : part.result === undefined ? '' : JSON.stringify(part.result, null, 2)
                     return (
                       <ToolCallDisclosure
                         key={part.toolCallId}
                         label={`Called ${part.toolName}`}
                         activeLabel={`Calling ${part.toolName}…`}
                         query={describeToolArgs(part.args)}
-                        request={part.argsText ?? JSON.stringify(part.args ?? {}, null, 2)}
-                        result={resultText ? truncateForDisplay(resultText) : ''}
+                        request={part.argsText ?? '{}'}
+                        result={toolResultText(part.toolCallId, part.result)}
                         running={running}
                         isError={part.isError}
                       />
                     )
                   })}
-                  {text || (!hasContent && message.role === 'assistant') ? (
+                  {text ? (
                     <div
                       className={`whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-xs leading-5 ${
                         message.role === 'user'
@@ -287,8 +312,17 @@ function ChatThread({
                           : 'agent-bubble rounded-bl-sm'
                       }`}
                     >
-                      {text || '…'}
+                      {text}
                       {message.role === 'assistant' ? <MessagePrimitive.Error /> : null}
+                    </div>
+                  ) : message.role === 'assistant' && !hasContent ? (
+                    <div className="agent-bubble rounded-2xl rounded-bl-sm px-3.5 py-2.5 text-xs leading-5">
+                      …
+                      <MessagePrimitive.Error />
+                    </div>
+                  ) : message.role === 'assistant' && message.status.type === 'incomplete' && message.status.reason === 'error' ? (
+                    <div className="agent-bubble rounded-2xl rounded-bl-sm px-3.5 py-2.5 text-xs leading-5">
+                      <MessagePrimitive.Error />
                     </div>
                   ) : null}
                 </div>
@@ -302,6 +336,7 @@ function ChatThread({
               aria-label="Message local assistant"
               placeholder="Ask about payoff paths or risk…"
               rows={1}
+              {...history}
               className="agent-text max-h-32 min-h-10 w-full resize-none bg-transparent px-2 py-2 text-xs outline-none placeholder:text-[color:var(--theme-muted)]"
             />
             <div className="flex items-center justify-between gap-2">
