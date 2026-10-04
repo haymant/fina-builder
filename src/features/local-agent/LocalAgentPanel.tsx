@@ -215,6 +215,89 @@ function ModelPicker({
   )
 }
 
+/**
+ * Composer, split out from `ChatThread` so it renders *inside*
+ * `AssistantRuntimeProvider`. `unstable_useComposerInputHistory` calls
+ * `useAui()`, which throws if there is no client scope above it — calling the
+ * hook in `ChatThread` itself (which returns the provider) fails on open.
+ */
+function Composer({
+  connection,
+  connectionError,
+  connecting,
+  skills,
+  activeSkillIds,
+  onToggleSkill,
+  onRetryConnection,
+  onRefreshSkills,
+  loadedName,
+  models,
+  onSelectModel,
+  onManageModels,
+}: {
+  connection: McpConnection | null
+  connectionError: string | null
+  connecting: boolean
+  skills: readonly AgentSkill[]
+  activeSkillIds: readonly string[]
+  onToggleSkill: (id: string) => void
+  onRetryConnection: () => void
+  onRefreshSkills: () => void
+  loadedName: string | null
+  models: LocalModel[]
+  onSelectModel: (path: string) => void
+  onManageModels: () => void
+}) {
+  // Terminal-style history: ArrowUp recalls previously sent user messages
+  // (newest first), ArrowDown steps back toward the newest.
+  const history = unstable_useComposerInputHistory()
+
+  return (
+    <ComposerPrimitive.Root className="agent-surface flex flex-col gap-1.5 rounded-2xl p-2 transition">
+      <ComposerPrimitive.Input
+        aria-label="Message local assistant"
+        placeholder="Ask about payoff paths or risk…"
+        rows={1}
+        {...history}
+        className="agent-text max-h-32 min-h-10 w-full resize-none bg-transparent px-2 py-2 text-xs outline-none placeholder:text-[color:var(--theme-muted)]"
+      />
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <ComposerSourceMenu
+            connection={connection}
+            connectionError={connectionError}
+            connecting={connecting}
+            skills={skills}
+            activeSkillIds={activeSkillIds}
+            onToggleSkill={onToggleSkill}
+            onRetryConnection={onRetryConnection}
+            onRefreshSkills={onRefreshSkills}
+          />
+          <ModelPicker loadedName={loadedName} models={models} onSelect={onSelectModel} onManage={onManageModels} />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <AuiIf condition={(s) => !s.thread.isRunning}>
+            <ComposerPrimitive.Send
+              aria-label="Send message"
+              className="agent-primary-solid grid h-8 w-8 place-items-center rounded-full transition disabled:opacity-40"
+            >
+              <ArrowUp size={16} />
+            </ComposerPrimitive.Send>
+          </AuiIf>
+          <AuiIf condition={(s) => s.thread.isRunning}>
+            <ComposerPrimitive.Cancel
+              aria-label="Stop generating"
+              className="agent-surface agent-text agent-danger-hover grid h-8 w-8 place-items-center rounded-full transition disabled:opacity-40"
+            >
+              <Square size={11} className="fill-current" />
+            </ComposerPrimitive.Cancel>
+          </AuiIf>
+        </div>
+      </div>
+    </ComposerPrimitive.Root>
+  )
+}
+
 function ChatThread({
   sessionId,
   initialPiMessages,
@@ -261,9 +344,6 @@ function ChatThread({
     [sessionId, initialPiMessages, activeSkills, onSaved],
   )
   const runtime = useLocalRuntime(adapter, { initialMessages: displayMessages })
-  // Terminal-style history: ArrowUp recalls previously sent user messages,
-  // ArrowDown steps back toward the newest.
-  const history = unstable_useComposerInputHistory()
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -331,48 +411,20 @@ function ChatThread({
           </ThreadPrimitive.Messages>
         </ThreadPrimitive.Viewport>
         <div className="agent-border shrink-0 border-t p-3">
-          <ComposerPrimitive.Root className="agent-surface flex flex-col gap-1.5 rounded-2xl p-2 transition">
-            <ComposerPrimitive.Input
-              aria-label="Message local assistant"
-              placeholder="Ask about payoff paths or risk…"
-              rows={1}
-              {...history}
-              className="agent-text max-h-32 min-h-10 w-full resize-none bg-transparent px-2 py-2 text-xs outline-none placeholder:text-[color:var(--theme-muted)]"
-            />
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-1.5">
-                <ComposerSourceMenu
-                  connection={mcpConnection}
-                  connectionError={mcpError}
-                  connecting={mcpConnecting}
-                  skills={skills}
-                  activeSkillIds={activeSkills.map((skill) => skill.id)}
-                  onToggleSkill={onToggleSkill}
-                  onRetryConnection={onRetryConnection}
-                  onRefreshSkills={onRefreshSkills}
-                />
-                <ModelPicker loadedName={loadedName} models={models} onSelect={onSelectModel} onManage={onManageModels} />
-              </div>
-              <div className="flex items-center gap-1.5">
-                <AuiIf condition={(s) => !s.thread.isRunning}>
-                  <ComposerPrimitive.Send
-                    aria-label="Send message"
-                    className="agent-primary-solid grid h-8 w-8 place-items-center rounded-full transition disabled:opacity-40"
-                  >
-                    <ArrowUp size={16} />
-                  </ComposerPrimitive.Send>
-                </AuiIf>
-                <AuiIf condition={(s) => s.thread.isRunning}>
-                  <ComposerPrimitive.Cancel
-                    aria-label="Stop generating"
-                    className="agent-surface agent-text agent-danger-hover grid h-8 w-8 place-items-center rounded-full transition disabled:opacity-40"
-                  >
-                    <Square size={11} className="fill-current" />
-                  </ComposerPrimitive.Cancel>
-                </AuiIf>
-              </div>
-            </div>
-          </ComposerPrimitive.Root>
+          <Composer
+            connection={mcpConnection}
+            connectionError={mcpError}
+            connecting={mcpConnecting}
+            skills={skills}
+            activeSkillIds={activeSkills.map((skill) => skill.id)}
+            onToggleSkill={onToggleSkill}
+            onRetryConnection={onRetryConnection}
+            onRefreshSkills={onRefreshSkills}
+            loadedName={loadedName}
+            models={models}
+            onSelectModel={onSelectModel}
+            onManageModels={onManageModels}
+          />
           <p className="agent-muted mt-2 text-center text-[10px]">Local model output may be inaccurate. Demo analytics are not investment advice.</p>
         </div>
       </ThreadPrimitive.Root>
