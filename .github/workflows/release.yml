@@ -106,9 +106,10 @@ jobs:
           # macos-15/macos-14/macos-latest are Apple Silicon runners; the Intel
           # image is `macos-15-intel` (macos-13 was retired by GitHub).
           #
-          # `MACOSX_DEPLOYMENT_TARGET` must be >= 10.15: llama.cpp's bundled
-          # ggml uses std::filesystem, which is unavailable before 10.15, and
-          # the llama-cpp-sys build passes this through to its CMake flags.
+          # `minimumSystemVersion` in tauri.conf.json (10.15) makes the Tauri CLI
+          # export `MACOSX_DEPLOYMENT_TARGET`, which llama.cpp's ggml needs:
+          # std::filesystem is unavailable before 10.15. `deploymentTarget` below
+          # only keys the rust-cache so a stale CMake tree is never reused.
           - label: macos-aarch64
             os: macos-15
             args: '--target aarch64-apple-darwin --bundles dmg'
@@ -147,11 +148,10 @@ jobs:
       - name: Install Tauri Linux prerequisites
         if: runner.os == 'Linux'
         run: ./scripts/ci/install-tauri-linux-deps.sh
-      - name: Set the macOS deployment target for llama.cpp
+      - name: Clear any stale llama.cpp CMake build tree
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
-          echo "MACOSX_DEPLOYMENT_TARGET=${{ matrix.deploymentTarget }}" >> "$GITHUB_ENV"
           # llama-cpp-sys configures CMake with `always_configure(false)` and
           # reuses its build tree. A tree restored by rust-cache from an earlier
           # deployment target keeps the stale `-mmacosx-version-min`, so drop the
