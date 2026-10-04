@@ -920,4 +920,48 @@ mod tests {
         assert!(safe_session_id("../secret").is_err());
         assert!(safe_session_id("session-1").is_ok());
     }
+
+    #[test]
+    fn curated_model_catalog_serves_every_field_the_model_picker_renders() {
+        let catalog = curated_model_catalog();
+        assert_eq!(catalog.len(), CATALOG.len());
+        for (entry, source) in catalog.iter().zip(CATALOG.iter()) {
+            // The picker keys downloads off `id` and matches on-disk files by
+            // `fileName`, so a renamed field would silently break the list.
+            assert_eq!(entry["id"], json!(source.id));
+            assert_eq!(entry["fileName"], json!(source.file_name));
+            assert_eq!(entry["name"], json!(source.name));
+            assert_eq!(entry["downloadUrl"], json!(source.download_url));
+            assert_eq!(entry["sizeBytes"], json!(source.size_bytes));
+            assert_eq!(entry["sha256"], json!(source.sha256));
+            assert_eq!(
+                entry["recommendedContext"],
+                json!(source.recommended_context)
+            );
+            assert_eq!(entry["chatTemplate"], json!(source.chat_template));
+            assert_eq!(entry["licenseUrl"], json!(source.license_url));
+            assert_eq!(entry["quant"], json!("Q4_K_M"));
+        }
+    }
+
+    #[test]
+    fn inference_request_defaults_max_tokens_when_the_webview_omits_it() {
+        // The frontend always sends `maxTokens`, but a stale bundle or a
+        // hand-written call must not silently request zero tokens.
+        let request: InferenceRequest = serde_json::from_value(json!({
+            "generationId": "gen-1",
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        .expect("request without maxTokens must deserialize");
+        assert_eq!(request.max_tokens, 512);
+        assert_eq!(request.generation_id, "gen-1");
+
+        let explicit: InferenceRequest = serde_json::from_value(json!({
+            "generationId": "gen-2",
+            "messages": [],
+            "maxTokens": 64,
+        }))
+        .expect("explicit maxTokens must deserialize");
+        assert_eq!(explicit.max_tokens, 64);
+    }
 }
