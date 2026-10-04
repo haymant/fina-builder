@@ -268,6 +268,18 @@ npm run tauri:dev
 
 The Tauri app uses IPC and does not need `fina-server`. `npm run dev:all` is browser + HTTP mode and therefore does **not** provide local inference. The Linux prerequisite script includes CMake and libclang for the bundled llama.cpp build. Rust toolchain requirements are in `rust-toolchain.toml`; frontend requirements are documented in `README.md`.
 
+#### Optional GPU (CUDA) build
+
+CUDA is opt-in and never part of CI; the default `npm run tauri:dev` stays CPU-only.
+
+```bash
+npm run tauri:dev:cuda
+npm run tauri:build:cuda
+CMAKE_CUDA_ARCHITECTURES=89 npm run tauri:build:cuda   # override for a different GPU
+```
+
+`scripts/tauri-cuda.mjs` pins the toolkit so CMake cannot mix one installation's `nvcc` with another's headers and libraries, defaults `CMAKE_CUDA_ARCHITECTURES` to `86` (RTX 3060 Ti), makes the CUDA objects position independent, discards a half-configured or outdated `llama-cpp-sys-2` CMake tree, and works around the glibc/CUDA header clash described below. It resolves the CUDAFLAGS environment variable rather than `CMAKE_CUDA_FLAGS`, because only the former reaches CMake's compiler-ID probe. Set `FINA_CUDA_HEADER_SHIM=off` to skip the header shim.
+
 ### Validation
 
 ```bash
@@ -318,12 +330,28 @@ Two WebKit-side mitigations are in place, neither of which was the cause here:
 
 **React errors in the panel.** `PanelErrorBoundary` in `App.tsx` catches a render failure and shows the stack instead of blanking the app; the same message goes to `<app-data>/frontend-errors.log` via `report_frontend_error`, together with any uncaught `window` error or unhandled rejection. Note that assistant-ui client hooks (`useAui`, `useThreadRuntime`, `unstable_useComposerInputHistory`, …) must be called in a component rendered *below* `AssistantRuntimeProvider`, not in the component that returns it.
 
+**CUDA build fails with `exception specification is incompatible with that of previous function "rsqrt"`.** Not a llama.cpp problem, and nothing to do with the GPU, the CUDA architecture, or stale build output: it reproduces with a two-line `.cu` file, because it breaks CMake's `enable_language(CUDA)` compiler-ID probe before llama.cpp is reached.
+
+`bits/libc-header-start.h` enables the C23 IEC 60559 math functions whenever `__USE_GNU` is set, and g++ always defines `_GNU_SOURCE`. glibc therefore declares `rsqrt`/`rsqrtf` with `__THROW` (`noexcept (true)`), while CUDA's `crt/math_functions.h` declares the same names as device builtins with no exception specification. A second declaration with an incompatible exception specification is ill-formed, so any translation unit that sees both headers fails. No released toolkit avoids it — on this host 12.6 fails on `cospi` and 13.0/13.1 on `rsqrt` — and `-U_GNU_SOURCE` only trades it for libstdc++ errors, because `c++locale.h` and `<mutex>` need `_GNU_SOURCE` for `uselocale` and `pthread_*_clock*`.
+
+The fix is to give CUDA's declarations the exception specification glibc expects. The toolkit is root-owned, so `scripts/tauri-cuda.mjs` shadows the include tree under `target/cuda-header-shim/<toolkit>/` instead of editing it in place: `nvcc` resolves `<cuda_runtime.h>` out of `-I` paths before its built-in ones, and quoted includes inside the shadowed copy stay within that copy. The conflicting symbols are discovered by compiling a probe and reading the compiler's own diagnostics rather than hard-coded, and the result is cached per toolkit version. Re-check `target/cuda-header-shim/*/patched.json` if a future toolkit reports more symbols.
+
+Note that a `CMakeCache.txt` left behind by a failed configure makes `llama-cpp-sys-2` skip reconfiguration (`always_configure(false)`), so the shim will not take effect until that tree is removed. `resetStaleLlamaCpp` covers a tree with no `Makefile`/`build.ninja`, a tree whose cache predates a required flag, and the case that is easiest to miss: artifacts present with no CMake tree at all, which is what a previous reset leaves behind.
+
+**CUDA build compiles cleanly, then fails to link.** The symptom is `rust-lld: error: relocation R_X86_64_PC32 cannot be used against symbol 'stderr'; recompile with -fPIC`, naming `mmq-instance-*.cu.o` inside `libllama_cpp_sys_2-*.rlib`.
+
+ggml is built as a static archive (`BUILD_SHARED_LIBS=OFF`) that is linked into Tauri's cdylib, so its objects must be position independent. `llama-cpp-sys-2` passes `-fPIC` in `CMAKE_C_FLAGS` and `CMAKE_CXX_FLAGS` but never configures `CMAKE_CUDA_FLAGS` at all, so only the CUDA objects come out non-PIC — which is why the C/C++ half of the same archive links fine. `nvcc` rejects a bare `-fPIC` (`nvcc fatal: Unknown option '-fPIC'`), so the launcher forwards it with `-Xcompiler -fPIC`.
+
+This is also the reason the launcher compares `CMAKE_CUDA_FLAGS` against `CMakeCache.txt` and discards `llama-cpp-sys-2`'s own artifacts when a required flag is missing. Removing the CMake tree alone does **not** work: Cargo's fingerprint for the build script still matches, so the script is skipped and the old archive is linked unchanged — the build then fails with the identical message and no indication that the flags were ignored. The fingerprint has to go too. `cargo clean -p llama-cpp-sys-2` is not used because it does not reliably match every feature variant of the package (cuda and non-cuda builds have different metadata hashes) and leaves the stale archive behind.
+
+Running `cargo build --features cuda` directly bypasses the launcher, so it needs `CUDAFLAGS='-Xcompiler -fPIC'` by hand.
+
 ## Extension guidance
 
 1. **Keep ownership clear.** Put model loading, filesystem access, checksums, and native inference in `src-tauri/src/local_agent.rs`. Put presentation and Pi/assistant-ui orchestration in `src/features/local-agent/`. Keep product-domain formulas in `fina-kernel`, not in the Tauri local-agent module.
 2. **When adding an agent tool,** prefer adding it to `crates/fina-mcp` so the webview picks it up automatically from `tools/list`; the chat-side wrapper in `mcpClient.ts` is generic. For a built-in tool that must not depend on the sidecar, update the `AgentTool` definition, the system-prompt builder, and `toolRequest` validation together. Validate arguments on the Rust/kernel side too. Prefer read-only tools with explicit, typed inputs.
 3. **When adding a skill,** create `skills/<skill-name>/SKILL.md` with `name`/`description` frontmatter and an instruction body. The directory name is the skill id and the inserted `/{name}`; keep it kebab-case. Skills are instruction-only prompt augmentations; do not use them to add capabilities or tools.
-4. **When adding models,** add exact filename/URL/size/SHA-256/license/context metadata to the Rust catalog and test uniqueness and format. Keep download-to-partial, full verification, and final rename semantics.
+4. **When adding models,** add exact filename/URL/size/SHA-256/license/context metadata to the Rust catalog and test uniqueness and format. The `max_context` value must be read out of the GGUF you actually point the URL at, not copied from the model card. Keep download-to-partial, full verification, and final rename semantics.
 5. **When adding session restore,** coordinate assistant-ui thread IDs, Pi Agent transcript/state, Tauri session records, and session version migration. Loading a JSONL message array alone does not currently recreate an assistant-ui thread.
 6. **When changing concurrency or model settings,** account for the engine mutex, model/context memory use, the single-generation behavior, abort races, and cross-platform llama.cpp compilation.
 7. **When changing privacy or tools,** update this guide and `README.md` alongside code. The chat does connect to `fina-mcp`; keep the sidecar path, capability scope, and transport description accurate.
