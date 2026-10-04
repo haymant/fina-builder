@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 const mode = process.argv[2] ?? 'dev'
@@ -21,6 +22,30 @@ const env = {
   ...process.env,
   CMAKE_CUDA_ARCHITECTURES: process.env.CMAKE_CUDA_ARCHITECTURES || '86',
 }
+
+/**
+ * A failed CMake configure can leave CMakeCache.txt behind without producing
+ * a Makefile/build.ninja. The cmake crate then incorrectly treats that output
+ * as configured and fails with "No rule to make target 'Makefile'" on every
+ * retry. Remove only this invalid llama.cpp subdirectory; keep Cargo's normal
+ * dependency cache and all unrelated build artifacts intact.
+ */
+function removeStaleLlamaBuilds() {
+  const targetRoot = process.env.CARGO_TARGET_DIR || join(process.cwd(), 'target')
+  for (const profile of ['debug', 'release']) {
+    const buildRoot = join(targetRoot, profile, 'build')
+    if (!existsSync(buildRoot)) continue
+    for (const entry of readdirSync(buildRoot)) {
+      if (!entry.startsWith('llama-cpp-sys-2-')) continue
+      const cmakeBuild = join(buildRoot, entry, 'out', 'build')
+      if (!existsSync(cmakeBuild)) continue
+      const hasBuildSystem = existsSync(join(cmakeBuild, 'Makefile')) || existsSync(join(cmakeBuild, 'build.ninja'))
+      if (!hasBuildSystem) rmSync(cmakeBuild, { recursive: true, force: true })
+    }
+  }
+}
+
+removeStaleLlamaBuilds()
 
 const result = spawnSync(tauriBin, [mode, '--features', 'cuda', ...process.argv.slice(3)], {
   env,
