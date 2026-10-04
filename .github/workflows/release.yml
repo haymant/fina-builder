@@ -139,13 +139,24 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
-          key: desktop-${{ matrix.label }}
+          # Include the macOS deployment target in the key: llama-cpp-sys
+          # configures CMake with `always_configure(false)` and reuses the
+          # cached build tree, so a cache restored from a different
+          # deployment target would keep the stale `-mmacosx-version-min`.
+          key: desktop-${{ matrix.label }}-${{ matrix.deploymentTarget || 'default' }}
       - name: Install Tauri Linux prerequisites
         if: runner.os == 'Linux'
         run: ./scripts/ci/install-tauri-linux-deps.sh
       - name: Set the macOS deployment target for llama.cpp
         if: runner.os == 'macOS'
-        run: echo "MACOSX_DEPLOYMENT_TARGET=${{ matrix.deploymentTarget }}" >> "$GITHUB_ENV"
+        run: |
+          set -euo pipefail
+          echo "MACOSX_DEPLOYMENT_TARGET=${{ matrix.deploymentTarget }}" >> "$GITHUB_ENV"
+          # llama-cpp-sys configures CMake with `always_configure(false)` and
+          # reuses its build tree. A tree restored by rust-cache from an earlier
+          # deployment target keeps the stale `-mmacosx-version-min`, so drop the
+          # cached llama.cpp build/install output before configuring.
+          find target -type d -name 'llama-cpp-sys-2-*' -prune -exec rm -rf {} + 2>/dev/null || true
       - name: Stamp the release version into the manifests
         run: node scripts/set-version.mjs ${{ needs.release-create.outputs.version }}
       - name: Forward the signing secrets only when they are actually set
