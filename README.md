@@ -108,6 +108,15 @@ Use the numeric compute capability without the `sm_` prefix (for example,
 `86` for RTX 3060 Ti, `89` for RTX 40-series, and `90` for many RTX 50/data
 center configurations). The wrapper preserves an explicitly supplied value.
 
+The wrapper also pins `CUDACXX`, `CMAKE_CUDA_COMPILER`, `CUDA_PATH`, and `PATH`
+to one detected toolkit when they are not already set. This prevents a common
+Linux failure mode where `/usr/bin/nvcc` comes from CUDA 12.x while CMake finds
+headers and `ptxas` under `/usr/local/cuda-13.0`. To select a toolkit manually:
+
+```bash
+CUDA_PATH=/usr/local/cuda-13.0 npm run tauri:build:cuda
+```
+
 The ordinary commands remain the safe CPU fallback:
 
 ```bash

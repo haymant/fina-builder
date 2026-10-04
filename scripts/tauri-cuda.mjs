@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, delimiter, dirname, join } from 'node:path'
 
 const mode = process.argv[2] ?? 'dev'
 if (!['dev', 'build'].includes(mode)) {
@@ -22,6 +22,31 @@ const env = {
   ...process.env,
   CMAKE_CUDA_ARCHITECTURES: process.env.CMAKE_CUDA_ARCHITECTURES || '86',
 }
+
+/**
+ * CMake can otherwise combine /usr/bin/nvcc from one installation with the
+ * headers/libraries discovered under /usr/local/cuda-* from another. That
+ * produces misleading architecture errors when nvcc invokes a different
+ * toolkit's ptxas. Prefer an explicitly configured toolkit, then a CUDA bin
+ * directory already present in PATH.
+ */
+function configureCoherentCudaToolkit() {
+  if (env.CUDACXX || env.CMAKE_CUDA_COMPILER) return
+  const pathCandidates = (env.PATH || '')
+    .split(delimiter)
+    .filter((entry) => basename(entry) === 'bin' && basename(dirname(entry)).startsWith('cuda'))
+    .map((entry) => dirname(entry))
+  const roots = [env.CUDA_PATH, env.CUDA_HOME, ...pathCandidates, '/usr/local/cuda']
+  const root = roots.find((candidate) => candidate && existsSync(join(candidate, 'bin', 'nvcc')))
+  if (!root) return
+  const nvcc = join(root, 'bin', 'nvcc')
+  env.CUDA_PATH ||= root
+  env.CUDACXX = nvcc
+  env.CMAKE_CUDA_COMPILER = nvcc
+  env.PATH = `${join(root, 'bin')}${delimiter}${env.PATH || ''}`
+}
+
+configureCoherentCudaToolkit()
 
 /**
  * A failed CMake configure can leave CMakeCache.txt behind without producing
