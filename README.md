@@ -79,6 +79,33 @@ npm run tauri:dev      # window with IPC; no HTTP backend needed
 npm run tauri:build    # native bundles for the current platform
 ```
 
+#### Optional NVIDIA CUDA backend
+
+The default desktop build is intentionally portable and uses the CPU/OpenMP
+llama.cpp backend. CUDA is an **opt-in compile-time backend**, not a runtime
+switch: the binary must be built with CUDA support before it can use an NVIDIA
+GPU. On a machine with an RTX 3060 Ti (or another CUDA-capable NVIDIA GPU),
+install the NVIDIA driver, CUDA toolkit, CMake, and the Tauri platform
+prerequisites, then use:
+
+```bash
+npm run tauri:dev:cuda      # development window with llama.cpp CUDA enabled
+npm run tauri:build:cuda    # CUDA-enabled native bundle
+```
+
+The ordinary commands remain the safe CPU fallback:
+
+```bash
+npm run tauri:dev:cpu
+npm run tauri:build:cpu
+```
+
+The CUDA profile is implemented as the `src-tauri` Cargo feature
+`cuda`, which enables `llama-cpp-2/cuda`. If CUDA compilation or driver
+initialization is unavailable, use the CPU commands rather than silently
+falling back inside a CUDA build. This makes the shipped artifact's backend
+explicit and avoids confusing “GPU selected but CPU executed” behavior.
+
 ### Local assistant (Tauri desktop only)
 
 The **Chat** button in the workspace header opens a side panel. The first run requires an
