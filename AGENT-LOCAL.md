@@ -58,8 +58,10 @@ The local-agent subsystem is separate from the kernel's financial/domain logic. 
 | `src/features/local-agent/LocalAgentPanel.tsx` | Model discovery/catalog UI, download progress and cancellation, load/change model, open model directory, chat rendering, composer (icon send/stop, model picker), header new-chat and chat-history controls, and user-visible errors. |
 | `src/features/local-agent/piLocalRuntime.ts` | Pi Agent tools/system prompt, MCP tool loading and merge, skills injection, robust tool-request parsing, per-session Agent map, per-session assistant-ui adapter factory, stored-message→thread-message mapping for restore, Tauri token-event subscription, and native inference calls. |
 | `src/features/local-agent/mcpClient.ts` | Thin Tauri-command wrapper for `mcp_list_tools` / `mcp_call_tool`, memoized tool list, and MCP-tool→`AgentTool` adaptation. |
-| `src/features/local-agent/ComposerSourceMenu.tsx` | Composer `+` menu: MCP server (with hover tool list and retry) and inline skill toggles. |
-| `src/features/local-agent/skills.ts` | Built-in agent skill registry (instruction blocks injected into the system prompt). |
+| `src/features/local-agent/ComposerSourceMenu.tsx` | Composer `+` menu: MCP server → tools drill-down, skills list, and `/{name}` insertion. |
+| `src/features/local-agent/skills.ts` | Frontend helper types and Tauri wrappers for file-based skills (`list_agent_skills`, `skills_dir`). |
+| `src-tauri/src/skills.rs` | Scans `skills/*/SKILL.md`, parses YAML frontmatter, and returns skill records. |
+| `skills/<name>/SKILL.md` | Skill definitions (frontmatter + instruction body). |
 | `src-tauri/src/local_agent.rs` | Catalog source of truth, local filesystem operations, model download/verification, loaded-model state, inference/cancellation, session/config JSONL, and MCP server path resolution plus commands. |
 | `crates/fina-mcp/src/main.rs` | Newline-delimited JSON-RPC 2.0 MCP stdio server dispatching to `fina-kernel`'s shared command dispatcher. |
 | `src-tauri/src/mcp.rs` | Rust-owned `fina-mcp` process: spawn, MCP handshake, `tools/list`, `tools/call`, and reconnect. |
@@ -75,9 +77,9 @@ The Chat button calls `onOpenLocalAgent`. `App.tsx` marks the panel as previousl
 
 The panel detects Tauri through `window.__TAURI_INTERNALS__`. In non-Tauri browser mode it displays an availability notice and does not call the native model commands.
 
-The chat composer follows the assistant-ui composer convention: text field plus a toolbar row with a `+` source menu and the model picker on the left and a round send icon button that swaps to a stop (square) icon while a run is in flight. Changing the active model and opening the model manager both live in that toolbar / its popover. The `+` menu (`ComposerSourceMenu`) opens two categories: `MCP server` lists the registered server and, on hover, that server's tools; `Skills` lists the built-in skills inline as toggles. When the sidecar is unavailable the MCP category shows the error and a retry button. `New chat` and a chat-history browser are icon buttons in the panel header.
+The chat composer follows the assistant-ui composer convention: text field plus a toolbar row with a `+` source menu and the model picker on the left and a round send icon button that swaps to a stop (square) icon while a run is in flight. Changing the active model and opening the model manager both live in that toolbar / its popover. The `+` menu (`ComposerSourceMenu`) is a click-through drill-down: `MCP server` → the registered server → its tools, and `Skills` → the discovered `SKILL.md` list. Clicking a tool or skill inserts `/{name}` into the composer; skills also have a checkbox that toggles their instructions into the system prompt. When the server is unavailable the MCP branch shows the error and a retry button. `New chat` and a chat-history browser are icon buttons in the panel header.
 
-Skills (`src/features/local-agent/skills.ts`) are named instruction blocks from the agent-skills convention. They are a **static TypeScript registry** — there is no `SKILL.md` discovery or file loading; add entries to `AGENT_SKILLS` to define one. Toggling one in the `+` menu injects its `instructions` into the system prompt; skills only shape the prompt and never grant new capabilities. The active set is per-panel state passed into the adapter.
+Skills are **file-based**: the Rust `list_agent_skills` command scans `skills/<skill-name>/SKILL.md`, parses YAML frontmatter (`name`, `description`) and treats the markdown body as the instructions. The **skill name is its directory name** — a frontmatter `name` that disagrees is ignored, so `/{name}` insertion always matches the id. The directory is rescanned when the panel opens and via the menu's `Rescan skills` action, so edits are picked up without a rebuild; there is no caching that would hide updates. In development the workspace `skills/` directory is read; a packaged build reads its app-data `skills/` copy. Toggling a skill injects only its instructions into the system prompt; skills never grant capabilities. The active set is per-panel state passed into the adapter.
 
 ### 2. Model discovery, download, and loading
 
@@ -187,6 +189,8 @@ All commands below are registered in `src-tauri/src/lib.rs`. Rust command argume
 | `mcp_list_tools` | Starts (if needed) the `fina-mcp` process and returns server info plus `tools/list`. |
 | `mcp_call_tool` | `name`, `arguments`; calls one MCP tool and returns its content. |
 | `mcp_reset` | Drops the MCP connection so the next call respawns the server. |
+| `list_agent_skills` | Scans `skills/*/SKILL.md` and returns skill records. |
+| `skills_dir` | Returns the managed skills directory (app-data `skills/`). |
 
 ### Events
 
@@ -250,7 +254,7 @@ The local-agent Rust unit tests are in `src-tauri/src/local_agent.rs`. Add autom
 
 1. **Keep ownership clear.** Put model loading, filesystem access, checksums, and native inference in `src-tauri/src/local_agent.rs`. Put presentation and Pi/assistant-ui orchestration in `src/features/local-agent/`. Keep product-domain formulas in `fina-kernel`, not in the Tauri local-agent module.
 2. **When adding an agent tool,** prefer adding it to `crates/fina-mcp` so the webview picks it up automatically from `tools/list`; the chat-side wrapper in `mcpClient.ts` is generic. For a built-in tool that must not depend on the sidecar, update the `AgentTool` definition, the system-prompt builder, and `toolRequest` validation together. Validate arguments on the Rust/kernel side too. Prefer read-only tools with explicit, typed inputs.
-3. **When adding a skill,** add an `AgentSkill` to `src/features/local-agent/skills.ts`. Skills are instruction-only prompt augmentations; do not use them to add capabilities or tools.
+3. **When adding a skill,** create `skills/<skill-name>/SKILL.md` with `name`/`description` frontmatter and an instruction body. The directory name is the skill id and the inserted `/{name}`; keep it kebab-case. Skills are instruction-only prompt augmentations; do not use them to add capabilities or tools.
 4. **When adding models,** add exact filename/URL/size/SHA-256/license/context metadata to the Rust catalog and test uniqueness and format. Keep download-to-partial, full verification, and final rename semantics.
 5. **When adding session restore,** coordinate assistant-ui thread IDs, Pi Agent transcript/state, Tauri session records, and session version migration. Loading a JSONL message array alone does not currently recreate an assistant-ui thread.
 6. **When changing concurrency or model settings,** account for the engine mutex, model/context memory use, the single-generation behavior, abort races, and cross-platform llama.cpp compilation.

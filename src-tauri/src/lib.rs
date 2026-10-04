@@ -8,6 +8,7 @@
 pub mod commands;
 pub mod local_agent;
 pub mod mcp;
+pub mod skills;
 
 use fina_kernel::api::HealthResponse;
 use fina_kernel::FinaErrorWire;
@@ -68,6 +69,8 @@ pub fn run() {
             local_agent::mcp_list_tools,
             local_agent::mcp_call_tool,
             local_agent::mcp_reset,
+            skills::list_agent_skills,
+            skills::skills_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -4,6 +4,7 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  useAui,
   useLocalRuntime,
   type ThreadMessageLike,
 } from '@assistant-ui/react'
@@ -30,7 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { createLocalAgentAdapter, storedMessagesToThreadMessages } from './piLocalRuntime'
 import { getMcpConnection, resetMcpConnection, type McpConnection } from './mcpClient'
 import { ComposerSourceMenu } from './ComposerSourceMenu'
-import { AGENT_SKILLS, type AgentSkill } from './skills'
+import { loadAgentSkills, type AgentSkill } from './skills'
 
 type AppPaths = { appDataDir: string; modelsDir: string; sessionsDir: string; configFile: string }
 type LocalModel = {
@@ -183,12 +184,14 @@ function ChatThread({
   displayMessages,
   loadedName,
   models,
+  skills,
   activeSkills,
   mcpConnection,
   mcpError,
   mcpConnecting,
   onToggleSkill,
   onRetryConnection,
+  onRefreshSkills,
   onSelectModel,
   onManageModels,
   onSaved,
@@ -198,12 +201,14 @@ function ChatThread({
   displayMessages: readonly ThreadMessageLike[]
   loadedName: string | null
   models: LocalModel[]
+  skills: readonly AgentSkill[]
   activeSkills: readonly AgentSkill[]
   mcpConnection: McpConnection | null
   mcpError: string | null
   mcpConnecting: boolean
   onToggleSkill: (id: string) => void
   onRetryConnection: () => void
+  onRefreshSkills: () => void
   onSelectModel: (path: string) => void
   onManageModels: () => void
   onSaved: () => void
@@ -219,6 +224,17 @@ function ChatThread({
     [sessionId, initialPiMessages, activeSkills, onSaved],
   )
   const runtime = useLocalRuntime(adapter, { initialMessages: displayMessages })
+  const aui = useAui()
+
+  // Insert `/{token}` into the composer, replacing a trailing partial token so
+  // repeated picks do not stack. Falls back to appending when the composer is
+  // empty or ends in whitespace.
+  const insertToken = (token: string) => {
+    const current = aui.composer.getState().text
+    const replaced = current.replace(/\S*$/, token)
+    const next = current.length === 0 || /\s$/.test(current) ? `${current}${token}` : replaced
+    aui.composer.setText(next.endsWith(' ') ? next : `${next} `)
+  }
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -264,9 +280,12 @@ function ChatThread({
                   connection={mcpConnection}
                   connectionError={mcpError}
                   connecting={mcpConnecting}
+                  skills={skills}
                   activeSkillIds={activeSkills.map((skill) => skill.id)}
                   onToggleSkill={onToggleSkill}
                   onRetryConnection={onRetryConnection}
+                  onRefreshSkills={onRefreshSkills}
+                  onInsert={insertToken}
                 />
                 <ModelPicker loadedName={loadedName} models={models} onSelect={onSelectModel} onManage={onManageModels} />
               </div>
@@ -434,12 +453,20 @@ export function LocalAgentPanel({ open, onClose }: { open: boolean; onClose: () 
   const [mcpConnection, setMcpConnection] = useState<McpConnection | null>(null)
   const [mcpError, setMcpError] = useState<string | null>(null)
   const [mcpConnecting, setMcpConnecting] = useState(false)
+  const [agentSkills, setAgentSkills] = useState<readonly AgentSkill[]>([])
   const [activeSkillIds, setActiveSkillIds] = useState<readonly string[]>([])
 
   const activeSkills = useMemo(
-    () => AGENT_SKILLS.filter((skill) => activeSkillIds.includes(skill.id)),
-    [activeSkillIds],
+    () => agentSkills.filter((skill) => activeSkillIds.includes(skill.id)),
+    [agentSkills, activeSkillIds],
   )
+
+  const refreshSkills = useCallback(() => {
+    if (!isTauri) return
+    void loadAgentSkills()
+      .then((skills) => setAgentSkills(skills))
+      .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
+  }, [])
 
   const toggleSkill = useCallback((id: string) => {
     setActiveSkillIds((current) =>
@@ -546,7 +573,8 @@ export function LocalAgentPanel({ open, onClose }: { open: boolean; onClose: () 
   useEffect(() => {
     if (!open || !isTauri) return
     connectMcp()
-  }, [open, connectMcp])
+    refreshSkills()
+  }, [open, connectMcp, refreshSkills])
 
   const startDownload = (modelId: string) => {
     setError('')
@@ -669,12 +697,14 @@ export function LocalAgentPanel({ open, onClose }: { open: boolean; onClose: () 
               displayMessages={threadMessages}
               loadedName={loadedName}
               models={models}
+              skills={agentSkills}
               activeSkills={activeSkills}
               mcpConnection={mcpConnection}
               mcpError={mcpError}
               mcpConnecting={mcpConnecting}
               onToggleSkill={toggleSkill}
               onRetryConnection={retryMcp}
+              onRefreshSkills={refreshSkills}
               onSelectModel={(path) => void loadModel(path)}
               onManageModels={() => setManageModels(true)}
               onSaved={handleSaved}
