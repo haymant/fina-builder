@@ -166,7 +166,7 @@ describe('toNativeMessages', () => {
 // Sessions written before the tool-result cap still hold the full `get_path`
 // payload (28 kB of `content` plus 19 kB of `details`). Reopening one of those
 // chats re-seeded the agent with the oversized transcript, so every later turn
-// failed with "Conversation too long" again. Observed in a real session file.
+// overflowed the context again. Observed in a real session file.
 describe('normalizeStoredMessages', () => {
   const envelope = (message: Record<string, unknown>) => ({ id: 'm0', type: 'message', message })
 

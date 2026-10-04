@@ -380,7 +380,7 @@ function toPiMessage(message: ChatModelRunOptions['messages'][number]) {
  * Sessions written before the tool-result cap still contain the full payload
  * (`get_path` stored 28 kB of `content` plus 19 kB of `details`). Reopening
  * one of those chats re-seeds the agent with the oversized transcript, so every
- * later turn fails with "Conversation too long" again — the cap at the MCP
+ * later turn overflows the context again — the cap at the MCP
  * boundary only helps chats started after it shipped. Normalizing on load means
  * an old chat becomes usable and is rewritten in capped form on the next save.
  */

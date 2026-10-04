@@ -33,7 +33,7 @@ const CATALOG: &[CuratedModel] = &[
         download_url: "https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
         size_bytes: 986_048_768,
         sha256: "1adf0b11065d8ad2e8123ea110d1ec956dab4ab038eab665614adba04b6c3370",
-        recommended_context: 4096,
+        max_context: 32_768,
         chat_template: "GGUF embedded default (Qwen2.5 / ChatML)",
         license_url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct",
     },
@@ -44,7 +44,7 @@ const CATALOG: &[CuratedModel] = &[
         download_url: "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf",
         size_bytes: 1_708_582_752,
         sha256: "e0aee85060f168f0f2d8473d7ea41ce2f3230c1bc1374847505ea599288a7787",
-        recommended_context: 4096,
+        max_context: 8_192,
         chat_template: "GGUF embedded default (Gemma 2)",
         license_url: "https://ai.google.dev/gemma/terms",
     },
@@ -55,7 +55,7 @@ const CATALOG: &[CuratedModel] = &[
         download_url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
         size_bytes: 2_019_377_696,
         sha256: "6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff",
-        recommended_context: 4096,
+        max_context: 131_072,
         chat_template: "GGUF embedded default (Llama 3.2)",
         license_url: "https://www.llama.com/llama3_2/license/",
     },
@@ -66,7 +66,7 @@ const CATALOG: &[CuratedModel] = &[
         download_url: "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf",
         size_bytes: 2_393_232_672,
         sha256: "e4165e3a71af97f1b4826f6e0574b88cb6d7e0c5b403f895c62d4c913bbe01a5",
-        recommended_context: 4096,
+        max_context: 131_072,
         chat_template: "GGUF embedded default (Phi-3.5)",
         license_url: "https://huggingface.co/microsoft/Phi-3.5-mini-instruct",
     },
@@ -77,7 +77,7 @@ const CATALOG: &[CuratedModel] = &[
         download_url: "https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
         size_bytes: 1_929_903_264,
         sha256: "9c9f56a391a3abbd5b89d0245bf6106081bcc3173119d4229235dd9d23253f94",
-        recommended_context: 4096,
+        max_context: 32_768,
         chat_template: "GGUF embedded default (Qwen2.5 / ChatML)",
         license_url: "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct",
     },
@@ -88,7 +88,7 @@ const CATALOG: &[CuratedModel] = &[
         download_url: "https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf",
         size_bytes: 2_491_874_688,
         sha256: "01999f17c39cc3074afae5e9c539bc82d45f2dd7faa3917c66cbef76fce8c0c2",
-        recommended_context: 4096,
+        max_context: 131_072,
         chat_template: "GGUF embedded default (Phi-4 / ChatML)",
         license_url: "https://huggingface.co/microsoft/Phi-4-mini-instruct",
     },
@@ -99,7 +99,7 @@ const CATALOG: &[CuratedModel] = &[
         download_url: "https://huggingface.co/unsloth/gemma-3n-E2B-it-GGUF/resolve/main/gemma-3n-E2B-it-Q4_K_M.gguf",
         size_bytes: 3_026_881_888,
         sha256: "189d42b4303cb1078ea8d00963f437cd6d884069b7ba2ba80b38cd09585dc415",
-        recommended_context: 4096,
+        max_context: 32_768,
         chat_template: "GGUF embedded default (Gemma 3n)",
         license_url: "https://ai.google.dev/gemma/terms",
     },
@@ -110,7 +110,7 @@ const CATALOG: &[CuratedModel] = &[
         download_url: "https://huggingface.co/bartowski/Qwen_Qwen3-4B-GGUF/resolve/main/Qwen_Qwen3-4B-Q4_K_M.gguf",
         size_bytes: 2_497_280_960,
         sha256: "fbe1d5edd4ce802ae3ae7c7e4ab7d09789d697fdac1fc7929f8df4ca3c41bae3",
-        recommended_context: 4096,
+        max_context: 32_768,
         chat_template: "GGUF embedded default (Qwen3 / ChatML)",
         license_url: "https://huggingface.co/Qwen/Qwen3-4B",
     },
@@ -124,9 +124,75 @@ struct CuratedModel {
     download_url: &'static str,
     size_bytes: u64,
     sha256: &'static str,
-    recommended_context: u32,
+    /// The model's real context window, read from the `*.context_length` key of
+    /// the GGUF this catalog entry downloads. These are *not* guesses from the
+    /// model card: `Qwen/Qwen3-4B`, for example, ships a 40960-token
+    /// `config.json` but a 32768-token GGUF, and the GGUF is what llama.cpp
+    /// reads.
+    max_context: u32,
     chat_template: &'static str,
     license_url: &'static str,
+}
+
+/// Smallest context we will ask llama.cpp for. Below this the KV cache is too
+/// small to hold a real system prompt plus a reply.
+const MIN_CONTEXT: u32 = 1024;
+
+/// Largest context we will ask llama.cpp for, regardless of what a model
+/// advertises. A 128k window on a 3B model needs roughly 15 GB of KV cache,
+/// which no consumer GPU holds: llama.cpp would silently spill the cache to
+/// system RAM and every token would crawl. 32k covers six of the eight
+/// curated models outright and truncates the two 128k models to something a
+/// desktop box can actually serve.
+const MAX_CONTEXT: u32 = 32_768;
+
+/// Context used for a GGUF that is not in the curated catalog and therefore
+/// has no curated window to go on.
+const DEFAULT_CONTEXT: u32 = 8_192;
+
+/// Tokens decoded per `llama_decode` call. This is deliberately *not* tied to
+/// the context size: llama.cpp sizes its compute buffers from `n_ubatch`, so a
+/// full-context ubatch on a 32k window would try to allocate tens of gigabytes
+/// of activations for one call. The prompt is decoded in chunks of this size
+/// instead.
+const MAX_DECODE_BATCH: u32 = 2048;
+
+/// Compile-time guard on that bound. Tying `n_ubatch` to `n_ctx` is exactly
+/// what this decoupling exists to prevent, so it should fail the build rather
+/// than wait for a test.
+const _: () = assert!(MAX_DECODE_BATCH > 0 && MAX_DECODE_BATCH < MAX_CONTEXT);
+
+/// Resolve the context window to actually use.
+///
+/// `trained` is the GGUF's own `*.context_length` and is authoritative — it
+/// comes from the file on disk, so a curated entry that disagrees with the
+/// download (wrong quantization, re-quantized mirror) can never talk us into
+/// allocating a window the weights do not support.
+fn resolve_context(trained: u32, wanted: u32) -> u32 {
+    // Clamp against u32::MAX first so a zero/unknown `trained` cannot make the
+    // `min` below fall under MIN_CONTEXT, which would panic `clamp`.
+    let ceiling = trained.clamp(MIN_CONTEXT, u32::MAX).min(MAX_CONTEXT);
+    wanted.clamp(MIN_CONTEXT, ceiling)
+}
+
+/// Clamp a requested completion to the room the prompt leaves behind.
+///
+/// Auto-shrinking rather than rejecting is what keeps the guarantee the batch
+/// fix was about: whatever we return still fits the context, so generation can
+/// never run off the end of the KV cache. Only a prompt that fills the context
+/// outright is an error, because there is no valid completion left to make.
+fn resolve_max_tokens(
+    requested: u32,
+    prompt_tokens: u32,
+    context_size: u32,
+) -> Result<u32, String> {
+    let room = context_size.saturating_sub(prompt_tokens);
+    if room == 0 {
+        return Err(format!(
+            "The prompt already fills the {context_size}-token context; start a new chat or reduce history"
+        ));
+    }
+    Ok(requested.clamp(1, room))
 }
 
 #[derive(Default)]
@@ -153,7 +219,9 @@ struct LoadedModel {
     model: LlamaModel,
     backend: Arc<LlamaBackend>,
     file_name: String,
-    recommended_context: u32,
+    /// The resolved window: the model's own maximum, capped by MAX_CONTEXT.
+    /// Resolved once at load time so inference does not repeat the clamping.
+    context_size: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -281,7 +349,10 @@ pub fn curated_model_catalog() -> Vec<Value> {
                 "downloadUrl": m.download_url,
                 "sizeBytes": m.size_bytes,
                 "sha256": m.sha256,
-                "recommendedContext": m.recommended_context,
+                // Report the window the model will really run at, so the
+                // picker's "context N" label matches inference.
+                "recommendedContext": resolve_context(m.max_context, m.max_context),
+                "maxContext": m.max_context,
                 "chatTemplate": m.chat_template,
                 "licenseUrl": m.license_url,
                 "quant": "Q4_K_M"
@@ -323,7 +394,7 @@ pub fn list_local_models(app: AppHandle) -> Result<Vec<LocalModel>, String> {
             path: path.to_string_lossy().into_owned(),
             size_bytes: metadata.len(),
             curated: catalog.is_some(),
-            recommended_context: catalog.map(|m| m.recommended_context),
+            recommended_context: catalog.map(|m| resolve_context(m.max_context, m.max_context)),
             chat_template: catalog.map(|m| m.chat_template.to_string()),
             license_url: catalog.map(|m| m.license_url.to_string()),
         });
@@ -487,8 +558,13 @@ pub async fn load_model(
         let model = LlamaModel::load_from_file(&backend, &model_path, &params).map_err(|e| format!("Model could not be loaded (the GGUF may be corrupt or exceed available memory): {e}"))?;
         let file_name = model_path.file_name().and_then(|s| s.to_str()).unwrap_or("local model").to_string();
         let catalog = CATALOG.iter().find(|m| m.file_name == file_name);
-        let recommended_context = catalog.map(|m| m.recommended_context).unwrap_or_else(|| model.n_ctx_train().clamp(1024, 4096));
-        let loaded = LoadedModel { model, backend, file_name, recommended_context };
+        // The GGUF header is the source of truth; the curated window is only a
+        // starting point that gets clamped by it.
+        let context_size = resolve_context(
+            model.n_ctx_train(),
+            catalog.map_or(DEFAULT_CONTEXT, |m| m.max_context),
+        );
+        let loaded = LoadedModel { model, backend, file_name, context_size };
         *engine.lock().map_err(|_| "Model engine state is unavailable")? = Some(loaded);
         Ok::<(), String>(())
     }).await.map_err(|e| format!("Model-loading worker failed: {e}"))??;
@@ -595,50 +671,68 @@ fn generate(
     if tokens.is_empty() {
         return Err("The model tokenizer returned an empty prompt".into());
     }
-    let context_size = loaded.recommended_context.max(1024);
-    // Keep the request validation aligned with the actual generation limit.
-    // The frontend currently sends 512, but stale clients may send a larger
-    // value; checking the clamped value avoids rejecting safe requests while
-    // still guaranteeing room for every generated token.
-    let max_tokens = request.max_tokens.clamp(1, 2048);
-    if tokens.len() as u32 + max_tokens > context_size {
-        return Err(format!("Conversation too long for the configured {context_size}-token context; start a new chat or reduce history"));
-    }
+    let context_size = loaded.context_size;
+    let max_tokens = resolve_max_tokens(request.max_tokens, tokens.len() as u32, context_size)?;
+    // Bound the decode batch independently of the context window. n_batch /
+    // n_ubatch drive llama.cpp's compute-buffer sizing, so tying them to n_ctx
+    // would turn a long context into an enormous allocation. They still have to
+    // cover the largest single decode call, or llama.cpp trips a GGML_ASSERT and
+    // aborts the process instead of returning an error — hence the chunked
+    // prompt evaluation just below.
+    let batch_size = context_size.min(MAX_DECODE_BATCH);
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(std::num::NonZeroU32::new(context_size))
-        // llama.cpp defaults n_batch to a much smaller prompt-processing
-        // batch. Passing a larger prompt to decode then hits a GGML_ASSERT
-        // and aborts the entire Tauri process instead of returning Result.
-        // The prompt has already been checked against this same context, so
-        // using the context size here is safe and prevents native aborts.
-        .with_n_batch(context_size)
-        .with_n_ubatch(context_size);
+        .with_n_batch(batch_size)
+        .with_n_ubatch(batch_size);
     let mut ctx: LlamaContext = loaded
         .model
         .new_context(&loaded.backend, ctx_params)
         .map_err(|e| format!("Could not create inference context: {e}"))?;
-    let mut batch = LlamaBatch::new(tokens.len().max(1), 1);
-    let last = tokens.len() as i32 - 1;
-    for (i, token) in tokens.into_iter().enumerate() {
-        batch
-            .add(token, i as i32, &[0], i as i32 == last)
-            .map_err(|e| format!("Could not prepare prompt: {e}"))?;
+    let mut batch = LlamaBatch::new(batch_size as usize, 1);
+    // Evaluate the prompt in chunks that each fit the decode batch. Only the
+    // very last token needs logits, because that is the one generation samples
+    // from; asking for logits on every chunk would materialise a
+    // vocab-sized row per chunk for nothing.
+    let last = tokens.len() - 1;
+    let mut consumed = 0usize;
+    // Row holding the next sample's logits, i32 to match `LlamaBatch::add`.
+    // The batch is rebuilt per chunk, so the prompt's final token does not
+    // necessarily land on row `last` -- it lands wherever it falls inside the
+    // final chunk. Recording the row as we go is the only way to be sure; the
+    // batch afterwards holds just the final chunk, so `n_tokens - 1` would
+    // coincidentally agree for a single-chunk prompt and be wrong for a longer
+    // one.
+    let mut sample_row = 0i32;
+    for chunk in tokens.chunks(batch_size as usize) {
+        batch.clear();
+        for (offset, token) in chunk.iter().enumerate() {
+            let index = consumed + offset;
+            let wants_logits = index == last;
+            if wants_logits {
+                sample_row = offset as i32;
+            }
+            batch
+                .add(*token, index as i32, &[0], wants_logits)
+                .map_err(|e| format!("Could not prepare prompt: {e}"))?;
+        }
+        ctx.decode(&mut batch)
+            .map_err(|e| format!("Could not evaluate prompt: {e}"))?;
+        consumed += chunk.len();
     }
-    ctx.decode(&mut batch)
-        .map_err(|e| format!("Could not evaluate prompt: {e}"))?;
     let mut sampler =
         LlamaSampler::chain_simple([LlamaSampler::temp(0.25), LlamaSampler::dist(42)]);
     let mut decoder = UTF_8.new_decoder();
     let mut text = String::new();
     let max_tokens = max_tokens as usize;
-    // The prompt occupies positions 0..n_tokens, so generation starts at
-    // `batch.n_tokens()` and advances by one per sampled token.
-    let first_position = batch.n_tokens();
-    for position in (first_position..).take(max_tokens) {
+    // The prompt occupies positions 0..prompt_len, so generation continues at
+    // `prompt_len` and advances by one per sampled token. i32 because that is
+    // what `LlamaBatch::add` takes for a position.
+    let prompt_len = tokens.len() as i32;
+    for position in (prompt_len..).take(max_tokens) {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        let token = sampler.sample(&ctx, batch.n_tokens() - 1);
+        let token = sampler.sample(&ctx, sample_row);
         sampler.accept(token);
         if loaded.model.vocab().is_eog(token) {
             break;
@@ -667,6 +761,7 @@ fn generate(
             .map_err(|e| e.to_string())?;
         ctx.decode(&mut batch)
             .map_err(|e| format!("Token decoding failed: {e}"))?;
+        sample_row = 0;
     }
     let _ = app.emit(
         "llm-turn-end",
@@ -948,11 +1043,95 @@ mod tests {
             assert_eq!(entry["sha256"], json!(source.sha256));
             assert_eq!(
                 entry["recommendedContext"],
-                json!(source.recommended_context)
+                json!(resolve_context(source.max_context, source.max_context))
             );
+            assert_eq!(entry["maxContext"], json!(source.max_context));
             assert_eq!(entry["chatTemplate"], json!(source.chat_template));
             assert_eq!(entry["licenseUrl"], json!(source.license_url));
             assert_eq!(entry["quant"], json!("Q4_K_M"));
+        }
+    }
+
+    #[test]
+    fn every_curated_window_is_real_and_never_exceeds_our_ceiling() {
+        // These came from the `*.context_length` key of the exact GGUF each
+        // entry downloads. A regression here means a download URL was repointed
+        // at a different quantization, which invalidates the number.
+        let expected = [
+            ("qwen2.5-1.5b-instruct", 32_768),
+            ("gemma-2-2b-it", 8_192),
+            ("llama-3.2-3b-instruct", 131_072),
+            ("phi-3.5-mini-instruct", 131_072),
+            ("qwen2.5-3b-instruct", 32_768),
+            ("phi-4-mini-instruct", 131_072),
+            ("gemma-3n-e2b-it", 32_768),
+            ("qwen3-4b-instruct", 32_768),
+        ];
+        assert_eq!(
+            CATALOG
+                .iter()
+                .map(|m| (m.id, m.max_context))
+                .collect::<Vec<_>>(),
+            expected
+        );
+        // Gemma 2 is the only curated model below the ceiling; everything else
+        // is either at it or above and must be truncated.
+        assert_eq!(resolve_context(8_192, 8_192), 8_192);
+        assert_eq!(resolve_context(131_072, 131_072), MAX_CONTEXT);
+        assert_eq!(resolve_context(32_768, 32_768), 32_768);
+    }
+
+    #[test]
+    fn context_never_exceeds_what_the_gguf_was_trained_for() {
+        // The GGUF header is authoritative, so a curated entry that disagrees
+        // with the file on disk must lose.
+        assert_eq!(resolve_context(2_048, 131_072), 2_048);
+        assert_eq!(resolve_context(0, 131_072), MIN_CONTEXT);
+        // A tiny window still leaves room for the floor.
+        assert_eq!(resolve_context(512, 131_072), MIN_CONTEXT);
+        // Nothing is ever handed back above the ceiling, whatever is asked for.
+        for trained in [1_024, 8_192, 32_768, 131_072] {
+            for wanted in [0, 1, 4_096, 1_000_000] {
+                let resolved = resolve_context(trained, wanted);
+                assert!((MIN_CONTEXT..=MAX_CONTEXT).contains(&resolved));
+                assert!(resolved <= trained.clamp(MIN_CONTEXT, u32::MAX));
+            }
+        }
+    }
+
+    #[test]
+    fn max_tokens_shrink_to_the_room_the_prompt_leaves() {
+        // The common case: a short prompt leaves far more than we asked for.
+        assert_eq!(resolve_max_tokens(512, 900, 32_768).unwrap(), 512);
+        // A long prompt shrinks the completion instead of failing the request.
+        assert_eq!(resolve_max_tokens(512, 32_500, 32_768).unwrap(), 268);
+        // A stale client asking for more than the context can hold is bounded.
+        assert_eq!(resolve_max_tokens(999_999, 10, 8_192).unwrap(), 8_182);
+        // A zero request still yields a usable, non-empty completion.
+        assert_eq!(resolve_max_tokens(0, 10, 8_192).unwrap(), 1);
+        // Only a prompt that fills the context outright is an error.
+        let err = resolve_max_tokens(512, 8_192, 8_192).unwrap_err();
+        assert!(
+            err.contains("8192-token context"),
+            "unhelpful message: {err}"
+        );
+        assert!(resolve_max_tokens(512, 9_000, 8_192).is_err());
+    }
+
+    #[test]
+    fn decode_batch_stays_well_inside_every_context_we_hand_out() {
+        // Every window resolve_context can return must still admit a decode
+        // batch that holds at least one token and never exceeds the context.
+        // (The MAX_DECODE_BATCH/MAX_CONTEXT relationship is asserted at compile
+        // time, since both are constants.)
+        for trained in [0, 512, MIN_CONTEXT, DEFAULT_CONTEXT, MAX_CONTEXT, 131_072] {
+            let context = resolve_context(trained, MAX_CONTEXT);
+            let batch_size = context.min(MAX_DECODE_BATCH);
+            assert!(batch_size >= 1, "context {context} leaves no decode room");
+            assert!(
+                batch_size <= context,
+                "batch {batch_size} exceeds {context}"
+            );
         }
     }
 
