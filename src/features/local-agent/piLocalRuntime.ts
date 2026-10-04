@@ -165,6 +165,46 @@ class LatestSnapshotQueue<T> {
   }
 }
 
+/**
+ * Coalesce bursty stream updates to at most one publish per animation frame.
+ *
+ * Rust emits `llm-token` per generated token — up to 512 for a turn — and every
+ * publish replaces the assistant message, re-rendering the whole thread
+ * including every tool-call disclosure already on screen. Publishing per token
+ * therefore costs hundreds of full-tree renders per turn, which is what makes a
+ * long chat feel frozen and can leave the web process unresponsive long enough
+ * to be killed (a killed renderer leaves no JS error and no segfault, which is
+ * exactly the signature of the intermittent blank panel).
+ *
+ * `publish` stays immediate for discrete events (a tool call starting or
+ * finishing) where the update must not be delayed; `publishSoon` is for token
+ * deltas, and `cancel` drops a pending frame so it cannot fire after the run
+ * has ended.
+ */
+export function createFramePublisher<T>(produce: () => T, publish: (value: T) => void) {
+  let frame: number | undefined
+  const hasRaf = typeof requestAnimationFrame === 'function'
+  return {
+    publish: () => publish(produce()),
+    publishSoon() {
+      if (!hasRaf) {
+        publish(produce())
+        return
+      }
+      if (frame !== undefined) return
+      frame = requestAnimationFrame(() => {
+        frame = undefined
+        publish(produce())
+      })
+    },
+    cancel() {
+      if (frame === undefined) return
+      if (hasRaf) cancelAnimationFrame(frame)
+      frame = undefined
+    },
+  }
+}
+
 function contentText(content: unknown): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
@@ -574,15 +614,17 @@ export function createLocalAgentAdapter({ sessionId, initialMessages, skills = [
               },
         ),
       })
-      const publish = () => queue.push(snapshot())
+      const publisher = createFramePublisher(snapshot, (value) => queue.push(value))
+
       const setLiveText = (text: string) => {
+        if (text === liveText) return
         liveText = text
         if (textDraft) textDraft.text = text
         else {
           textDraft = { kind: 'text', text }
           drafts.push(textDraft)
         }
-        publish()
+        publisher.publishSoon()
       }
 
       // Resolve the tool loadout once per adapter: the built-in kernel tools
@@ -640,13 +682,13 @@ export function createLocalAgentAdapter({ sessionId, initialMessages, skills = [
           }
           draftByToolCallId.set(event.toolCallId, draft)
           drafts.push(draft)
-          publish()
+          publisher.publish()
         } else if (event.type === 'tool_execution_end') {
           const draft = draftByToolCallId.get(event.toolCallId)
           if (draft) {
             draft.result = event.result
             draft.isError = event.isError === true
-            publish()
+            publisher.publish()
           }
         }
       })
@@ -663,10 +705,19 @@ export function createLocalAgentAdapter({ sessionId, initialMessages, skills = [
           yield next
         }
         await runPromise
-        // Fall back to the agent's final assistant text if streaming missed it.
+        // A frame may still be queued; drop it so it cannot publish into a
+        // closed queue, then make sure the final text is on screen.
+        publisher.cancel()
         const finalMessage = [...agent.state.messages].reverse().find((message) => message.role === 'assistant')
         const finalText = finalMessage ? contentText(finalMessage.content) : liveText
-        if (finalText && finalText !== liveText) setLiveText(finalText)
+        if (finalText && finalText !== liveText) {
+          if (textDraft) textDraft.text = finalText
+          else {
+            textDraft = { kind: 'text', text: finalText }
+            drafts.push(textDraft)
+          }
+          liveText = finalText
+        }
         yield snapshot()
         await invoke('save_local_agent_session', {
           sessionId,
@@ -675,6 +726,7 @@ export function createLocalAgentAdapter({ sessionId, initialMessages, skills = [
         })
         onSaved?.()
       } finally {
+        publisher.cancel()
         unsubscribe()
       }
     },

@@ -272,16 +272,33 @@ The local-agent Rust unit tests are in `src-tauri/src/local_agent.rs`. Add autom
 
 ### Troubleshooting the panel
 
-**Blank / vanished window on Linux.** The Tauri process usually stays alive — the *web content process* (`WebKitWebProcess`) is a separate binary, so attaching GDB to the app shows a healthy idle `ppoll` event loop even while the UI is gone. An idle backtrace that ends in `gtk_main_iteration_do` → `fina_tauri::run` is therefore **not** a crash trace; the tell is that GDB reaches `[Inferior detached]` instead of printing `Program received signal`.
+**Blank / vanished window on Linux.** The Tauri process stays alive — the *web content process* is a separate binary, so attaching GDB to the app shows a healthy idle `ppoll` event loop even while the UI is gone. An idle backtrace that ends in `gtk_main_iteration_do` → `fina_tauri::run` is therefore **not** a crash trace; the tell is that GDB reaches `[Inferior detached]` instead of printing `Program received signal`.
 
-Use the stable-webview launcher to test whether the WebKit renderer is at fault:
+Known negatives for this symptom, so do not re-investigate them:
+
+| Check | Result |
+| --- | --- |
+| `frontend-errors.log` | Empty — no JS exception, uncaught rejection, or error-boundary trip. |
+| `dmesg \| grep segfault` | No segfault. The renderer is not faulting. |
+| `free -h` | 42 Gi available of 61 Gi. Not memory pressure. |
+| `dmesg` OOM lines | `__vm_enough_memory … comm: java, bytes: 103079215104` is a JVM *virtual address space* reservation refused by overcommit, not an OOM kill. There is no `Out of memory: Killed process`. |
+
+So the renderer exits or is killed **without faulting**. That leaves a web process that was killed for being unresponsive, or something outside the app. Separate those with the sampler:
+
+```bash
+scripts/watch-renderer.sh 0.5
+```
+
+Reproduce the blanking, then read the last rows: a `WebKitWebProcess` sitting near 100% CPU before it disappears was killed for hanging; one at 0% CPU was killed by something else. This is why the adapter coalesces token updates to one publish per animation frame (`createFramePublisher`) — Rust emits one `llm-token` per token, up to 512 per turn, and each publish re-rendered the entire thread.
+
+To test whether the WebKit GPU path is involved:
 
 ```bash
 npm run tauri:dev:stable-webview                    # all three flags
 npm run tauri:dev:stable-webview -- --no-dmabuf     # narrow it down
 ```
 
-It sets `WEBKIT_DISABLE_DMABUF_RENDERER`, `WEBKIT_DISABLE_COMPOSITING_MODE`, and `LIBGL_ALWAYS_SOFTWARE` before `tauri dev`. WebKitGTK's DMABuf accelerated renderer and GL compositing are the usual culprits on VMs, remote desktops, and machines without a working GPU driver. If blanking stops with the flags set, the crash is in the WebKit renderer, not app code. Confirm independently with `dmesg | grep -iE 'segfault|WebKitWebProcess' | tail -20`.
+It sets `WEBKIT_DISABLE_DMABUF_RENDERER`, `WEBKIT_DISABLE_COMPOSITING_MODE`, and `LIBGL_ALWAYS_SOFTWARE` before `tauri dev`.
 
 **React errors in the panel.** `PanelErrorBoundary` in `App.tsx` catches a render failure and shows the stack instead of blanking the app; the same message goes to `<app-data>/frontend-errors.log` via `report_frontend_error`, together with any uncaught `window` error or unhandled rejection. Note that assistant-ui client hooks (`useAui`, `useThreadRuntime`, `unstable_useComposerInputHistory`, …) must be called in a component rendered *below* `AssistantRuntimeProvider`, not in the component that returns it.
 

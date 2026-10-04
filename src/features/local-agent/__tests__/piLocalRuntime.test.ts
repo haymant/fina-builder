@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
 import type { Message, TranscriptContext } from '@earendil-works/pi-ai'
-import { jsonObjectSlices, mergeTools, normalizeStoredMessages, toNativeMessages, toolRequest } from '../piLocalRuntime'
+import { createFramePublisher, jsonObjectSlices, mergeTools, normalizeStoredMessages, toNativeMessages, toolRequest } from '../piLocalRuntime'
 
 const tool = (name: string): AgentTool =>
   ({
@@ -214,5 +214,110 @@ describe('normalizeStoredMessages', () => {
     expect(() =>
       normalizeStoredMessages([envelope({ role: 'toolResult', content: 'small', details })]),
     ).not.toThrow()
+  })
+})
+
+// Rust emits one `llm-token` per generated token (up to 512 per turn) and each
+// publish re-renders the whole thread. Publishing per token is what makes a long
+// chat freeze and can leave the web process unresponsive long enough to be
+// killed — which leaves no JS error and no segfault.
+describe('createFramePublisher', () => {
+  const withFakeRaf = (run: (flush: () => void, cancelled: number[]) => void) => {
+    const originalRaf = globalThis.requestAnimationFrame
+    const originalCancel = globalThis.cancelAnimationFrame
+    const pending: Array<() => void> = []
+    const cancelled: number[] = []
+    let nextId = 1
+    globalThis.requestAnimationFrame = ((cb: () => void) => {
+      const id = nextId++
+      pending.push(cb)
+      return id
+    }) as typeof requestAnimationFrame
+    globalThis.cancelAnimationFrame = ((id: number) => {
+      cancelled.push(id)
+      const index = pending.findIndex((_, i) => i === id - 1)
+      if (index >= 0) pending.splice(index, 1)
+    }) as typeof cancelAnimationFrame
+    const flush = () => {
+      const queued = pending.splice(0)
+      for (const cb of queued) cb()
+    }
+    try {
+      run(flush, cancelled)
+    } finally {
+      globalThis.requestAnimationFrame = originalRaf
+      globalThis.cancelAnimationFrame = originalCancel
+    }
+  }
+
+  it('collapses a burst of token updates into one publish per frame', () => {
+    withFakeRaf((flush) => {
+      const seen: string[] = []
+      let text = ''
+      const publisher = createFramePublisher(() => text, (value) => seen.push(value))
+
+      for (const token of ['a', 'b', 'c', 'd', 'e']) {
+        text += token
+        publisher.publishSoon()
+      }
+      expect(seen).toEqual([])
+
+      flush()
+      // One render, carrying the latest text — not one render per token.
+      expect(seen).toEqual(['abcde'])
+    })
+  })
+
+  it('allows a further update on the next frame', () => {
+    withFakeRaf((flush) => {
+      const seen: string[] = []
+      let text = 'one'
+      const publisher = createFramePublisher(() => text, (value) => seen.push(value))
+
+      publisher.publishSoon()
+      flush()
+      text = 'two'
+      publisher.publishSoon()
+      flush()
+
+      expect(seen).toEqual(['one', 'two'])
+    })
+  })
+
+  it('publishes immediately when asked to', () => {
+    withFakeRaf(() => {
+      const seen: string[] = []
+      const publisher = createFramePublisher(() => 'now', (value) => seen.push(value))
+      publisher.publish()
+      expect(seen).toEqual(['now'])
+    })
+  })
+
+  it('drops a pending frame on cancel so it cannot fire after the run', () => {
+    withFakeRaf((flush, cancelled) => {
+      const seen: string[] = []
+      const publisher = createFramePublisher(() => 'late', (value) => seen.push(value))
+
+      publisher.publishSoon()
+      publisher.cancel()
+      flush()
+
+      expect(cancelled).toHaveLength(1)
+      expect(seen).toEqual([])
+    })
+  })
+
+  it('falls back to immediate publishing when rAF is unavailable', () => {
+    const originalRaf = globalThis.requestAnimationFrame
+    // @ts-expect-error deliberately removing the browser API
+    delete globalThis.requestAnimationFrame
+    try {
+      const seen: string[] = []
+      const publisher = createFramePublisher(() => 'sync', (value) => seen.push(value))
+      publisher.publishSoon()
+      expect(seen).toEqual(['sync'])
+    } finally {
+      globalThis.requestAnimationFrame = originalRaf
+    }
   })
 })
