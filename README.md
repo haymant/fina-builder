@@ -93,6 +93,21 @@ npm run tauri:dev:cuda      # development window with llama.cpp CUDA enabled
 npm run tauri:build:cuda    # CUDA-enabled native bundle
 ```
 
+The CUDA npm wrappers target compute capability **8.6** by default, which is
+the architecture of the RTX 3060 Ti. This avoids CUDA 13 selecting the obsolete
+`sm_52` target and failing during CMake compiler detection. For another NVIDIA
+GPU, override the architecture using the CMake variable supported by
+`llama-cpp-sys`:
+
+```bash
+CMAKE_CUDA_ARCHITECTURES=89 npm run tauri:dev:cuda
+CMAKE_CUDA_ARCHITECTURES=89 npm run tauri:build:cuda
+```
+
+Use the numeric compute capability without the `sm_` prefix (for example,
+`86` for RTX 3060 Ti, `89` for RTX 40-series, and `90` for many RTX 50/data
+center configurations). The wrapper preserves an explicitly supplied value.
+
 The ordinary commands remain the safe CPU fallback:
 
 ```bash
