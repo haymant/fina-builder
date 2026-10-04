@@ -81,6 +81,39 @@ const CATALOG: &[CuratedModel] = &[
         chat_template: "GGUF embedded default (Qwen2.5 / ChatML)",
         license_url: "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct",
     },
+    CuratedModel {
+        id: "phi-4-mini-instruct",
+        name: "Phi-4 Mini 3.8B Instruct",
+        file_name: "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf",
+        download_url: "https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf",
+        size_bytes: 2_491_874_688,
+        sha256: "01999f17c39cc3074afae5e9c539bc82d45f2dd7faa3917c66cbef76fce8c0c2",
+        recommended_context: 4096,
+        chat_template: "GGUF embedded default (Phi-4 / ChatML)",
+        license_url: "https://huggingface.co/microsoft/Phi-4-mini-instruct",
+    },
+    CuratedModel {
+        id: "gemma-3n-e2b-it",
+        name: "Gemma 3n E2B IT",
+        file_name: "gemma-3n-E2B-it-Q4_K_M.gguf",
+        download_url: "https://huggingface.co/unsloth/gemma-3n-E2B-it-GGUF/resolve/main/gemma-3n-E2B-it-Q4_K_M.gguf",
+        size_bytes: 3_026_881_888,
+        sha256: "189d42b4303cb1078ea8d00963f437cd6d884069b7ba2ba80b38cd09585dc415",
+        recommended_context: 4096,
+        chat_template: "GGUF embedded default (Gemma 3n)",
+        license_url: "https://ai.google.dev/gemma/terms",
+    },
+    CuratedModel {
+        id: "qwen3-4b-instruct",
+        name: "Qwen3 4B",
+        file_name: "Qwen_Qwen3-4B-Q4_K_M.gguf",
+        download_url: "https://huggingface.co/bartowski/Qwen_Qwen3-4B-GGUF/resolve/main/Qwen_Qwen3-4B-Q4_K_M.gguf",
+        size_bytes: 2_497_280_960,
+        sha256: "fbe1d5edd4ce802ae3ae7c7e4ab7d09789d697fdac1fc7929f8df4ca3c41bae3",
+        recommended_context: 4096,
+        chat_template: "GGUF embedded default (Qwen3 / ChatML)",
+        license_url: "https://huggingface.co/Qwen/Qwen3-4B",
+    },
 ];
 
 #[derive(Clone, Copy)]
@@ -790,11 +823,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn curated_catalog_has_five_unique_fully_hashed_entries() {
-        assert_eq!(CATALOG.len(), 5);
+    fn curated_catalog_has_unique_fully_hashed_entries() {
+        assert_eq!(CATALOG.len(), 8);
         let mut ids = std::collections::HashSet::new();
+        let mut file_names = std::collections::HashSet::new();
         for model in CATALOG {
             assert!(ids.insert(model.id));
+            assert!(file_names.insert(model.file_name));
             assert!(
                 model.sha256.len() == 64 && model.sha256.chars().all(|c| c.is_ascii_hexdigit())
             );

@@ -55,7 +55,7 @@ The local-agent subsystem is separate from the kernel's financial/domain logic. 
 | `src/features/local-agent/LocalAgentPanel.tsx` | Model discovery/catalog UI, download progress and cancellation, load/change model, open model directory, chat rendering, composer (icon send/stop, model picker), header new-chat and chat-history controls, and user-visible errors. |
 | `src/features/local-agent/piLocalRuntime.ts` | Pi Agent tools/system prompt, MCP tool loading and merge, skills injection, robust tool-request parsing, per-session Agent map, per-session assistant-ui adapter factory, stored-message→thread-message mapping for restore, Tauri token-event subscription, and native inference calls. |
 | `src/features/local-agent/mcpClient.ts` | Memoized `@earendil-works/pi-mcp` `McpClient` connection, the Tauri-shell-plugin `McpTransport`, and MCP-tool→`AgentTool` adaptation. |
-| `src/features/local-agent/ComposerSourceMenu.tsx` | Composer `+` menu: 3-level MCP-server / skills / tools hover navigator. |
+| `src/features/local-agent/ComposerSourceMenu.tsx` | Composer `+` menu: MCP server (with hover tool list and retry) and inline skill toggles. |
 | `src/features/local-agent/skills.ts` | Built-in agent skill registry (instruction blocks injected into the system prompt). |
 | `src-tauri/src/local_agent.rs` | Catalog source of truth, local filesystem operations, model download/verification, loaded-model state, inference/cancellation, session/config JSONL, and MCP sidecar path resolution. |
 | `crates/fina-mcp/src/main.rs` | Newline-delimited JSON-RPC 2.0 MCP stdio server dispatching to `fina-kernel`'s shared command dispatcher. |
@@ -71,13 +71,13 @@ The Chat button calls `onOpenLocalAgent`. `App.tsx` marks the panel as previousl
 
 The panel detects Tauri through `window.__TAURI_INTERNALS__`. In non-Tauri browser mode it displays an availability notice and does not call the native model commands.
 
-The chat composer follows the assistant-ui composer convention: text field plus a toolbar row with a `+` source menu and the model picker on the left and a round send icon button that swaps to a stop (square) icon while a run is in flight. Changing the active model and opening the model manager both live in that toolbar / its popover. The `+` menu (`ComposerSourceMenu`) is a three-level hover navigator: level 1 offers `MCP server` and `Skills`; level 2 lists the registered MCP server or the skill list; level 3 shows a hovered MCP server's tools, or toggles skills. `New chat` and a chat-history browser are icon buttons in the panel header.
+The chat composer follows the assistant-ui composer convention: text field plus a toolbar row with a `+` source menu and the model picker on the left and a round send icon button that swaps to a stop (square) icon while a run is in flight. Changing the active model and opening the model manager both live in that toolbar / its popover. The `+` menu (`ComposerSourceMenu`) opens two categories: `MCP server` lists the registered server and, on hover, that server's tools; `Skills` lists the built-in skills inline as toggles. When the sidecar is unavailable the MCP category shows the error and a retry button. `New chat` and a chat-history browser are icon buttons in the panel header.
 
 Skills (`src/features/local-agent/skills.ts`) are named instruction blocks from the agent-skills convention. Toggling one in the `+` menu injects its `instructions` into the system prompt; skills only shape the prompt and never grant new capabilities. The active set is per-panel state passed into the adapter.
 
 ### 2. Model discovery, download, and loading
 
-`src-tauri/src/local_agent.rs` owns a curated catalog of five Q4_K_M GGUF models. Each entry includes an ID, exact filename, HTTPS download URL, expected byte count, SHA-256, recommended context length, chat-template note, and upstream license/terms URL. The panel renders metadata from `curated_model_catalog`; the Rust catalog is the source of truth.
+`src-tauri/src/local_agent.rs` owns a curated catalog of eight Q4_K_M GGUF models (Qwen2.5 1.5B/3B, Gemma 2 2B, Llama 3.2 3B, Phi-3.5 Mini, Phi-4 Mini 3.8B, Gemma 3n E2B, Qwen3 4B). Each entry includes an ID, exact filename, HTTPS download URL, expected byte count, SHA-256, recommended context length, chat-template note, and upstream license/terms URL. The panel renders metadata from `curated_model_catalog`; the Rust catalog is the source of truth. Add catalog entries only with a verified artifact: the size and SHA-256 must match the upstream file exactly.
 
 All model files must live inside the Tauri app-data `models/` directory. `list_local_models` discovers `.gguf` files in that directory; unknown/manual files are listed by filename and have no curated license/context metadata. `load_model` canonicalizes the path and rejects files outside that directory or files that are not `.gguf`.
 
@@ -137,7 +137,7 @@ Built-in kernel tools and MCP tools are merged by `mergeTools`: when the MCP ser
 
 - `scripts/build-mcp-sidecar.sh` runs `cargo build -p fina-mcp` and stages `target/debug/fina-mcp` at `src-tauri/binaries/fina-mcp-<target-triple>` (the path Tauri's `bundle.externalBin` requires). It runs from `beforeDevCommand` and `beforeBuildCommand`, and standalone via `npm run mcp:sidecar`.
 - `src-tauri/capabilities/default.json` grants `shell:allow-spawn` / `shell:allow-execute` scoped to the `fina-mcp` sidecar, plus `shell:allow-kill` and `shell:allow-stdin-write`.
-- `get_mcp_server_path` resolves the binary (env override → resource dir → next to the exe → workspace `target/`) for a clear preflight error; the actual spawn uses `Command.sidecar('fina-mcp')`.
+- `get_mcp_server_path` resolves the binary (env override → resource dir → next to the exe → workspace `target/`) for a clear preflight error; the actual spawn uses `Command.sidecar('binaries/fina-mcp')`. The name passed to `Command.sidecar` **must exactly equal** the `bundle.externalBin` entry (`binaries/fina-mcp`): the shell plugin matches that string, and the capability scope `name` must match it too. The plugin then reduces it to the basename (`fina-mcp`) to locate the staged binary next to the executable.
 
 `src/features/local-agent/mcpClient.ts` owns the connection. pi-mcp's bundled `StdioTransport` cannot run in the webview (it uses `node:child_process`), so `TauriSidecarTransport` implements `McpTransport` over the Tauri shell plugin: it spawns the sidecar, re-frames stdout lines with `parseJsonRpcMessage`, and writes requests to the child's stdin. The connection is memoized for the app process and shared by all chat sessions; `resetMcpConnection` drops it to force a reconnect.
 
@@ -163,7 +163,7 @@ All commands below are registered in `src-tauri/src/lib.rs`. Rust command argume
 | Command | Purpose / relevant input |
 | --- | --- |
 | `get_app_paths` | Creates app-data subdirectories and returns app-data, models, sessions, and config paths. |
-| `curated_model_catalog` | Returns the five curated model metadata records. |
+| `curated_model_catalog` | Returns the curated model metadata records. |
 | `list_local_models` | Lists `.gguf` files in the app-managed models directory. |
 | `open_models_folder` | Opens that directory using `tauri-plugin-opener`. |
 | `start_model_download` | `modelId`; streams, verifies, and installs a curated file. |
@@ -201,7 +201,7 @@ All commands below are registered in `src-tauri/src/lib.rs`. Rust command argume
 ## Current constraints and gaps
 
 - Tauri desktop only; browser mode cannot load local files or execute native inference.
-- The panel offers five curated Q4_K_M models and local discovery only inside the app-managed models folder. There is no arbitrary filesystem picker, resume-download support, or custom model catalog UI.
+- The panel offers eight curated Q4_K_M models and local discovery only inside the app-managed models folder. There is no arbitrary filesystem picker, resume-download support, or custom model catalog UI.
 - Model load/unload and context/sampler settings are not fully user-configurable. Models are not automatically loaded at startup. `unload_model` exists but has no panel control.
 - Frontend sends a 512-token cap. Rust allows up to 2048 for other callers, checks context fit, and does not expose a context-trimming strategy.
 - Native kernel tools inspect demo outputs; current assistant tools do not accept the user's transient trade/market inputs (MCP tools that need `trade`/`market` arguments must be given them in the call).

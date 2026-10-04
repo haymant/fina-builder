@@ -12,7 +12,7 @@
       "identifier": "shell:allow-spawn",
       "allow": [
         {
-          "name": "fina-mcp",
+          "name": "binaries/fina-mcp",
           "sidecar": true,
           "args": true
         }
@@ -22,7 +22,7 @@
       "identifier": "shell:allow-execute",
       "allow": [
         {
-          "name": "fina-mcp",
+          "name": "binaries/fina-mcp",
           "sidecar": true,
           "args": true
         }

@@ -22,6 +22,10 @@ import { Type } from 'typebox'
  * `@tauri-apps/plugin-shell` `Command` API, which spawns the sidecar natively
  * and streams its stdout line by line. We re-frame those lines into the same
  * newline-delimited JSON-RPC messages an MCP stdio server emits.
+ *
+ * `commandName` must exactly match the `bundle.externalBin` entry in
+ * `tauri.conf.json` (`binaries/fina-mcp`); the shell plugin rejects any program
+ * that is not an exact configured sidecar string with `SidecarNotAllowed`.
  */
 class TauriSidecarTransport implements McpTransport {
   private child: Child | undefined
@@ -171,7 +175,7 @@ async function connect(): Promise<McpConnection> {
   if (!resolved) {
     throw new Error('fina-mcp sidecar is not available. Build it with `cargo build -p fina-mcp` or set FINA_MCP_BIN.')
   }
-  const transport = new TauriSidecarTransport('fina-mcp')
+  const transport = new TauriSidecarTransport('binaries/fina-mcp')
   const client = new McpClient({
     name: 'fina-builder-local-agent',
     version: '0.1.0',

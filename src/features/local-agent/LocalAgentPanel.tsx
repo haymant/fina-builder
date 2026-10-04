@@ -28,7 +28,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createLocalAgentAdapter, storedMessagesToThreadMessages } from './piLocalRuntime'
-import { getMcpConnection, type McpConnection } from './mcpClient'
+import { getMcpConnection, resetMcpConnection, type McpConnection } from './mcpClient'
 import { ComposerSourceMenu } from './ComposerSourceMenu'
 import { AGENT_SKILLS, type AgentSkill } from './skills'
 
@@ -186,7 +186,9 @@ function ChatThread({
   activeSkills,
   mcpConnection,
   mcpError,
+  mcpConnecting,
   onToggleSkill,
+  onRetryConnection,
   onSelectModel,
   onManageModels,
   onSaved,
@@ -199,7 +201,9 @@ function ChatThread({
   activeSkills: readonly AgentSkill[]
   mcpConnection: McpConnection | null
   mcpError: string | null
+  mcpConnecting: boolean
   onToggleSkill: (id: string) => void
+  onRetryConnection: () => void
   onSelectModel: (path: string) => void
   onManageModels: () => void
   onSaved: () => void
@@ -259,8 +263,10 @@ function ChatThread({
                 <ComposerSourceMenu
                   connection={mcpConnection}
                   connectionError={mcpError}
+                  connecting={mcpConnecting}
                   activeSkillIds={activeSkills.map((skill) => skill.id)}
                   onToggleSkill={onToggleSkill}
+                  onRetryConnection={onRetryConnection}
                 />
                 <ModelPicker loadedName={loadedName} models={models} onSelect={onSelectModel} onManage={onManageModels} />
               </div>
@@ -427,6 +433,7 @@ export function LocalAgentPanel({ open, onClose }: { open: boolean; onClose: () 
   const [chatKey, setChatKey] = useState(0)
   const [mcpConnection, setMcpConnection] = useState<McpConnection | null>(null)
   const [mcpError, setMcpError] = useState<string | null>(null)
+  const [mcpConnecting, setMcpConnecting] = useState(false)
   const [activeSkillIds, setActiveSkillIds] = useState<readonly string[]>([])
 
   const activeSkills = useMemo(
@@ -513,23 +520,34 @@ export function LocalAgentPanel({ open, onClose }: { open: boolean; onClose: () 
   // Connect to the bundled fina-mcp sidecar so the composer `+` menu can list
   // the server and its tools. The connection is memoized in mcpClient, so this
   // shares the same client the chat adapter uses.
-  useEffect(() => {
-    if (!open || !isTauri) return
-    let disposed = false
-    void getMcpConnection()
+  const connectMcp = useCallback(() => {
+    if (!isTauri) return
+    // Defer the first state update so calling this from an effect does not
+    // synchronously set state during render/commit.
+    const pending = Promise.resolve().then(() => {
+      setMcpConnecting(true)
+      return getMcpConnection()
+    })
+    void pending
       .then((connection) => {
-        if (disposed) return
         setMcpConnection(connection)
         setMcpError(null)
       })
       .catch((reason) => {
-        if (disposed) return
+        setMcpConnection(null)
         setMcpError(reason instanceof Error ? reason.message : String(reason))
       })
-    return () => {
-      disposed = true
-    }
-  }, [open])
+      .finally(() => setMcpConnecting(false))
+  }, [])
+
+  const retryMcp = useCallback(() => {
+    void resetMcpConnection().finally(() => connectMcp())
+  }, [connectMcp])
+
+  useEffect(() => {
+    if (!open || !isTauri) return
+    connectMcp()
+  }, [open, connectMcp])
 
   const startDownload = (modelId: string) => {
     setError('')
@@ -655,7 +673,9 @@ export function LocalAgentPanel({ open, onClose }: { open: boolean; onClose: () 
               activeSkills={activeSkills}
               mcpConnection={mcpConnection}
               mcpError={mcpError}
+              mcpConnecting={mcpConnecting}
               onToggleSkill={toggleSkill}
+              onRetryConnection={retryMcp}
               onSelectModel={(path) => void loadModel(path)}
               onManageModels={() => setManageModels(true)}
               onSaved={handleSaved}
