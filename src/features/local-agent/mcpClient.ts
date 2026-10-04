@@ -143,10 +143,23 @@ function adaptTool(client: McpClient, tool: Tool): AgentTool {
 export type McpConnection = {
   client: McpClient
   tools: AgentTool[]
+  /** Raw MCP tool descriptors (name/description/inputSchema) before adaptation. */
+  rawTools: McpToolInfo[]
   serverName: string | undefined
+  serverVersion: string | undefined
   instructions: string | undefined
   close: () => Promise<void>
 }
+
+/** Minimal MCP tool metadata the UI needs for the composer menu. */
+export type McpToolInfo = {
+  name: string
+  title?: string
+  description?: string
+}
+
+/** Connection state for the composer's `+` menu. */
+export type McpConnectionStatus = 'connecting' | 'connected' | 'unavailable'
 
 let connection: Promise<McpConnection> | undefined
 
@@ -169,7 +182,13 @@ async function connect(): Promise<McpConnection> {
   return {
     client,
     tools: tools.map((tool) => adaptTool(client, tool)),
+    rawTools: tools.map((tool) => ({
+      name: tool.name,
+      title: tool.title,
+      description: tool.description,
+    })),
     serverName: client.serverInfo?.name,
+    serverVersion: client.serverInfo?.version,
     instructions: client.instructions,
     close: () => client.close(),
   }

@@ -11,6 +11,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { ChatModelAdapter, ChatModelRunOptions, ChatModelRunResult, ThreadMessageLike } from '@assistant-ui/react'
 import { getMcpConnection } from './mcpClient'
+import type { AgentSkill } from './skills'
 
 type NativeTokenEvent = { generationId: string; delta: string; text: string }
 type KernelToolName = 'get_branch_stats' | 'get_distributions' | 'get_mc_diagnostics'
@@ -79,9 +80,37 @@ async function loadMcpTools(): Promise<AgentTool[]> {
   }
 }
 
-function buildSystemPrompt(tools: AgentTool[]): string {
-  const toolList = tools.map((tool) => `${tool.name}: ${tool.description ?? tool.label ?? ''}`).join('\n')
-  return `You are Fina Builder's offline structured-products assistant. Answer from the local conversation and the supplied kernel tool results. Be explicit that this repository is a demonstrator: its synthetic paths and heuristic analytics are not production prices, official valuations, or risk measures. Do not give trading instructions.\n\nYou may call one of these read-only local tools when relevant: ${toolList}. To request a tool, return exactly one JSON object and no surrounding prose: {"tool":"<tool-name>","arguments":{}}. Only use listed tools. After receiving a tool result, explain it in plain language and distinguish displayed demo values from market-calibrated outputs. Otherwise answer normally.`
+/**
+ * Merge the built-in tools with the MCP tools. When the MCP server exposes a
+ * tool whose normalized name matches a built-in, the MCP tool wins: it is the
+ * canonical path and avoids listing two tools that do the same thing. The
+ * built-in stays only when no MCP twin is present (e.g. sidecar unavailable).
+ */
+export function mergeTools(builtIns: AgentTool[], mcpTools: AgentTool[]): AgentTool[] {
+  const mcpNames = new Set(mcpTools.map((tool) => normalizeToolName(tool.name)))
+  const remainingBuiltIns = builtIns.filter(
+    (tool) => !mcpNames.has(normalizeToolName(`mcp_${tool.name}`)) && !mcpNames.has(normalizeToolName(tool.name)),
+  )
+  return [...remainingBuiltIns, ...mcpTools]
+}
+
+function describeTools(tools: AgentTool[]): string {
+  return tools.map((tool) => `- ${tool.name}: ${tool.description ?? tool.label ?? ''}`).join('\n')
+}
+
+function buildSystemPrompt(tools: AgentTool[], skills: readonly AgentSkill[]): string {
+  const skillSection = skills.length > 0
+    ? `\n\nActive skills (apply their guidance):\n${skills.map((skill) => `- ${skill.name}: ${skill.instructions}`).join('\n')}`
+    : ''
+  return `You are Fina Builder's offline structured-products assistant. Answer from the local conversation and the supplied tool results. Be explicit that this repository is a demonstrator: its synthetic paths and heuristic analytics are not production prices, official valuations, or risk measures. Do not give trading instructions.
+${skillSection}
+
+Tools you may call (read-only):
+${describeTools(tools)}
+
+TOOL CALL FORMAT: To call a tool, reply with exactly one JSON object and nothing else:
+{"tool":"<tool-name>","arguments":{}}
+Use the exact tool name from the list. Do not add prose, explanations, or markdown code fences around the JSON. Wait for the tool result before answering. If no tool is needed, answer normally in plain language.`
 }
 
 class AsyncTextQueue {
@@ -132,29 +161,103 @@ function toPiMessage(message: ChatModelRunOptions['messages'][number]) {
   return { role, content: contentText(message.content), timestamp: Date.now() }
 }
 
+/**
+ * Build the message array for native inference. Tool results are delivered as
+ * user turns with an explicit prefix: `LlamaChatMessage` carries only role and
+ * content, and many GGUF chat templates expect a tool_call_id on real `tool`
+ * turns, so a prefixed user turn is the portable choice across the catalog.
+ */
 function toNativeMessages(context: TranscriptContext) {
-  return context.messages.map((message) => {
-    const content = contentText(message.content)
-    const role = message.role === 'system' || message.role === 'assistant' ? message.role : 'user'
-    const text = message.role === 'toolResult' ? `Local tool result:\n${content}` : content
-    return { role, content: text }
-  })
+  return context.messages
+    .map((message) => {
+      const content = contentText(message.content)
+      if (message.role === 'system') return { role: 'system', content }
+      if (message.role === 'assistant') return { role: 'assistant', content }
+      if (message.role === 'toolResult') return { role: 'user', content: `Tool result:\n${content}` }
+      return { role: 'user', content }
+    })
+    .filter((message) => message.content.trim().length > 0)
 }
 
-function toolRequest(text: string, tools: AgentTool[]): { name: string; args: Record<string, never> } | undefined {
-  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
-  try {
-    const value: unknown = JSON.parse(trimmed)
-    if (typeof value !== 'object' || value === null || !('tool' in value)) return undefined
-    const item = value as { tool?: unknown; arguments?: unknown }
-    if (!tools.some((tool) => tool.name === item.tool)) return undefined
+/**
+ * Extract every top-level brace-balanced `{...}` slice from arbitrary text.
+ * Small local models wrap the tool request in prose and markdown fences, so a
+ * whole-string `JSON.parse` is too brittle to rely on.
+ */
+export function jsonObjectSlices(text: string): string[] {
+  const slices: string[] = []
+  let depth = 0
+  let start = -1
+  let inString = false
+  let escaped = false
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') {
+      inString = true
+    } else if (char === '{') {
+      if (depth === 0) start = i
+      depth += 1
+    } else if (char === '}') {
+      if (depth > 0) {
+        depth -= 1
+        if (depth === 0 && start >= 0) {
+          slices.push(text.slice(start, i + 1))
+          start = -1
+        }
+      }
+    }
+  }
+  return slices
+}
+
+function normalizeToolName(name: string): string {
+  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+/**
+ * Resolve a model-requested tool name to a registered tool. Handles the
+ * built-in vs `mcp_`-prefixed MCP split: a model that asks for
+ * `get_mc_diagnostics` still reaches the MCP tool, and a prefixed MCP name
+ * resolves to its built-in twin when only that exists.
+ */
+function resolveTool(name: string, tools: AgentTool[]): AgentTool | undefined {
+  const exact = tools.find((tool) => tool.name === name)
+  if (exact) return exact
+  const wanted = normalizeToolName(name)
+  const candidates = tools.filter((tool) => {
+    const normalized = normalizeToolName(tool.name)
+    return normalized === wanted || normalized === normalizeToolName(`mcp_${name}`) || `mcp_${normalized}` === normalizeToolName(tool.name)
+  })
+  // Prefer the MCP tool when both a built-in and an MCP variant match.
+  return candidates.find((tool) => tool.name.startsWith('mcp_')) ?? candidates[0]
+}
+
+export function toolRequest(text: string, tools: AgentTool[]): { name: string; args: Record<string, never> } | undefined {
+  for (const slice of jsonObjectSlices(text)) {
+    let value: unknown
+    try {
+      value = JSON.parse(slice)
+    } catch {
+      continue
+    }
+    if (typeof value !== 'object' || value === null) continue
+    const item = value as { tool?: unknown; arguments?: unknown; name?: unknown }
+    const requested = typeof item.tool === 'string' ? item.tool : typeof item.name === 'string' ? item.name : undefined
+    if (!requested) continue
+    const tool = resolveTool(requested, tools)
+    if (!tool) continue
     return {
-      name: item.tool as string,
+      name: tool.name,
       args: (typeof item.arguments === 'object' && item.arguments !== null ? item.arguments : {}) as Record<string, never>,
     }
-  } catch {
-    return undefined
   }
+  return undefined
 }
 
 function createLocalStream(
@@ -248,6 +351,8 @@ export type LocalAgentAdapterOptions = {
   sessionId: string
   /** Raw Pi messages restored from disk, used to seed the agent transcript. */
   initialMessages?: readonly unknown[]
+  /** Skills whose instructions are injected into the system prompt. */
+  skills?: readonly AgentSkill[]
   /** Called after a successful save so the host can refresh its session list. */
   onSaved?: () => void
 }
@@ -270,7 +375,7 @@ export function storedMessagesToThreadMessages(raw: readonly unknown[]): ThreadM
   return result
 }
 
-export function createLocalAgentAdapter({ sessionId, initialMessages, onSaved }: LocalAgentAdapterOptions): ChatModelAdapter {
+export function createLocalAgentAdapter({ sessionId, initialMessages, skills = [], onSaved }: LocalAgentAdapterOptions): ChatModelAdapter {
   return {
     async *run(options: ChatModelRunOptions): AsyncGenerator<ChatModelRunResult, void> {
       const queue = new AsyncTextQueue()
@@ -284,8 +389,8 @@ export function createLocalAgentAdapter({ sessionId, initialMessages, onSaved }:
       // plus every tool the `fina-mcp` stdio server advertises. The MCP
       // connection is memoized, so this is cheap after the first prompt.
       const mcpTools = await loadMcpTools()
-      const tools = [...kernelTools, ...mcpTools]
-      const systemPrompt = buildSystemPrompt(tools)
+      const tools = mergeTools(kernelTools, mcpTools)
+      const systemPrompt = buildSystemPrompt(tools, skills)
 
       const messages = [...options.messages]
       const last = messages.pop()

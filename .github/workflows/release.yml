@@ -105,14 +105,20 @@ jobs:
             targets: ''
           # macos-15/macos-14/macos-latest are Apple Silicon runners; the Intel
           # image is `macos-15-intel` (macos-13 was retired by GitHub).
+          #
+          # `MACOSX_DEPLOYMENT_TARGET` must be >= 10.15: llama.cpp's bundled
+          # ggml uses std::filesystem, which is unavailable before 10.15, and
+          # the llama-cpp-sys build passes this through to its CMake flags.
           - label: macos-aarch64
             os: macos-15
             args: '--target aarch64-apple-darwin --bundles dmg'
             targets: 'aarch64-apple-darwin'
+            deploymentTarget: '10.15'
           - label: macos-x86_64
             os: macos-15-intel
             args: '--target x86_64-apple-darwin --bundles dmg'
             targets: 'x86_64-apple-darwin'
+            deploymentTarget: '10.15'
           - label: windows-x86_64
             os: windows-2025
             args: '--bundles msi,nsis'
@@ -137,6 +143,9 @@ jobs:
       - name: Install Tauri Linux prerequisites
         if: runner.os == 'Linux'
         run: ./scripts/ci/install-tauri-linux-deps.sh
+      - name: Set the macOS deployment target for llama.cpp
+        if: runner.os == 'macOS'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=${{ matrix.deploymentTarget }}" >> "$GITHUB_ENV"
       - name: Stamp the release version into the manifests
         run: node scripts/set-version.mjs ${{ needs.release-create.outputs.version }}
       - name: Forward the signing secrets only when they are actually set

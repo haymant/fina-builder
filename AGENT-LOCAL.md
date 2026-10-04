@@ -53,8 +53,10 @@ The local-agent subsystem is separate from the kernel's financial/domain logic. 
 | `src/features/workspace/components/Workspace.tsx` | Adds the Chat launcher in the workspace header. |
 | `src/App.tsx` | Opens the panel and lazy-loads its chunk only after first use. It retains the panel component after first open so its in-memory runtime survives closing/reopening the drawer during the app process. |
 | `src/features/local-agent/LocalAgentPanel.tsx` | Model discovery/catalog UI, download progress and cancellation, load/change model, open model directory, chat rendering, composer (icon send/stop, model picker), header new-chat and chat-history controls, and user-visible errors. |
-| `src/features/local-agent/piLocalRuntime.ts` | Pi Agent tools/system prompt, MCP tool loading and merge, per-session Agent map, per-session assistant-ui adapter factory, stored-message→thread-message mapping for restore, Tauri token-event subscription, and native inference calls. |
+| `src/features/local-agent/piLocalRuntime.ts` | Pi Agent tools/system prompt, MCP tool loading and merge, skills injection, robust tool-request parsing, per-session Agent map, per-session assistant-ui adapter factory, stored-message→thread-message mapping for restore, Tauri token-event subscription, and native inference calls. |
 | `src/features/local-agent/mcpClient.ts` | Memoized `@earendil-works/pi-mcp` `McpClient` connection, the Tauri-shell-plugin `McpTransport`, and MCP-tool→`AgentTool` adaptation. |
+| `src/features/local-agent/ComposerSourceMenu.tsx` | Composer `+` menu: 3-level MCP-server / skills / tools hover navigator. |
+| `src/features/local-agent/skills.ts` | Built-in agent skill registry (instruction blocks injected into the system prompt). |
 | `src-tauri/src/local_agent.rs` | Catalog source of truth, local filesystem operations, model download/verification, loaded-model state, inference/cancellation, session/config JSONL, and MCP sidecar path resolution. |
 | `crates/fina-mcp/src/main.rs` | Newline-delimited JSON-RPC 2.0 MCP stdio server dispatching to `fina-kernel`'s shared command dispatcher. |
 | `scripts/build-mcp-sidecar.sh` | Builds `fina-mcp` and stages it as a triple-suffixed Tauri sidecar under `src-tauri/binaries/`. |
@@ -69,7 +71,9 @@ The Chat button calls `onOpenLocalAgent`. `App.tsx` marks the panel as previousl
 
 The panel detects Tauri through `window.__TAURI_INTERNALS__`. In non-Tauri browser mode it displays an availability notice and does not call the native model commands.
 
-The chat composer follows the assistant-ui composer convention: text field plus a toolbar row with the model picker on the left and a round send icon button that swaps to a stop (square) icon while a run is in flight. Changing the active model and opening the model manager both live in that toolbar / its popover. `New chat` and a chat-history browser are icon buttons in the panel header.
+The chat composer follows the assistant-ui composer convention: text field plus a toolbar row with a `+` source menu and the model picker on the left and a round send icon button that swaps to a stop (square) icon while a run is in flight. Changing the active model and opening the model manager both live in that toolbar / its popover. The `+` menu (`ComposerSourceMenu`) is a three-level hover navigator: level 1 offers `MCP server` and `Skills`; level 2 lists the registered MCP server or the skill list; level 3 shows a hovered MCP server's tools, or toggles skills. `New chat` and a chat-history browser are icon buttons in the panel header.
+
+Skills (`src/features/local-agent/skills.ts`) are named instruction blocks from the agent-skills convention. Toggling one in the `+` menu injects its `instructions` into the system prompt; skills only shape the prompt and never grant new capabilities. The active set is per-panel state passed into the adapter.
 
 ### 2. Model discovery, download, and loading
 
@@ -119,7 +123,13 @@ The agent loadout has two sources, resolved on the first prompt of each adapter:
 
 The chat does not yet pass the UI's edited trade/market settings into these tools; MCP calls that take `trade`/`market` arguments must supply them in the tool arguments.
 
-Tool planning is implemented as a constrained text protocol, not native llama function calling: the system prompt lists every active tool and asks for exactly one JSON object of the form `{"tool":"<tool-name>","arguments":{}}`. `toolRequest` parses the output and checks the name against the active loadout (`kernelTools` plus the MCP tools); Pi's sequential tool execution then runs the corresponding `AgentTool`, which either invokes a Tauri command or calls `client.callTool`. Update the system-prompt builder and parser together with any loadout change. Do not treat model-generated JSON as trusted input.
+Tool planning is implemented as a constrained text protocol, not native llama function calling: the system prompt lists every active tool (drawn from the merged loadout) and asks for exactly one JSON object of the form `{"tool":"<tool-name>","arguments":{}}`.
+
+`toolRequest` must stay tolerant of real model output. Small local models wrap the JSON in prose and markdown fences, so it scans the reply for brace-balanced `{...}` slices (`jsonObjectSlices`) instead of parsing the whole string. It also resolves requested names against the loadout: exact matches win, and a bare name such as `get_mc_diagnostics` maps to its `mcp_`-prefixed tool. That resolution is covered by unit tests in `src/features/local-agent/__tests__/piLocalRuntime.test.ts`.
+
+Pi's sequential tool execution then runs the matched `AgentTool`, which either invokes a Tauri command or calls `client.callTool`. Update the system-prompt builder and parser together with any loadout change. Do not treat model-generated JSON as trusted input.
+
+Built-in kernel tools and MCP tools are merged by `mergeTools`: when the MCP server exposes a tool whose normalized name matches a built-in, the MCP tool wins so the model never sees two tools that do the same thing. Built-ins survive only as a fallback when the sidecar is unavailable. When a turn completes, tool results are replayed to native inference as prefixed `user` turns (the portable choice across GGUF chat templates).
 
 ### MCP sidecar integration
 
@@ -231,7 +241,8 @@ The local-agent Rust unit tests are in `src-tauri/src/local_agent.rs`. Add autom
 
 1. **Keep ownership clear.** Put model loading, filesystem access, checksums, and native inference in `src-tauri/src/local_agent.rs`. Put presentation and Pi/assistant-ui orchestration in `src/features/local-agent/`. Keep product-domain formulas in `fina-kernel`, not in the Tauri local-agent module.
 2. **When adding an agent tool,** prefer adding it to `crates/fina-mcp` so the webview picks it up automatically from `tools/list`; the chat-side wrapper in `mcpClient.ts` is generic. For a built-in tool that must not depend on the sidecar, update the `AgentTool` definition, the system-prompt builder, and `toolRequest` validation together. Validate arguments on the Rust/kernel side too. Prefer read-only tools with explicit, typed inputs.
-3. **When adding models,** add exact filename/URL/size/SHA-256/license/context metadata to the Rust catalog and test uniqueness and format. Keep download-to-partial, full verification, and final rename semantics.
-4. **When adding session restore,** coordinate assistant-ui thread IDs, Pi Agent transcript/state, Tauri session records, and session version migration. Loading a JSONL message array alone does not currently recreate an assistant-ui thread.
-5. **When changing concurrency or model settings,** account for the engine mutex, model/context memory use, the single-generation behavior, abort races, and cross-platform llama.cpp compilation.
-6. **When changing privacy or tools,** update this guide and `README.md` alongside code. The chat does connect to `fina-mcp`; keep the sidecar path, capability scope, and transport description accurate.
+3. **When adding a skill,** add an `AgentSkill` to `src/features/local-agent/skills.ts`. Skills are instruction-only prompt augmentations; do not use them to add capabilities or tools.
+4. **When adding models,** add exact filename/URL/size/SHA-256/license/context metadata to the Rust catalog and test uniqueness and format. Keep download-to-partial, full verification, and final rename semantics.
+5. **When adding session restore,** coordinate assistant-ui thread IDs, Pi Agent transcript/state, Tauri session records, and session version migration. Loading a JSONL message array alone does not currently recreate an assistant-ui thread.
+6. **When changing concurrency or model settings,** account for the engine mutex, model/context memory use, the single-generation behavior, abort races, and cross-platform llama.cpp compilation.
+7. **When changing privacy or tools,** update this guide and `README.md` alongside code. The chat does connect to `fina-mcp`; keep the sidecar path, capability scope, and transport description accurate.
