@@ -32,6 +32,7 @@ import { createLocalAgentAdapter, resetLocalAgentSession, storedMessagesToThread
 import { ToolCallDisclosure } from './ToolCallDisclosure'
 import { getMcpConnection, resetMcpConnection, type McpConnection } from './mcpClient'
 import { ComposerSourceMenu } from './ComposerSourceMenu'
+import { RigaInvestigationMenu } from './RigaInvestigationMenu'
 import { loadAgentSkills, type AgentSkill } from './skills'
 
 type AppPaths = { appDataDir: string; modelsDir: string; sessionsDir: string; configFile: string }
@@ -268,6 +269,7 @@ function Composer({
             onRefreshSkills={onRefreshSkills}
           />
           <ModelPicker loadedName={loadedName} models={models} onSelect={onSelectModel} onManage={onManageModels} />
+          <RigaInvestigationMenu />
         </div>
         <div className="flex items-center gap-1.5">
           <AuiIf condition={(s) => !s.thread.isRunning}>

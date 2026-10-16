@@ -113,6 +113,10 @@ fn skill_roots(app: &AppHandle) -> Vec<PathBuf> {
     // Development: the workspace root relative to the Tauri crate.
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     roots.push(manifest.join("..").join("skills"));
+    // Vendored engine skills (§3.12): tac-engine's market-data contract and
+    // riga-flow's evidence guide. Missing submodules are simply skipped.
+    roots.push(manifest.join("..").join("modules").join("tac-engine").join("skills"));
+    roots.push(manifest.join("..").join("modules").join("riga-flow").join("skills"));
     roots
 }
 

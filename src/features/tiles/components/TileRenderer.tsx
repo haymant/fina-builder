@@ -14,9 +14,61 @@ import { CashflowSummaryTile, CashflowTimelineTile, CashflowDetailTile, PnLSumma
 import { ScheduleExplorerTile, ObservationExplorerTile, ExecutionStateInspectorTile, LifecycleOverviewTile } from '../../pathcube/components/ExecutionLayerTiles'
 import { RiskSummaryTile, GreeksTableTile, BucketVegaTile, SpotPriceExplorerTile, VolatilitySurfaceTile, CorrelationMatrixTile, FXSpotExplorerTile, GreeksWaterfallTile, ScenarioComparisonTile } from '../../pathcube/components/MarketRiskTiles'
 import type { TileType } from '../../dashboards/types'
-import type { ReactElement } from 'react'
+import type { ReactElement, ComponentType } from 'react'
+import { lazy, Suspense } from 'react'
+import { TileErrorBoundary } from './TileErrorBoundary'
+import { PanelLoading } from '../../shared/components/AsyncPanel'
 
-export function TileRenderer({ type }: { type: TileType }) {
+// The engine tiles (xyflow + ECharts) load lazily so the initial app chunk and
+// app start do not pay for code only the riga/tac dashboards use. Each lazy
+// component keeps the same name, so the dispatch below is unchanged.
+const lazyNamed = <M extends Record<string, unknown>, K extends keyof M>(loader: () => Promise<M>, name: K) =>
+  lazy(() => loader().then((module) => ({ default: module[name] as ComponentType })))
+const PetriNetTilesModule = () => import('../../riga/components/PetriNetTiles')
+const RigaAnalyticsModule = () => import('../../riga/components/RigaAnalyticsTiles')
+const RigaMetadataModule = () => import('../../riga/components/RigaMetadataTiles')
+const RigaTradePanelModule = () => import('../../riga/components/RigaTradeEconomicsPanel')
+const RigaMarketPanelModule = () => import('../../riga/components/RigaMarketDataPanel')
+const TacTilesModule = () => import('../../tac/components/TacTiles')
+
+const RigaTradeEconomicsTile = lazyNamed(RigaTradePanelModule, 'RigaTradeEconomicsTile')
+const RigaMarketDataTile = lazyNamed(RigaMarketPanelModule, 'RigaMarketDataTile')
+
+const PayoffPetriNetTile = lazyNamed(PetriNetTilesModule, 'PayoffPetriNetTile')
+const RiskNetTile = lazyNamed(PetriNetTilesModule, 'RiskNetTile')
+const ExplainNetTile = lazyNamed(PetriNetTilesModule, 'ExplainNetTile')
+const TransitionDetailTile = lazyNamed(PetriNetTilesModule, 'TransitionDetailTile')
+const TokenDetailTile = lazyNamed(PetriNetTilesModule, 'TokenDetailTile')
+const RigaDataLineageTile = lazyNamed(PetriNetTilesModule, 'RigaDataLineageTile')
+const RigaBookRiskTile = lazyNamed(RigaAnalyticsModule, 'RigaBookRiskTile')
+const RigaExecutionTapeTile = lazyNamed(RigaAnalyticsModule, 'RigaExecutionTapeTile')
+const RigaGreeksSanityTile = lazyNamed(RigaAnalyticsModule, 'RigaGreeksSanityTile')
+const RigaGovernanceEvidenceTile = lazyNamed(RigaAnalyticsModule, 'RigaGovernanceEvidenceTile')
+const RigaPathCubeTile = lazyNamed(RigaAnalyticsModule, 'RigaPathCubeTile')
+const RigaPlAttributionTile = lazyNamed(RigaAnalyticsModule, 'RigaPlAttributionTile')
+const RigaPlvaExplainTile = lazyNamed(RigaAnalyticsModule, 'RigaPlvaExplainTile')
+const RigaRegressionTriageTile = lazyNamed(RigaAnalyticsModule, 'RigaRegressionTriageTile')
+const RigaRootCauseTile = lazyNamed(RigaAnalyticsModule, 'RigaRootCauseTile')
+const RigaScenarioComparisonTile = lazyNamed(RigaAnalyticsModule, 'RigaScenarioComparisonTile')
+const RigaStatisticsSummaryTile = lazyNamed(RigaAnalyticsModule, 'RigaStatisticsSummaryTile')
+const RigaStressBandsTile = lazyNamed(RigaAnalyticsModule, 'RigaStressBandsTile')
+const RigaTaylorExplainTile = lazyNamed(RigaAnalyticsModule, 'RigaTaylorExplainTile')
+const RigaHealthRunTile = lazyNamed(RigaMetadataModule, 'RigaHealthRunTile')
+const RigaMarketSnapshotTile = lazyNamed(RigaMetadataModule, 'RigaMarketSnapshotTile')
+const TacBarChart = lazyNamed(TacTilesModule, 'TacBarChart')
+const TacCorporateActions = lazyNamed(TacTilesModule, 'TacCorporateActions')
+const TacCorrelationMatrix = lazyNamed(TacTilesModule, 'TacCorrelationMatrix')
+const TacFxSpot = lazyNamed(TacTilesModule, 'TacFxSpot')
+const TacFxVol = lazyNamed(TacTilesModule, 'TacFxVol')
+const TacLakeCoverage = lazyNamed(TacTilesModule, 'TacLakeCoverage')
+const TacManipulationEditor = lazyNamed(TacTilesModule, 'TacManipulationEditor')
+const TacMarketDataPanel = lazyNamed(TacTilesModule, 'TacMarketDataPanel')
+const TacSymbolPicker = lazyNamed(TacTilesModule, 'TacSymbolPicker')
+const TacTaSpPanes = lazyNamed(TacTilesModule, 'TacTaSpPanes')
+const TacVolSurface = lazyNamed(TacTilesModule, 'TacVolSurface')
+const TacYieldCurve = lazyNamed(TacTilesModule, 'TacYieldCurve')
+
+function renderTile(type: TileType): ReactElement | null {
   const wrap = (child: ReactElement) => <div className="h-full min-h-0">{child}</div>
   switch (type) {
     case 'PayoffGraph': return wrap(<ReactFlowProvider><PayoffGraphPanel /></ReactFlowProvider>)
@@ -69,5 +121,51 @@ export function TileRenderer({ type }: { type: TileType }) {
     case 'ExplainLedgerTable': return wrap(<ExplainLedgerTableTile />)
     case 'ExplainLedgerExplorer': return wrap(<ExplainLedgerExplorerTile />)
     case 'ExplainReconciliation': return wrap(<ExplainReconciliationTile />)
+    // riga-flow
+    case 'RigaPayoffPetriNet': return wrap(<PayoffPetriNetTile />)
+    case 'RigaTransitionDetail': return wrap(<TransitionDetailTile />)
+    case 'RigaTokenDetail': return wrap(<TokenDetailTile />)
+    case 'RigaRiskNet': return wrap(<RiskNetTile />)
+    case 'RigaExplainNet': return wrap(<ExplainNetTile />)
+    case 'RigaDataLineage': return wrap(<RigaDataLineageTile />)
+    case 'RigaPathCubeQuery': return wrap(<RigaPathCubeTile />)
+    case 'RigaExecutionTape': return wrap(<RigaExecutionTapeTile />)
+    case 'RigaBookRisk': return wrap(<RigaBookRiskTile />)
+    case 'RigaScenarioComparison': return wrap(<RigaScenarioComparisonTile />)
+    case 'RigaPlAttribution': return wrap(<RigaPlAttributionTile />)
+    case 'RigaTaylorExplain': return wrap(<RigaTaylorExplainTile />)
+    case 'RigaPlvaExplain': return wrap(<RigaPlvaExplainTile />)
+    case 'RigaStatisticsSummary': return wrap(<RigaStatisticsSummaryTile />)
+    case 'RigaGovernanceEvidence': return wrap(<RigaGovernanceEvidenceTile />)
+    case 'RigaRootCause': return wrap(<RigaRootCauseTile />)
+    case 'RigaRegressionTriage': return wrap(<RigaRegressionTriageTile />)
+    case 'RigaGreeksSanity': return wrap(<RigaGreeksSanityTile />)
+    case 'RigaStressBands': return wrap(<RigaStressBandsTile />)
+    case 'RigaMarketSnapshot': return wrap(<RigaMarketSnapshotTile />)
+    case 'RigaHealthRun': return wrap(<RigaHealthRunTile />)
+    case 'RigaTradeEconomics': return wrap(<RigaTradeEconomicsTile />)
+    case 'RigaMarketData': return wrap(<RigaMarketDataTile />)
+    // tac-engine
+    case 'TacMarketDataPanel': return wrap(<TacMarketDataPanel />)
+    case 'TacSymbolPicker': return wrap(<TacSymbolPicker />)
+    case 'TacBarChart': return wrap(<TacBarChart />)
+    case 'TacTaSpPanes': return wrap(<TacTaSpPanes />)
+    case 'TacCorrelationMatrix': return wrap(<TacCorrelationMatrix />)
+    case 'TacVolSurface': return wrap(<TacVolSurface />)
+    case 'TacYieldCurve': return wrap(<TacYieldCurve />)
+    case 'TacFxSpot': return wrap(<TacFxSpot />)
+    case 'TacFxVol': return wrap(<TacFxVol />)
+    case 'TacCorporateActions': return wrap(<TacCorporateActions />)
+    case 'TacLakeCoverage': return wrap(<TacLakeCoverage />)
+    case 'TacManipulationEditor': return wrap(<TacManipulationEditor />)
   }
+  return null
+}
+
+export function TileRenderer({ type }: { type: TileType }) {
+  return (
+    <TileErrorBoundary key={type}>
+      <Suspense fallback={<PanelLoading title="Loading tile" />}>{renderTile(type)}</Suspense>
+    </TileErrorBoundary>
+  )
 }

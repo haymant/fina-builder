@@ -21,6 +21,7 @@ use std::{
 
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::sync::OnceLock;
 
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const INIT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -58,15 +59,16 @@ struct McpProcess {
 }
 
 impl McpProcess {
-    fn spawn(binary: &str) -> Result<Self, String> {
+    fn spawn(binary: &str, env: &[(String, String)]) -> Result<Self, String> {
         let mut child = Command::new(binary)
+            .envs(env.iter().map(|(key, value)| (key.clone(), value.clone())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| format!("Could not start fina-mcp ({binary}): {e}"))?;
-        let stdin = child.stdin.take().ok_or("fina-mcp stdin unavailable")?;
-        let stdout = child.stdout.take().ok_or("fina-mcp stdout unavailable")?;
+            .map_err(|e| format!("Could not start {binary}: {e}"))?;
+        let stdin = child.stdin.take().ok_or(format!("{binary} stdin unavailable"))?;
+        let stdout = child.stdout.take().ok_or(format!("{binary} stdout unavailable"))?;
         let responses: Arc<Mutex<HashMap<i64, Value>>> = Arc::new(Mutex::new(HashMap::new()));
         let (wake_tx, wake) = mpsc::channel();
         let reader_responses = responses.clone();
@@ -180,84 +182,157 @@ impl Drop for McpProcess {
     }
 }
 
-/// Serialized MCP connection owned by `LocalAgentRuntime`.
+/// Registry of named MCP stdio connections owned by the Tauri runtime.
+///
+/// `fina` is the bundled demo server; `riga` is `riga-mcp`; `tac` is
+/// `tac-engine`. Each server is spawned lazily on first use and kept alive.
 #[derive(Default)]
 pub struct McpRuntime {
-    process: Mutex<Option<McpProcess>>,
+    processes: Mutex<HashMap<String, McpProcess>>,
+    /// Extra environment (loaded from `.env` files) forwarded to child servers.
+    /// Process env always wins; this only fills gaps.
+    env: OnceLock<Vec<(String, String)>>,
 }
 
 impl McpRuntime {
-    /// Connect if not already connected, returning the advertised tools.
-    pub fn list_tools(&self, binary: &str) -> Result<(String, String, Vec<McpTool>), String> {
-        let mut guard = self
-            .process
-            .lock()
-            .map_err(|_| "MCP state is unavailable")?;
-        if guard.is_none() {
-            *guard = Some(McpProcess::spawn(binary)?);
-        }
-        let process = guard.as_mut().ok_or("MCP process is unavailable")?;
-        let result = process.request("tools/list", json!({}), INIT_TIMEOUT)?;
-        let tools = result
-            .get("tools")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|tool| {
-                        let name = tool.get("name").and_then(Value::as_str)?.to_string();
-                        Some(McpTool {
-                            name,
-                            title: tool
-                                .get("title")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                            description: tool
-                                .get("description")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                            input_schema: tool
-                                .get("inputSchema")
-                                .cloned()
-                                .unwrap_or_else(|| json!({"type":"object"})),
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        Ok((
-            process.server_name.clone(),
-            process.server_version.clone(),
-            tools,
-        ))
+    /// Install the `.env`-derived environment the engine children inherit.
+    pub fn configure_env(&self, env: Vec<(String, String)>) {
+        let _ = self.env.set(env);
     }
 
-    pub fn call_tool(&self, name: &str, arguments: Value) -> Result<McpCallResult, String> {
+    fn child_env(&self) -> Vec<(String, String)> {
+        self.env.get().cloned().unwrap_or_default()
+    }
+
+    fn with_process<F, R>(&self, server: &str, binary: &str, run: F) -> Result<R, String>
+    where
+        F: FnOnce(&mut McpProcess) -> Result<R, String>,
+    {
         let mut guard = self
-            .process
+            .processes
             .lock()
             .map_err(|_| "MCP state is unavailable")?;
-        let process = guard.as_mut().ok_or("MCP is not connected")?;
-        let result = process.request(
-            "tools/call",
-            json!({ "name": name, "arguments": arguments }),
-            CALL_TIMEOUT,
-        )?;
-        Ok(McpCallResult {
-            content: result.get("content").cloned().unwrap_or_else(|| json!([])),
-            structured_content: result.get("structuredContent").cloned(),
-            is_error: result
-                .get("isError")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+        if !guard.contains_key(server) {
+            guard.insert(server.to_string(), McpProcess::spawn(binary, &self.child_env())?);
+        }
+        let process = guard
+            .get_mut(server)
+            .ok_or("MCP process is unavailable")?;
+        run(process)
+    }
+
+    /// Connect if not already connected, returning the advertised tools.
+    pub fn list_tools(
+        &self,
+        server: &str,
+        binary: &str,
+    ) -> Result<(String, String, Vec<McpTool>), String> {
+        self.with_process(server, binary, |process| {
+            let result = process.request("tools/list", json!({}), INIT_TIMEOUT)?;
+            let tools = result
+                .get("tools")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|tool| {
+                            let name = tool.get("name").and_then(Value::as_str)?.to_string();
+                            Some(McpTool {
+                                name,
+                                title: tool
+                                    .get("title")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string),
+                                description: tool
+                                    .get("description")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string),
+                                input_schema: tool
+                                    .get("inputSchema")
+                                    .cloned()
+                                    .unwrap_or_else(|| json!({"type":"object"})),
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            Ok((process.server_name.clone(), process.server_version.clone(), tools))
+        })
+    }
+
+    pub fn call_tool(
+        &self,
+        server: &str,
+        binary: &str,
+        name: &str,
+        arguments: Value,
+    ) -> Result<McpCallResult, String> {
+        self.with_process(server, binary, |process| {
+            let result = process.request(
+                "tools/call",
+                json!({ "name": name, "arguments": arguments }),
+                CALL_TIMEOUT,
+            )?;
+            Ok(McpCallResult {
+                content: result.get("content").cloned().unwrap_or_else(|| json!([])),
+                structured_content: result.get("structuredContent").cloned(),
+                is_error: result
+                    .get("isError")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            })
+        })
+    }
+
+    pub fn list_resources(&self, server: &str, binary: &str) -> Result<Value, String> {
+        self.with_process(server, binary, |process| {
+            let result = process.request("resources/list", json!({}), INIT_TIMEOUT)?;
+            Ok(result.get("resources").cloned().unwrap_or_else(|| json!([])))
+        })
+    }
+
+    pub fn read_resource(&self, server: &str, binary: &str, uri: &str) -> Result<Value, String> {
+        self.with_process(server, binary, |process| {
+            let result = process.request("resources/read", json!({ "uri": uri }), CALL_TIMEOUT)?;
+            Ok(result)
+        })
+    }
+
+    pub fn list_prompts(&self, server: &str, binary: &str) -> Result<Value, String> {
+        self.with_process(server, binary, |process| {
+            let result = process.request("prompts/list", json!({}), INIT_TIMEOUT)?;
+            Ok(result.get("prompts").cloned().unwrap_or_else(|| json!([])))
+        })
+    }
+
+    pub fn get_prompt(
+        &self,
+        server: &str,
+        binary: &str,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Value, String> {
+        self.with_process(server, binary, |process| {
+            process.request(
+                "prompts/get",
+                json!({ "name": name, "arguments": arguments }),
+                CALL_TIMEOUT,
+            )
+        })
+    }
+
+    /// Poll a SEP-2663 task (`tasks/get`).
+    pub fn get_task(&self, server: &str, binary: &str, task_id: &str) -> Result<Value, String> {
+        self.with_process(server, binary, |process| {
+            process.request("tasks/get", json!({ "taskId": task_id }), CALL_TIMEOUT)
         })
     }
 
     /// Non-blocking reset for async command handlers: if a call currently holds
     /// the connection, leave it alone rather than stalling a runtime worker.
-    pub fn try_reset(&self) {
-        if let Ok(mut guard) = self.process.try_lock() {
-            *guard = None;
+    pub fn try_reset(&self, server: &str) {
+        if let Ok(mut guard) = self.processes.try_lock() {
+            guard.remove(server);
         }
     }
 }
@@ -295,11 +370,13 @@ mod tests {
             return;
         };
         let runtime = McpRuntime::default();
-        let (server, _version, tools) = runtime.list_tools(&binary).expect("tools/list");
+        let (server, _version, tools) = runtime.list_tools("fina", &binary).expect("tools/list");
         assert_eq!(server, "fina-mcp");
         assert!(tools.iter().any(|tool| tool.name == "health"));
 
-        let result = runtime.call_tool("health", json!({})).expect("tools/call");
+        let result = runtime
+            .call_tool("fina", &binary, "health", json!({}))
+            .expect("tools/call");
         assert!(!result.is_error);
         assert_eq!(
             result
@@ -310,14 +387,76 @@ mod tests {
             Some(fina_kernel::VERSION)
         );
         // Reuse: a second call should not respawn and should still work.
-        let again = runtime.call_tool("health", json!({})).expect("second call");
+        let again = runtime
+            .call_tool("fina", &binary, "health", json!({}))
+            .expect("second call");
         assert!(!again.is_error);
 
         // A larger, argument-less demo tool (the shape the chat calls).
         let distributions = runtime
-            .call_tool("get_distributions", json!({}))
+            .call_tool("fina", &binary, "get_distributions", json!({}))
             .expect("get_distributions");
         assert!(!distributions.is_error);
-        assert!(distributions.structured_content.is_some());
+
+        // The resource/prompt/task surfaces route through the same connection.
+        // fina-mcp answers `Method not found`; the point is that the client
+        // frames the request, reads the reply and returns without hanging.
+        let _ = runtime.list_resources("fina", &binary);
+        let _ = runtime.list_prompts("fina", &binary);
+        let _ = runtime.read_resource("fina", &binary, "riga://fixtures/termsheet1");
+        let _ = runtime.get_prompt("fina", &binary, "explain_pv_change", json!({}));
+        let _ = runtime.get_task("fina", &binary, "task-1");
+        runtime.try_reset("fina");
+    }
+
+    /// Resolve the vendored `riga-mcp` binary (submodule default relative path).
+    fn riga_binary() -> Option<String> {
+        if let Ok(path) = std::env::var("RIGA_MCP_BIN") {
+            if std::path::Path::new(&path).is_file() {
+                return Some(path);
+            }
+        }
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        for profile in ["release", "debug"] {
+            let candidate = std::path::Path::new(manifest)
+                .join("..")
+                .join("modules")
+                .join("riga-flow")
+                .join("target")
+                .join(profile)
+                .join("riga-mcp");
+            if candidate.is_file() {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn lists_and_calls_riga_flow_tools_over_stdio() {
+        let Some(binary) = riga_binary() else {
+            // Built by `cargo build --release -p riga-mcp` in the submodule.
+            eprintln!("skipping: riga-mcp binary not built");
+            return;
+        };
+        let runtime = McpRuntime::default();
+        let (server, _version, tools) = runtime.list_tools("riga", &binary).expect("tools/list");
+        assert!(server.to_lowercase().contains("riga"), "unexpected server name {server}");
+        assert!(
+            tools.iter().any(|tool| tool.name == "price_put"),
+            "expected the riga-flow tool catalogue, got {} tools",
+            tools.len()
+        );
+        // price_put is fixture-only, so it needs no arguments.
+        let result = runtime
+            .call_tool("riga", &binary, "price_put", json!({}))
+            .expect("price_put");
+        assert!(!result.is_error);
+        let pv = result
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.pointer("/result/pv"))
+            .and_then(Value::as_f64);
+        assert!(pv.is_some_and(|value| value > 0.0), "price_put returned no pv");
     }
 }

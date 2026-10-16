@@ -10,7 +10,7 @@ import {
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { ChatModelAdapter, ChatModelRunOptions, ChatModelRunResult, TextMessagePart, ThreadMessageLike, ToolCallMessagePart } from '@assistant-ui/react'
-import { getMcpConnection, MAX_TOOL_RESULT_CHARS } from './mcpClient'
+import { getMcpConnection, getRigaConnection, MAX_TOOL_RESULT_CHARS } from './mcpClient'
 import type { AgentSkill } from './skills'
 
 type NativeTokenEvent = { generationId: string; delta: string; text: string }
@@ -71,13 +71,22 @@ const kernelTools: AgentTool[] = [
  * only ever sees tools the running `fina-mcp` server actually advertises.
  */
 async function loadMcpTools(): Promise<AgentTool[]> {
+  const tools: AgentTool[] = []
   try {
     const connection = await getMcpConnection()
-    return connection.tools
+    tools.push(...connection.tools)
   } catch (error) {
     console.warn('fina-mcp unavailable; continuing with built-in kernel tools only', error)
-    return []
   }
+  // riga-flow (pricing/evidence) is a second server; its absence must not break
+  // the demo tools.
+  try {
+    const riga = await getRigaConnection()
+    tools.push(...riga.tools)
+  } catch (error) {
+    console.warn('riga-mcp unavailable; continuing without riga-flow tools', error)
+  }
+  return tools
 }
 
 /**

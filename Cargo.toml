@@ -7,6 +7,10 @@ members = [
     "crates/fina-mcp",
     "src-tauri",
 ]
+# The vendored engine submodules are standalone workspaces (§3.10): keep them
+# out of fina-builder's workspace so each resolves its own `Cargo.lock` and can
+# be built with `cargo build --manifest-path modules/<dir>/Cargo.toml`.
+exclude = ["modules/riga-flow", "modules/tac-engine"]
 
 [workspace.package]
 version = "0.1.0"

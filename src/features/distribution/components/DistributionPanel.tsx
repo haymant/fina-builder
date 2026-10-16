@@ -173,7 +173,7 @@ export const DistributionPanel = memo(function DistributionPanel() {
               className={`rounded px-2 py-1 text-[10px] transition ${
                 tab === t.id
                   ? 'bg-primary/20 text-primary'
-                  : 'text-muted hover:text-slate-200'
+                  : 'text-muted hover:text-main'
               }`}
             >
               {t.label}

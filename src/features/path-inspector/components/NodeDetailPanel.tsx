@@ -49,7 +49,7 @@ export const NodeDetailPanel = memo(function NodeDetailPanel() {
       <div className="space-y-3">
         <div>
           <div className="text-[10px] tracking-wider text-muted uppercase">Node</div>
-          <div className="text-sm font-semibold text-slate-100">{detail.name}</div>
+          <div className="text-sm font-semibold text-main">{detail.name}</div>
         </div>
 
         <p className="text-xs leading-relaxed text-slate-400">{detail.description}</p>
@@ -61,7 +61,7 @@ export const NodeDetailPanel = memo(function NodeDetailPanel() {
           </div>
           <div className="rounded border border-slate-700 bg-bg/60 p-2">
             <div className="text-[9px] text-muted uppercase">Decision Rule</div>
-            <div className="mt-0.5 font-mono text-xs text-slate-200">{detail.decisionRule}</div>
+            <div className="mt-0.5 font-mono text-xs text-main">{detail.decisionRule}</div>
           </div>
           <div className="rounded border border-slate-700 bg-bg/60 p-2">
             <div className="text-[9px] text-muted uppercase">Output</div>
@@ -75,7 +75,7 @@ export const NodeDetailPanel = memo(function NodeDetailPanel() {
           </div>
           <div className="rounded border border-slate-700 bg-bg/60 p-2">
             <div className="text-[9px] text-muted uppercase">Affected Paths</div>
-            <div className="mt-0.5 font-mono text-xs text-slate-200">
+            <div className="mt-0.5 font-mono text-xs text-main">
               {detail.affectedPaths.toLocaleString()}
             </div>
           </div>

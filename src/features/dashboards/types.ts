@@ -11,6 +11,16 @@ export type TileType =
   | 'CashflowSummary' | 'CashflowTimeline' | 'CashflowDetail' | 'PnLSummary' | 'PnLTimeline'
   | 'ValuationExplainSummary' | 'MasterExplainWaterfall' | 'TaylorExplain' | 'PLVAExplain'
   | 'ExplainLedgerTable' | 'ExplainLedgerExplorer' | 'ExplainReconciliation'
+  // riga-flow tiles (additive; handoff §5.1b)
+  | 'RigaPayoffPetriNet' | 'RigaTransitionDetail' | 'RigaTokenDetail' | 'RigaRiskNet' | 'RigaExplainNet'
+  | 'RigaDataLineage' | 'RigaPathCubeQuery' | 'RigaExecutionTape' | 'RigaBookRisk' | 'RigaScenarioComparison'
+  | 'RigaPlAttribution' | 'RigaTaylorExplain' | 'RigaPlvaExplain' | 'RigaStatisticsSummary'
+  | 'RigaGovernanceEvidence' | 'RigaRootCause' | 'RigaRegressionTriage' | 'RigaGreeksSanity'
+  | 'RigaStressBands' | 'RigaMarketSnapshot' | 'RigaHealthRun' | 'RigaTradeEconomics' | 'RigaMarketData'
+  // tac-engine market-data tiles (additive; handoff §6.7)
+  | 'TacMarketDataPanel' | 'TacSymbolPicker' | 'TacBarChart' | 'TacTaSpPanes' | 'TacCorrelationMatrix'
+  | 'TacVolSurface' | 'TacYieldCurve' | 'TacFxSpot' | 'TacFxVol' | 'TacCorporateActions'
+  | 'TacLakeCoverage' | 'TacManipulationEditor'
 
 export type TileLayout = { i: string; x: number; y: number; w: number; h: number; minW?: number; minH?: number }
 export type Tile = { id: string; type: TileType; title: string }

@@ -50,6 +50,16 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     allowedHosts: ['5173-isfrrzvtdzt80v0qqywhj-41cb09c2.sg2.manus.computer'],
+    // Same-origin proxies for the local MCP engines. The webview cannot call
+    // `127.0.0.1:8788` directly: riga-mcp sends no CORS / private-network
+    // headers, so the browser blocks the request (leaving it pending). Proxying
+    // keeps every request same-origin and sidesteps CORS entirely.
+    //   /riga/mcp -> http://127.0.0.1:8788/mcp   (riga-mcp --transport http)
+    //   /tac/mcp  -> http://127.0.0.1:8790/mcp   (npm run mcp:http:tac)
+    proxy: {
+      '/riga': { target: process.env.VITE_RIGA_UPSTREAM ?? 'http://127.0.0.1:8788', changeOrigin: true, rewrite: (path) => path.replace(/^\/riga/, '') },
+      '/tac': { target: process.env.VITE_TAC_UPSTREAM ?? 'http://127.0.0.1:8790', changeOrigin: true, rewrite: (path) => path.replace(/^\/tac/, '') },
+    },
     watch: {
       ignored: ['**/dist/**', '**/target/**']
     }

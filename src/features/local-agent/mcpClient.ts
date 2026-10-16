@@ -42,13 +42,13 @@ export type McpConnection = {
 }
 
 /** Provider-friendly tool name: `mcp_` prefix, `[A-Za-z0-9_-]` only, max 64 chars. */
-function toolName(name: string): string {
-  return `mcp_${name}`.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64)
+function toolName(prefix: string, name: string): string {
+  return `${prefix}${name}`.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64)
 }
 
-async function callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResponse> {
+async function callTool(command: string, name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResponse> {
   if (signal?.aborted) throw new Error('aborted')
-  return invoke<McpCallResponse>('mcp_call_tool', { name, arguments: args })
+  return invoke<McpCallResponse>(command, { name, arguments: args })
 }
 
 /**
@@ -102,9 +102,9 @@ export function capToolDetails(details: unknown): unknown {
   }
 }
 
-function adaptTool(tool: McpToolInfo): AgentTool {
+function adaptTool(tool: McpToolInfo, command: string, prefix: string): AgentTool {
   return {
-    name: toolName(tool.name),
+    name: toolName(prefix, tool.name),
     label: tool.title ?? tool.name,
     description: tool.description ?? tool.name,
     parameters: Type.Unsafe({
@@ -113,7 +113,7 @@ function adaptTool(tool: McpToolInfo): AgentTool {
       properties: tool.inputSchema.properties ?? {},
     }) as never,
     execute: async (_toolCallId, params, signal) => {
-      const result = await callTool(tool.name, params as Record<string, unknown>, signal)
+      const result = await callTool(command, tool.name, params as Record<string, unknown>, signal)
       const content = capLlmContent(
         toLlmContent({
           content: result.content as CallToolResult['content'],
@@ -132,7 +132,7 @@ function adaptTool(tool: McpToolInfo): AgentTool {
 async function fetchTools(): Promise<McpConnection> {
   const response = await invoke<McpListResponse>('mcp_list_tools')
   return {
-    tools: response.tools.map(adaptTool),
+    tools: response.tools.map((tool) => adaptTool(tool, 'mcp_call_tool', 'mcp_')),
     rawTools: response.tools,
     serverName: response.server || undefined,
     serverVersion: response.version || undefined,
@@ -157,6 +157,41 @@ export async function resetMcpConnection() {
   connection = undefined
   try {
     await invoke('mcp_reset')
+  } catch {
+    // The runtime may already be gone.
+  }
+}
+
+// --- riga-flow (§12.4) ------------------------------------------------------
+
+async function fetchRigaTools(): Promise<McpConnection> {
+  const response = await invoke<McpListResponse>('riga_mcp_list_tools')
+  return {
+    // `mcp_riga_<tool>` namespacing keeps the two engines' tools distinct.
+    tools: response.tools.map((tool) => adaptTool(tool, 'riga_mcp_call_tool', 'mcp_riga_')),
+    rawTools: response.tools,
+    serverName: response.server || 'riga-mcp',
+    serverVersion: response.version || undefined,
+  }
+}
+
+let rigaConnection: Promise<McpConnection> | undefined
+
+/** Lazily load the `riga-mcp` tool list (namespaced `mcp_riga_*`). */
+export function getRigaConnection(): Promise<McpConnection> {
+  if (!rigaConnection) {
+    rigaConnection = fetchRigaTools().catch((error) => {
+      rigaConnection = undefined
+      throw error
+    })
+  }
+  return rigaConnection
+}
+
+export async function resetRigaConnection() {
+  rigaConnection = undefined
+  try {
+    await invoke('riga_mcp_reset')
   } catch {
     // The runtime may already be gone.
   }

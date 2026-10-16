@@ -39,3 +39,8 @@ src-tauri/binaries/
 # Frontend test coverage output
 coverage/
 lcov.info
+
+# Local environment / secrets — never commit
+.env
+.env.*
+!.env.example

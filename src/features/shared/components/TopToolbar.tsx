@@ -20,7 +20,7 @@ export const TopToolbar = memo(function TopToolbar() {
             <Workflow size={16} />
           </div>
           <div className="leading-tight">
-            <div className="text-sm font-semibold text-slate-100">Loading…</div>
+            <div className="text-sm font-semibold text-main">Loading…</div>
           </div>
         </div>
       </header>
@@ -34,7 +34,7 @@ export const TopToolbar = memo(function TopToolbar() {
           <Workflow size={16} />
         </div>
         <div className="leading-tight">
-          <div className="text-sm font-semibold text-slate-100">
+          <div className="text-sm font-semibold text-main">
             {bundle.productName}
           </div>
           <div className="text-[10px] text-muted">{bundle.tagline}</div>
@@ -48,7 +48,7 @@ export const TopToolbar = memo(function TopToolbar() {
         <select
           value={selectedPathId}
           onChange={(e) => setSelectedPathId(e.target.value)}
-          className="h-8 min-w-[160px] rounded border border-slate-600 bg-bg px-2 font-mono text-xs text-slate-100 outline-none focus:border-primary"
+          className="h-8 min-w-[160px] rounded border border-slate-600 bg-bg px-2 font-mono text-xs text-main outline-none focus:border-primary"
         >
           {bundle.paths.map((p) => (
             <option key={p.id} value={p.id}>
@@ -60,7 +60,7 @@ export const TopToolbar = memo(function TopToolbar() {
         <button
           type="button"
           onClick={selectRandomPath}
-          className="inline-flex h-8 items-center gap-1.5 rounded border border-slate-600 bg-slate-800 px-2.5 text-xs text-slate-200 transition hover:border-primary hover:text-primary"
+          className="inline-flex h-8 items-center gap-1.5 rounded border border-slate-600 bg-slate-800 px-2.5 text-xs text-main transition hover:border-primary hover:text-primary"
           title="Select random path"
         >
           <Dices size={14} />
@@ -70,7 +70,7 @@ export const TopToolbar = memo(function TopToolbar() {
 
       <div className="ml-auto flex items-center gap-3">
         <div className="hidden items-center gap-2 text-[11px] text-muted md:flex">
-          <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-slate-300">
+          <span className="rounded bg-surface px-1.5 py-0.5 font-mono text-muted">
             {bundle.underlyings.join(' / ')}
           </span>
           <span>

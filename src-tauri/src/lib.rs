@@ -12,6 +12,7 @@ pub mod skills;
 
 use fina_kernel::api::HealthResponse;
 use fina_kernel::FinaErrorWire;
+use tauri::Manager;
 
 /// `health` — one line, no domain inputs.
 #[tauri::command]
@@ -28,6 +29,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(local_agent::LocalAgentRuntime::default())
         .setup(|app| {
+            // Forward `.env`-derived variables (TAC_LAKE_DIR, APCA_*, FRED_API_KEY,
+            // RIGA_MCP_BIN, …) to the engine children, so a `.env` next to the app
+            // or in the repo root works without exporting shell variables.
+            let engine_env = local_agent::engine_env(app.handle());
+            app.state::<local_agent::LocalAgentRuntime>()
+                .mcp_handle()
+                .configure_env(engine_env);
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -70,6 +78,19 @@ pub fn run() {
             local_agent::mcp_list_tools,
             local_agent::mcp_call_tool,
             local_agent::mcp_reset,
+            local_agent::get_riga_mcp_path,
+            local_agent::get_tac_engine_path,
+            local_agent::riga_mcp_list_tools,
+            local_agent::riga_mcp_call_tool,
+            local_agent::riga_mcp_list_resources,
+            local_agent::riga_mcp_read_resource,
+            local_agent::riga_mcp_list_prompts,
+            local_agent::riga_mcp_get_prompt,
+            local_agent::riga_mcp_get_task,
+            local_agent::riga_mcp_reset,
+            local_agent::tac_mcp_list_tools,
+            local_agent::tac_mcp_call_tool,
+            local_agent::tac_mcp_reset,
             skills::list_agent_skills,
             skills::skills_dir,
         ])

@@ -1,0 +1,2262 @@
+{
+  "engine": "riga",
+  "protocol": "2025-11-25",
+  "serverInfo": {
+    "name": "riga-mcp",
+    "version": "0.1.0"
+  },
+  "recordedAt": "2026-10-15T21:06:24.875Z",
+  "tools": {
+    "generate_paths": {
+      "checksum": 13424780670936460000,
+      "factors": 2,
+      "pathcube_ref": "riga://pathcube/sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+      "paths": 4096,
+      "seed": 1729,
+      "times": 105,
+      "transition_stats": [
+        {
+          "input_count": 30000,
+          "mean_delta": 0,
+          "mean_payoff": 0.9950419884605682,
+          "mean_vega": 0,
+          "output_count": 15934,
+          "probability": 0.5311333333333333,
+          "transition_id": "daily_global_ko",
+          "variance_payoff": 0.000014562856657243429
+        },
+        {
+          "input_count": 30000,
+          "mean_delta": 0,
+          "mean_payoff": 0.18038097055991373,
+          "mean_vega": 0,
+          "output_count": 3381,
+          "probability": 0.1127,
+          "transition_id": "final_fixing_eki",
+          "variance_payoff": 0.012111122378573928
+        },
+        {
+          "input_count": 30000,
+          "mean_delta": 0,
+          "mean_payoff": 0.03050120323638294,
+          "mean_vega": 0,
+          "output_count": 30000,
+          "probability": 1,
+          "transition_id": "memory_coupon",
+          "variance_payoff": 0.00033625926314639833
+        }
+      ]
+    },
+    "query_path_cube": {
+      "percentile": 0.05,
+      "sample": [
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 2100,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.5052396451560835,
+          "pv": 0.5270060706374152,
+          "worst_final": 0.266798248276565
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 4392,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.49629788131476543,
+          "pv": 0.5359478344787334,
+          "worst_final": 0.27588092599367886
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 29375,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.49397734214744515,
+          "pv": 0.5382683736460536,
+          "worst_final": 0.27823803469848707
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 11802,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.47458291920850243,
+          "pv": 0.5576627965849963,
+          "worst_final": 0.2979380956920295
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 1440,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4684161229069776,
+          "pv": 0.5638295928865211,
+          "worst_final": 0.304202074963661
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 11847,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4602884417610887,
+          "pv": 0.5719572740324101,
+          "worst_final": 0.31245784079975475
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 1991,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4528960888168502,
+          "pv": 0.5793496269766486,
+          "worst_final": 0.31996669034613007
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 2659,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4510833629598363,
+          "pv": 0.5811623528336625,
+          "worst_final": 0.32180798307549713
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 3913,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4504329642577733,
+          "pv": 0.5818127515357254,
+          "worst_final": 0.3224686314557608
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 17416,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4468688168029199,
+          "pv": 0.5853768989905789,
+          "worst_final": 0.32608894655725357
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 502,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.44617150162372665,
+          "pv": 0.5860742141697721,
+          "worst_final": 0.32679725077466065
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 24783,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4446488135591496,
+          "pv": 0.5875969022343492,
+          "worst_final": 0.3283439349859281
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 29304,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4430164437341972,
+          "pv": 0.5892292720593015,
+          "worst_final": 0.3300020294400307
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 3172,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.44234138805848683,
+          "pv": 0.589904327735012,
+          "worst_final": 0.33068772336489755
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 4149,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.43677548624385276,
+          "pv": 0.595470229549646,
+          "worst_final": 0.3363413386117937
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 1856,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4333109150532427,
+          "pv": 0.5989348007402561,
+          "worst_final": 0.33986050821979696
+        }
+      ],
+      "selected": 1500,
+      "threshold_worst_final": 0.5864555999325234,
+      "total": 30000
+    },
+    "query_pathcube": {
+      "percentile": 0.05,
+      "sample": [
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 2100,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.5052396451560835,
+          "pv": 0.5270060706374152,
+          "worst_final": 0.266798248276565
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 4392,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.49629788131476543,
+          "pv": 0.5359478344787334,
+          "worst_final": 0.27588092599367886
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 29375,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.49397734214744515,
+          "pv": 0.5382683736460536,
+          "worst_final": 0.27823803469848707
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 11802,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.47458291920850243,
+          "pv": 0.5576627965849963,
+          "worst_final": 0.2979380956920295
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 1440,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4684161229069776,
+          "pv": 0.5638295928865211,
+          "worst_final": 0.304202074963661
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 11847,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4602884417610887,
+          "pv": 0.5719572740324101,
+          "worst_final": 0.31245784079975475
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 1991,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4528960888168502,
+          "pv": 0.5793496269766486,
+          "worst_final": 0.31996669034613007
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 2659,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4510833629598363,
+          "pv": 0.5811623528336625,
+          "worst_final": 0.32180798307549713
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 3913,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4504329642577733,
+          "pv": 0.5818127515357254,
+          "worst_final": 0.3224686314557608
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 17416,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4468688168029199,
+          "pv": 0.5853768989905789,
+          "worst_final": 0.32608894655725357
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 502,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.44617150162372665,
+          "pv": 0.5860742141697721,
+          "worst_final": 0.32679725077466065
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 24783,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4446488135591496,
+          "pv": 0.5875969022343492,
+          "worst_final": 0.3283439349859281
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 29304,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4430164437341972,
+          "pv": 0.5892292720593015,
+          "worst_final": 0.3300020294400307
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 3172,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.44234138805848683,
+          "pv": 0.589904327735012,
+          "worst_final": 0.33068772336489755
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 4149,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.43677548624385276,
+          "pv": 0.595470229549646,
+          "worst_final": 0.3363413386117937
+        },
+        {
+          "coupon_by_period": [
+            0.009611894280218912,
+            0.009581882561097807,
+            0.009551964549133516,
+            0.009522139951739296,
+            0.009492408477241955
+          ],
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "identity": {
+            "path_id": 1856,
+            "rng_seed": 1729,
+            "sobol_index": 0
+          },
+          "ki_hit": true,
+          "knocked_out": false,
+          "ko_time": null,
+          "put_payoff": 0.4333109150532427,
+          "pv": 0.5989348007402561,
+          "worst_final": 0.33986050821979696
+        }
+      ],
+      "selected": 1500,
+      "threshold_worst_final": 0.5864555999325234,
+      "total": 30000
+    },
+    "freeze_baseline": {
+      "frozen": {
+        "assets": [
+          {
+            "delta": 0.00010385086366310271,
+            "gamma": 0.0000020186312266331885,
+            "vega": -0.04737495625849464
+          },
+          {
+            "delta": 0.00007014197931118322,
+            "gamma": 0.00006185728926856178,
+            "vega": -0.08983777718485908
+          }
+        ],
+        "correlation_sensitivity": 0.00634053512862387,
+        "dv01": -0.24440917914314575,
+        "frozen_at_unix": 1792098327,
+        "pv": 1.000264636050433
+      },
+      "name": "default"
+    },
+    "build_cashflows": {
+      "mean": {
+        "coupon_pv": 0.03050120323637791,
+        "funding": 0.9900923681961576,
+        "put_payoff": 0.0203289353821023
+      },
+      "paths": 30000,
+      "sample_paths": [
+        {
+          "coupon_pv": 0.0036687695434953955,
+          "funding": 0.998809381007614,
+          "path_id": 0,
+          "put_payoff": 0,
+          "pv": 1.0024781505511093
+        },
+        {
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "path_id": 1,
+          "put_payoff": 0.09005339220771058,
+          "pv": 0.9421923235857882
+        },
+        {
+          "coupon_pv": 0.047760289819431485,
+          "funding": 0.9844854259740673,
+          "path_id": 2,
+          "put_payoff": 0,
+          "pv": 1.0322457157934988
+        }
+      ],
+      "timeline": [
+        {
+          "expected_coupon_pv": 0.008631852953740728,
+          "paid_probability": 1,
+          "period": 1
+        },
+        {
+          "expected_coupon_pv": 0.006649168109159546,
+          "paid_probability": 0.7659666666666667,
+          "period": 2
+        },
+        {
+          "expected_coupon_pv": 0.005605978422532646,
+          "paid_probability": 0.6290666666666667,
+          "period": 3
+        },
+        {
+          "expected_coupon_pv": 0.005005124971194203,
+          "paid_probability": 0.5487333333333333,
+          "period": 4
+        },
+        {
+          "expected_coupon_pv": 0.0046090787797558605,
+          "paid_probability": 0.5023666666666666,
+          "period": 5
+        }
+      ]
+    },
+    "compute_book_risk": {
+      "correlation_sensitivity": 126.8107025724774,
+      "delta": [
+        2.077017273262054,
+        1.4028395862236644
+      ],
+      "dv01": -4888.183582862915,
+      "gamma": [
+        0.04037262453266377,
+        1.2371457853712355
+      ],
+      "pv": 20005.29272100866,
+      "trades": 2,
+      "vega": [
+        -947.4991251698927,
+        -1796.7555436971816
+      ]
+    },
+    "compute_risk": {
+      "assets": [
+        {
+          "asset_index": 0,
+          "delta": 0.00010385086366310271,
+          "delta_mc_error": 0.00014125118012852492,
+          "gamma": 0.0000020186312266331885,
+          "vega": -0.04737495625849464,
+          "vega_mc_error": 0.03783919240239175
+        },
+        {
+          "asset_index": 1,
+          "delta": 0.00007014197931118322,
+          "delta_mc_error": 0.00014594340356854023,
+          "gamma": 0.00006185728926856178,
+          "vega": -0.08983777718485908,
+          "vega_mc_error": 0.03772183897153564
+        }
+      ],
+      "base_pv": 1.000264636050433,
+      "correlation_sensitivity": 0.00634053512862387,
+      "dv01": -0.24440917914314575,
+      "pv_mc_error": 0.0003784998342367249,
+      "scenario_count": 13,
+      "seed": 1729
+    },
+    "estimate_aad_greeks": {
+      "experimental": true,
+      "method": "AAD",
+      "note": "AAD is a research track and is never the default; production Greeks use central FD with CRN."
+    },
+    "execution_events": {
+      "tape": [
+        {
+          "events": [
+            {
+              "kind": "ko",
+              "t": 0.030684931506849315
+            }
+          ],
+          "path_id": 0,
+          "pv": 1.0024781505511093
+        },
+        {
+          "events": [
+            {
+              "kind": "knock_in",
+              "worst_final": 0.6885274501462425
+            }
+          ],
+          "path_id": 1,
+          "pv": 0.9421923235857882
+        },
+        {
+          "events": [
+            {
+              "kind": "maturity_no_ki",
+              "worst_final": 0.8561446111835523
+            }
+          ],
+          "path_id": 2,
+          "pv": 1.0322457157934988
+        },
+        {
+          "events": [
+            {
+              "kind": "ko",
+              "t": 0.11123287671232876
+            }
+          ],
+          "path_id": 3,
+          "pv": 1.0089599549861556
+        },
+        {
+          "events": [
+            {
+              "kind": "ko",
+              "t": 0.057534246575342465
+            }
+          ],
+          "path_id": 4,
+          "pv": 1.0046405282358006
+        },
+        {
+          "events": [
+            {
+              "kind": "ko",
+              "t": 0.038356164383561646
+            }
+          ],
+          "path_id": 5,
+          "pv": 1.0030965441074935
+        },
+        {
+          "events": [
+            {
+              "kind": "ko",
+              "t": 0.019178082191780823
+            }
+          ],
+          "path_id": 6,
+          "pv": 1.0015497024956315
+        },
+        {
+          "events": [
+            {
+              "kind": "knock_in",
+              "worst_final": 0.6468249520542602
+            }
+          ],
+          "path_id": 7,
+          "pv": 0.9011368219875202
+        }
+      ],
+      "tape_size": 8,
+      "total_paths": 30000
+    },
+    "explain_pv_attribution": {
+      "determinism": {
+        "as_of": "2026-09-07",
+        "market_snapshot_id": "sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+        "seed": 1729
+      },
+      "engine_model": "dupire_local_vol_calibrated_cpu",
+      "ki_probability": 0.1127,
+      "ledger": [
+        {
+          "condition": "all names >= 1.100000 during callable observations",
+          "delta_impact": 0,
+          "evidence_refs": [
+            "trade:termsheet1",
+            "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+            "seed:1729"
+          ],
+          "population_after": 15934,
+          "population_before": 30000,
+          "pv_impact": 0.5258710598279193,
+          "transition_id": "daily_global_ko",
+          "vega_impact": 0
+        },
+        {
+          "condition": "terminal worst <= 0.700000 and no prior autocall; put strike 0.780000",
+          "delta_impact": 0,
+          "evidence_refs": [
+            "trade:termsheet1",
+            "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+            "seed:1729"
+          ],
+          "population_after": 3010,
+          "population_before": 14066,
+          "pv_impact": -0.0203289353821023,
+          "transition_id": "final_fixing_eki",
+          "vega_impact": 0
+        },
+        {
+          "condition": "daily worst-of >= coupon barrier 0.100000; memory carry enabled=true",
+          "delta_impact": 0,
+          "evidence_refs": [
+            "trade:termsheet1",
+            "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+            "seed:1729"
+          ],
+          "population_after": 30000,
+          "population_before": 30000,
+          "pv_impact": 0.030501203236377818,
+          "transition_id": "memory_coupon",
+          "vega_impact": 0
+        }
+      ],
+      "legs": {
+        "coupon": 0.30501203236377816,
+        "discounting": 0,
+        "down_and_in_put": 0.0203289353821023,
+        "funding": 0.9900923681961576,
+        "memory_coupon": 0,
+        "par_redemption": 0,
+        "total": 1.000264636050433
+      },
+      "stats": [
+        {
+          "input_count": 30000,
+          "mean_delta": 0,
+          "mean_payoff": 0.9950419884605682,
+          "mean_vega": 0,
+          "output_count": 15934,
+          "probability": 0.5311333333333333,
+          "transition_id": "daily_global_ko",
+          "variance_payoff": 0.000014562856657243429
+        },
+        {
+          "input_count": 30000,
+          "mean_delta": 0,
+          "mean_payoff": 0.18038097055991373,
+          "mean_vega": 0,
+          "output_count": 3381,
+          "probability": 0.1127,
+          "transition_id": "final_fixing_eki",
+          "variance_payoff": 0.012111122378573928
+        },
+        {
+          "input_count": 30000,
+          "mean_delta": 0,
+          "mean_payoff": 0.03050120323638294,
+          "mean_vega": 0,
+          "output_count": 30000,
+          "probability": 1,
+          "transition_id": "memory_coupon",
+          "variance_payoff": 0.00033625926314639833
+        }
+      ]
+    },
+    "export_governance_evidence": {
+      "assumptions": [
+        "Dupire local vol calibrated from the captured implied smile",
+        "correlation applied via the Cholesky factor of the captured matrix",
+        "terminal EKI down-and-in put, no KO gate on the standalone put leg"
+      ],
+      "evidence": {
+        "as_of": "2026-09-07",
+        "market_snapshot_id": "sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+        "seed": 1729
+      },
+      "legs": {
+        "coupon": 0.30501203236377816,
+        "discounting": 0,
+        "down_and_in_put": 0.0203289353821023,
+        "funding": 0.9900923681961576,
+        "memory_coupon": 0,
+        "par_redemption": 0,
+        "total": 1.000264636050433
+      },
+      "limitations": [
+        "no independent high-precision reference comparison yet",
+        "PathCube is not persisted; replay reconstructs deterministically from (seed, path_id)"
+      ],
+      "lineage": {
+        "determinism": {
+          "as_of": "2026-09-07",
+          "market_snapshot_id": "sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+          "seed": 1729
+        },
+        "evidence_refs": [
+          "trade:termsheet1",
+          "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+          "seed:1729",
+          "trade:termsheet1",
+          "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+          "seed:1729",
+          "trade:termsheet1",
+          "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+          "seed:1729"
+        ],
+        "ledger": [
+          {
+            "condition": "all names >= 1.100000 during callable observations",
+            "delta_impact": 0,
+            "evidence_refs": [
+              "trade:termsheet1",
+              "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+              "seed:1729"
+            ],
+            "population_after": 15934,
+            "population_before": 30000,
+            "pv_impact": 0.5258710598279193,
+            "transition_id": "daily_global_ko",
+            "vega_impact": 0
+          },
+          {
+            "condition": "terminal worst <= 0.700000 and no prior autocall; put strike 0.780000",
+            "delta_impact": 0,
+            "evidence_refs": [
+              "trade:termsheet1",
+              "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+              "seed:1729"
+            ],
+            "population_after": 3010,
+            "population_before": 14066,
+            "pv_impact": -0.0203289353821023,
+            "transition_id": "final_fixing_eki",
+            "vega_impact": 0
+          },
+          {
+            "condition": "daily worst-of >= coupon barrier 0.100000; memory carry enabled=true",
+            "delta_impact": 0,
+            "evidence_refs": [
+              "trade:termsheet1",
+              "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+              "seed:1729"
+            ],
+            "population_after": 30000,
+            "population_before": 30000,
+            "pv_impact": 0.030501203236377818,
+            "transition_id": "memory_coupon",
+            "vega_impact": 0
+          }
+        ],
+        "legs": {
+          "coupon": 0.30501203236377816,
+          "discounting": 0,
+          "down_and_in_put": 0.0203289353821023,
+          "funding": 0.9900923681961576,
+          "memory_coupon": 0,
+          "par_redemption": 0,
+          "total": 1.000264636050433
+        },
+        "sampled_paths": [
+          {
+            "ki_hit": false,
+            "knocked_out": true,
+            "path_id": 0,
+            "put_payoff": 0,
+            "rng_seed": 1729,
+            "sobol_index": 0,
+            "worst_final": 1.1334315070311245
+          },
+          {
+            "ki_hit": true,
+            "knocked_out": false,
+            "path_id": 1,
+            "put_payoff": 0.09005339220771058,
+            "rng_seed": 1729,
+            "sobol_index": 0,
+            "worst_final": 0.6885274501462425
+          },
+          {
+            "ki_hit": false,
+            "knocked_out": true,
+            "path_id": 3,
+            "put_payoff": 0,
+            "rng_seed": 1729,
+            "sobol_index": 0,
+            "worst_final": 1.0121557610644394
+          },
+          {
+            "ki_hit": false,
+            "knocked_out": true,
+            "path_id": 4,
+            "put_payoff": 0,
+            "rng_seed": 1729,
+            "sobol_index": 0,
+            "worst_final": 0.9102515982326762
+          },
+          {
+            "ki_hit": false,
+            "knocked_out": true,
+            "path_id": 5,
+            "put_payoff": 0,
+            "rng_seed": 1729,
+            "sobol_index": 0,
+            "worst_final": 1.1344218743370909
+          }
+        ],
+        "stats": [
+          {
+            "input_count": 30000,
+            "mean_delta": 0,
+            "mean_payoff": 0.9950419884605682,
+            "mean_vega": 0,
+            "output_count": 15934,
+            "probability": 0.5311333333333333,
+            "transition_id": "daily_global_ko",
+            "variance_payoff": 0.000014562856657243429
+          },
+          {
+            "input_count": 30000,
+            "mean_delta": 0,
+            "mean_payoff": 0.18038097055991373,
+            "mean_vega": 0,
+            "output_count": 3381,
+            "probability": 0.1127,
+            "transition_id": "final_fixing_eki",
+            "variance_payoff": 0.012111122378573928
+          },
+          {
+            "input_count": 30000,
+            "mean_delta": 0,
+            "mean_payoff": 0.03050120323638294,
+            "mean_vega": 0,
+            "output_count": 30000,
+            "probability": 1,
+            "transition_id": "memory_coupon",
+            "variance_payoff": 0.00033625926314639833
+          }
+        ],
+        "trace_events": [
+          "daily_global_ko:path=0:t=0.030685",
+          "daily_global_ko:path=3:t=0.111233",
+          "daily_global_ko:path=4:t=0.057534",
+          "daily_global_ko:path=5:t=0.038356",
+          "daily_global_ko:path=6:t=0.019178",
+          "daily_global_ko:path=9:t=0.103562",
+          "daily_global_ko:path=10:t=0.141918",
+          "daily_global_ko:path=12:t=0.046027",
+          "daily_global_ko:path=14:t=0.184110",
+          "daily_global_ko:path=15:t=0.291507",
+          "daily_global_ko:path=16:t=0.046027",
+          "daily_global_ko:path=19:t=0.080548",
+          "daily_global_ko:path=23:t=0.057534",
+          "daily_global_ko:path=26:t=0.191781",
+          "daily_global_ko:path=31:t=0.053699",
+          "daily_global_ko:path=36:t=0.176438",
+          "daily_global_ko:path=37:t=0.046027",
+          "daily_global_ko:path=41:t=0.080548",
+          "daily_global_ko:path=42:t=0.118904",
+          "daily_global_ko:path=44:t=0.291507",
+          "daily_global_ko:path=46:t=0.076712",
+          "daily_global_ko:path=48:t=0.157260",
+          "daily_global_ko:path=49:t=0.145753",
+          "daily_global_ko:path=55:t=0.398904",
+          "daily_global_ko:path=60:t=0.076712",
+          "daily_global_ko:path=62:t=0.057534",
+          "daily_global_ko:path=64:t=0.207123",
+          "daily_global_ko:path=65:t=0.057534",
+          "daily_global_ko:path=67:t=0.088219",
+          "daily_global_ko:path=68:t=0.072877",
+          "daily_global_ko:path=69:t=0.187945",
+          "daily_global_ko:path=70:t=0.076712",
+          "daily_global_ko:path=73:t=0.023014",
+          "daily_global_ko:path=74:t=0.034521",
+          "daily_global_ko:path=77:t=0.199452",
+          "daily_global_ko:path=78:t=0.130411",
+          "daily_global_ko:path=79:t=0.038356",
+          "daily_global_ko:path=80:t=0.122740",
+          "daily_global_ko:path=82:t=0.115068",
+          "daily_global_ko:path=84:t=0.046027",
+          "daily_global_ko:path=85:t=0.053699",
+          "daily_global_ko:path=90:t=0.034521",
+          "daily_global_ko:path=94:t=0.122740",
+          "daily_global_ko:path=96:t=0.356712",
+          "daily_global_ko:path=98:t=0.034521",
+          "daily_global_ko:path=99:t=0.065205",
+          "daily_global_ko:path=102:t=0.138082",
+          "daily_global_ko:path=105:t=0.088219",
+          "daily_global_ko:path=106:t=0.379726",
+          "daily_global_ko:path=109:t=0.176438",
+          "daily_global_ko:path=110:t=0.115068",
+          "daily_global_ko:path=111:t=0.172603",
+          "daily_global_ko:path=112:t=0.076712",
+          "daily_global_ko:path=113:t=0.210959",
+          "daily_global_ko:path=114:t=0.126575",
+          "daily_global_ko:path=116:t=0.103562",
+          "daily_global_ko:path=117:t=0.210959",
+          "daily_global_ko:path=119:t=0.326027",
+          "daily_global_ko:path=121:t=0.172603",
+          "daily_global_ko:path=122:t=0.034521",
+          "daily_global_ko:path=123:t=0.065205",
+          "daily_global_ko:path=125:t=0.061370",
+          "daily_global_ko:path=127:t=0.042192",
+          "daily_global_ko:path=128:t=0.149589"
+        ]
+      },
+      "model": "dupire_local_vol_calibrated_cpu",
+      "source_model": "dupire_local_vol",
+      "stress_methodology": "central finite differences with common random numbers"
+    },
+    "get_branch_stats": [
+      {
+        "input_count": 30000,
+        "mean_delta": 0,
+        "mean_payoff": 0.9950419884605682,
+        "mean_vega": 0,
+        "output_count": 15934,
+        "probability": 0.5311333333333333,
+        "transition_id": "daily_global_ko",
+        "variance_payoff": 0.000014562856657243429
+      },
+      {
+        "input_count": 30000,
+        "mean_delta": 0,
+        "mean_payoff": 0.18038097055991373,
+        "mean_vega": 0,
+        "output_count": 3381,
+        "probability": 0.1127,
+        "transition_id": "final_fixing_eki",
+        "variance_payoff": 0.012111122378573928
+      },
+      {
+        "input_count": 30000,
+        "mean_delta": 0,
+        "mean_payoff": 0.03050120323638294,
+        "mean_vega": 0,
+        "output_count": 30000,
+        "probability": 1,
+        "transition_id": "memory_coupon",
+        "variance_payoff": 0.00033625926314639833
+      }
+    ],
+    "get_distributions": {
+      "count": 30000,
+      "ki_rate": 0.1127,
+      "mean_put": 0.0203289353821023,
+      "worst_final_deciles": [
+        0.6861034460296501,
+        0.7699311620995617,
+        0.8275945662177798,
+        0.8783728959118208,
+        0.9278765826308003,
+        0.9792729476678546,
+        1.0369700949533174,
+        1.1127740394614354,
+        1.2252123198335432,
+        2.2523846967052177
+      ]
+    },
+    "get_ledger": {
+      "determinism": {
+        "as_of": "2026-09-07",
+        "market_snapshot_id": "sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+        "seed": 1729
+      },
+      "ledger": [
+        {
+          "condition": "all names >= 1.100000 during callable observations",
+          "delta_impact": 0,
+          "evidence_refs": [
+            "trade:termsheet1",
+            "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+            "seed:1729"
+          ],
+          "population_after": 15934,
+          "population_before": 30000,
+          "pv_impact": 0.5258710598279193,
+          "transition_id": "daily_global_ko",
+          "vega_impact": 0
+        },
+        {
+          "condition": "terminal worst <= 0.700000 and no prior autocall; put strike 0.780000",
+          "delta_impact": 0,
+          "evidence_refs": [
+            "trade:termsheet1",
+            "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+            "seed:1729"
+          ],
+          "population_after": 3010,
+          "population_before": 14066,
+          "pv_impact": -0.0203289353821023,
+          "transition_id": "final_fixing_eki",
+          "vega_impact": 0
+        },
+        {
+          "condition": "daily worst-of >= coupon barrier 0.100000; memory carry enabled=true",
+          "delta_impact": 0,
+          "evidence_refs": [
+            "trade:termsheet1",
+            "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+            "seed:1729"
+          ],
+          "population_after": 30000,
+          "population_before": 30000,
+          "pv_impact": 0.030501203236377818,
+          "transition_id": "memory_coupon",
+          "vega_impact": 0
+        }
+      ]
+    },
+    "get_market": {
+      "as_of": "2026-09-07",
+      "correlation": [
+        [
+          1,
+          0.4593248180905
+        ],
+        [
+          0.4593248180905,
+          1
+        ]
+      ],
+      "dividend_yields": [
+        0,
+        0.002979
+      ],
+      "engine_model": "dupire_local_vol_calibrated_cpu",
+      "local_vol": true,
+      "risk_free_rate": 0.038824539726027396,
+      "snapshot_id": "sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+      "source_model": "dupire_local_vol",
+      "spots": [
+        267.885,
+        258.355
+      ],
+      "vols": [
+        0.4563933201917808,
+        0.35599112202739724
+      ]
+    },
+    "get_mc_diagnostics": {
+      "mc_error": 0.0003784998342367249,
+      "pv": 1.000264636050433,
+      "relative_se": 0.000378399696035681,
+      "stats": [
+        {
+          "input_count": 30000,
+          "mean_delta": 0,
+          "mean_payoff": 0.9950419884605682,
+          "mean_vega": 0,
+          "output_count": 15934,
+          "probability": 0.5311333333333333,
+          "transition_id": "daily_global_ko",
+          "variance_payoff": 0.000014562856657243429
+        },
+        {
+          "input_count": 30000,
+          "mean_delta": 0,
+          "mean_payoff": 0.18038097055991373,
+          "mean_vega": 0,
+          "output_count": 3381,
+          "probability": 0.1127,
+          "transition_id": "final_fixing_eki",
+          "variance_payoff": 0.012111122378573928
+        },
+        {
+          "input_count": 30000,
+          "mean_delta": 0,
+          "mean_payoff": 0.03050120323638294,
+          "mean_vega": 0,
+          "output_count": 30000,
+          "probability": 1,
+          "transition_id": "memory_coupon",
+          "variance_payoff": 0.00033625926314639833
+        }
+      ]
+    },
+    "health": {
+      "engine": "riga-engine",
+      "features": {
+        "aad": false,
+        "cpu_gbm": true,
+        "gpu": false
+      },
+      "git_sha": "08b15a9",
+      "status": "ok",
+      "version": "0.1.0"
+    },
+    "list_markets": {
+      "markets": [
+        {
+          "as_of": "2026-09-07",
+          "correlation": [
+            [
+              1,
+              0.4593248180905
+            ],
+            [
+              0.4593248180905,
+              1
+            ]
+          ],
+          "dividend_yields": [
+            0,
+            0.002979
+          ],
+          "engine_model": "dupire_local_vol_calibrated_cpu",
+          "local_vol": true,
+          "risk_free_rate": 0.038824539726027396,
+          "snapshot_id": "sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+          "source_model": "dupire_local_vol",
+          "spots": [
+            267.885,
+            258.355
+          ],
+          "vols": [
+            0.4563933201917808,
+            0.35599112202739724
+          ]
+        }
+      ]
+    },
+    "pl_explain": {
+      "contributions": [
+        {
+          "contribution": 0.0000010386095681923587,
+          "factor": "spot[0]"
+        },
+        {
+          "contribution": -0.0004737495625849464,
+          "factor": "vol[0]"
+        },
+        {
+          "contribution": -6.98326928648404e-7,
+          "factor": "spot[1]"
+        },
+        {
+          "contribution": 0.0008983777718485908,
+          "factor": "vol[1]"
+        },
+        {
+          "contribution": -0.000024440917914314575,
+          "factor": "rate"
+        },
+        {
+          "contribution": 0.0000634053512862387,
+          "factor": "correlation"
+        }
+      ],
+      "total": 0.00046393292527511246
+    },
+    "price_book": {
+      "clusters": 1,
+      "legs": {
+        "coupon": 0.30501203236377816,
+        "discounting": 0,
+        "down_and_in_put": 0.0203289353821023,
+        "funding": 0.9900923681961576,
+        "memory_coupon": 0,
+        "par_redemption": 0,
+        "total": 1.000264636050433
+      },
+      "per_trade": [
+        10002.64636050433,
+        10002.64636050433
+      ],
+      "representative_pv": 1.000264636050433,
+      "total_pv": 20005.29272100866,
+      "trades": 2
+    },
+    "price_book_async": {
+      "correlation_sensitivity": 126.8107025724774,
+      "delta": [
+        2.077017273262054,
+        1.4028395862236644
+      ],
+      "dv01": -4888.183582862915,
+      "gamma": [
+        0.04037262453266377,
+        1.2371457853712355
+      ],
+      "pv": 20005.29272100866,
+      "trades": 2,
+      "vega": [
+        -947.4991251698927,
+        -1796.7555436971816
+      ]
+    },
+    "price_put": {
+      "fixture": {
+        "engine_model": "dupire_local_vol_calibrated_cpu",
+        "market_provenance": "pinned",
+        "market_quality_note": "Captured fina-risk market: current as-of marks, full implied smile calibrated to Dupire local vol, USD discount curve, dividends, resolved correlation, and issuer-pinned coupon floor.",
+        "name": "termsheet1",
+        "source_model": "dupire_local_vol"
+      },
+      "fixture_acceptance": {
+        "ki_probability_target": 0.102,
+        "ki_probability_tolerance": 0.03,
+        "passed": true,
+        "put_target": 0.02112,
+        "relative_tolerance": 0.05,
+        "status": "passed"
+      },
+      "result": {
+        "determinism": {
+          "as_of": "2026-09-07",
+          "market_snapshot_id": "sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+          "seed": 1729
+        },
+        "ki_probability": 0.1127,
+        "ledger": [
+          {
+            "condition": "all names >= 1.100000 during callable observations",
+            "delta_impact": 0,
+            "evidence_refs": [
+              "trade:termsheet1",
+              "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+              "seed:1729"
+            ],
+            "population_after": 15934,
+            "population_before": 30000,
+            "pv_impact": 0.5258710598279193,
+            "transition_id": "daily_global_ko",
+            "vega_impact": 0
+          },
+          {
+            "condition": "terminal worst <= 0.700000 and no prior autocall; put strike 0.780000",
+            "delta_impact": 0,
+            "evidence_refs": [
+              "trade:termsheet1",
+              "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+              "seed:1729"
+            ],
+            "population_after": 3010,
+            "population_before": 14066,
+            "pv_impact": -0.0203289353821023,
+            "transition_id": "final_fixing_eki",
+            "vega_impact": 0
+          },
+          {
+            "condition": "daily worst-of >= coupon barrier 0.100000; memory carry enabled=true",
+            "delta_impact": 0,
+            "evidence_refs": [
+              "trade:termsheet1",
+              "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+              "seed:1729"
+            ],
+            "population_after": 30000,
+            "population_before": 30000,
+            "pv_impact": 0.030501203236377818,
+            "transition_id": "memory_coupon",
+            "vega_impact": 0
+          }
+        ],
+        "legs": {
+          "coupon": 0.30501203236377816,
+          "discounting": 0,
+          "down_and_in_put": 0.0203289353821023,
+          "funding": 0.9900923681961576,
+          "memory_coupon": 0,
+          "par_redemption": 0,
+          "total": 1.000264636050433
+        },
+        "mc_error": 0.0003784998342367249,
+        "pv": 1.000264636050433,
+        "stats": [
+          {
+            "input_count": 30000,
+            "mean_delta": 0,
+            "mean_payoff": 0.9950419884605682,
+            "mean_vega": 0,
+            "output_count": 15934,
+            "probability": 0.5311333333333333,
+            "transition_id": "daily_global_ko",
+            "variance_payoff": 0.000014562856657243429
+          },
+          {
+            "input_count": 30000,
+            "mean_delta": 0,
+            "mean_payoff": 0.18038097055991373,
+            "mean_vega": 0,
+            "output_count": 3381,
+            "probability": 0.1127,
+            "transition_id": "final_fixing_eki",
+            "variance_payoff": 0.012111122378573928
+          },
+          {
+            "input_count": 30000,
+            "mean_delta": 0,
+            "mean_payoff": 0.03050120323638294,
+            "mean_vega": 0,
+            "output_count": 30000,
+            "probability": 1,
+            "transition_id": "memory_coupon",
+            "variance_payoff": 0.00033625926314639833
+          }
+        ],
+        "trace_events": [
+          "daily_global_ko:path=0:t=0.030685",
+          "daily_global_ko:path=3:t=0.111233",
+          "daily_global_ko:path=4:t=0.057534",
+          "daily_global_ko:path=5:t=0.038356",
+          "daily_global_ko:path=6:t=0.019178",
+          "daily_global_ko:path=9:t=0.103562",
+          "daily_global_ko:path=10:t=0.141918",
+          "daily_global_ko:path=12:t=0.046027",
+          "daily_global_ko:path=14:t=0.184110",
+          "daily_global_ko:path=15:t=0.291507",
+          "daily_global_ko:path=16:t=0.046027",
+          "daily_global_ko:path=19:t=0.080548",
+          "daily_global_ko:path=23:t=0.057534",
+          "daily_global_ko:path=26:t=0.191781",
+          "daily_global_ko:path=31:t=0.053699",
+          "daily_global_ko:path=36:t=0.176438",
+          "daily_global_ko:path=37:t=0.046027",
+          "daily_global_ko:path=41:t=0.080548",
+          "daily_global_ko:path=42:t=0.118904",
+          "daily_global_ko:path=44:t=0.291507",
+          "daily_global_ko:path=46:t=0.076712",
+          "daily_global_ko:path=48:t=0.157260",
+          "daily_global_ko:path=49:t=0.145753",
+          "daily_global_ko:path=55:t=0.398904",
+          "daily_global_ko:path=60:t=0.076712",
+          "daily_global_ko:path=62:t=0.057534",
+          "daily_global_ko:path=64:t=0.207123",
+          "daily_global_ko:path=65:t=0.057534",
+          "daily_global_ko:path=67:t=0.088219",
+          "daily_global_ko:path=68:t=0.072877",
+          "daily_global_ko:path=69:t=0.187945",
+          "daily_global_ko:path=70:t=0.076712",
+          "daily_global_ko:path=73:t=0.023014",
+          "daily_global_ko:path=74:t=0.034521",
+          "daily_global_ko:path=77:t=0.199452",
+          "daily_global_ko:path=78:t=0.130411",
+          "daily_global_ko:path=79:t=0.038356",
+          "daily_global_ko:path=80:t=0.122740",
+          "daily_global_ko:path=82:t=0.115068",
+          "daily_global_ko:path=84:t=0.046027",
+          "daily_global_ko:path=85:t=0.053699",
+          "daily_global_ko:path=90:t=0.034521",
+          "daily_global_ko:path=94:t=0.122740",
+          "daily_global_ko:path=96:t=0.356712",
+          "daily_global_ko:path=98:t=0.034521",
+          "daily_global_ko:path=99:t=0.065205",
+          "daily_global_ko:path=102:t=0.138082",
+          "daily_global_ko:path=105:t=0.088219",
+          "daily_global_ko:path=106:t=0.379726",
+          "daily_global_ko:path=109:t=0.176438",
+          "daily_global_ko:path=110:t=0.115068",
+          "daily_global_ko:path=111:t=0.172603",
+          "daily_global_ko:path=112:t=0.076712",
+          "daily_global_ko:path=113:t=0.210959",
+          "daily_global_ko:path=114:t=0.126575",
+          "daily_global_ko:path=116:t=0.103562",
+          "daily_global_ko:path=117:t=0.210959",
+          "daily_global_ko:path=119:t=0.326027",
+          "daily_global_ko:path=121:t=0.172603",
+          "daily_global_ko:path=122:t=0.034521",
+          "daily_global_ko:path=123:t=0.065205",
+          "daily_global_ko:path=125:t=0.061370",
+          "daily_global_ko:path=127:t=0.042192",
+          "daily_global_ko:path=128:t=0.149589"
+        ]
+      }
+    },
+    "price_trade": {
+      "determinism": {
+        "as_of": "2026-09-07",
+        "market_snapshot_id": "sha256:81b9ed7f1976ab8c9827b7be79af325c070d04b57de52e5e0505028147ad0d11",
+        "seed": 1729
+      },
+      "ki_probability": 0.29823333333333335,
+      "ledger": [
+        {
+          "condition": "all names >= 1.100000 during callable observations",
+          "delta_impact": 0,
+          "evidence_refs": [
+            "trade:termsheet1",
+            "market:sha256:81b9ed7f1976ab8c9827b7be79af325c070d04b57de52e5e0505028147ad0d11",
+            "seed:1729"
+          ],
+          "population_after": 11461,
+          "population_before": 30000,
+          "pv_impact": 0.37275388593986375,
+          "transition_id": "daily_global_ko",
+          "vega_impact": 0
+        },
+        {
+          "condition": "terminal worst <= 0.700000 and no prior autocall; put strike 1.000000",
+          "delta_impact": 0,
+          "evidence_refs": [
+            "trade:termsheet1",
+            "market:sha256:81b9ed7f1976ab8c9827b7be79af325c070d04b57de52e5e0505028147ad0d11",
+            "seed:1729"
+          ],
+          "population_after": 8412,
+          "population_before": 18539,
+          "pv_impact": -0.11760620254902059,
+          "transition_id": "final_fixing_eki",
+          "vega_impact": 0
+        },
+        {
+          "condition": "daily worst-of >= coupon barrier 0.100000; memory carry enabled=true",
+          "delta_impact": 0,
+          "evidence_refs": [
+            "trade:termsheet1",
+            "market:sha256:81b9ed7f1976ab8c9827b7be79af325c070d04b57de52e5e0505028147ad0d11",
+            "seed:1729"
+          ],
+          "population_after": 30000,
+          "population_before": 30000,
+          "pv_impact": 0.06777047538296982,
+          "transition_id": "memory_coupon",
+          "vega_impact": 0
+        }
+      ],
+      "legs": {
+        "coupon": 0.6777047538296982,
+        "discounting": 0,
+        "down_and_in_put": 0.11760620254902059,
+        "funding": 0.9757103724104278,
+        "memory_coupon": 0,
+        "par_redemption": 0,
+        "total": 0.9258746452443771
+      },
+      "mc_error": 0.0010879519880954616,
+      "pv": 0.9258746452443771,
+      "stats": [
+        {
+          "input_count": 30000,
+          "mean_delta": 0,
+          "mean_payoff": 0.9858716689333892,
+          "mean_vega": 0,
+          "output_count": 11461,
+          "probability": 0.38203333333333334,
+          "transition_id": "daily_global_ko",
+          "variance_payoff": 0.00005379042692539888
+        },
+        {
+          "input_count": 30000,
+          "mean_delta": 0,
+          "mean_payoff": 0.39434291678446637,
+          "mean_vega": 0,
+          "output_count": 8947,
+          "probability": 0.29823333333333335,
+          "transition_id": "final_fixing_eki",
+          "variance_payoff": 0.01789617744389974
+        },
+        {
+          "input_count": 30000,
+          "mean_delta": 0,
+          "mean_payoff": 0.0677704753829953,
+          "mean_vega": 0,
+          "output_count": 30000,
+          "probability": 1,
+          "transition_id": "memory_coupon",
+          "variance_payoff": 0.0006568860439759161
+        }
+      ],
+      "trace_events": [
+        "daily_global_ko:path=0:t=0.750000",
+        "daily_global_ko:path=1:t=0.166667",
+        "daily_global_ko:path=2:t=0.416667",
+        "daily_global_ko:path=8:t=0.416667",
+        "daily_global_ko:path=9:t=0.166667",
+        "daily_global_ko:path=10:t=0.166667",
+        "daily_global_ko:path=15:t=0.666667",
+        "daily_global_ko:path=20:t=0.416667",
+        "daily_global_ko:path=26:t=0.250000",
+        "daily_global_ko:path=28:t=0.166667",
+        "daily_global_ko:path=30:t=0.166667",
+        "daily_global_ko:path=33:t=0.166667",
+        "daily_global_ko:path=35:t=0.250000",
+        "daily_global_ko:path=37:t=0.166667",
+        "daily_global_ko:path=38:t=0.166667",
+        "daily_global_ko:path=44:t=0.583333",
+        "daily_global_ko:path=45:t=0.166667",
+        "daily_global_ko:path=48:t=0.250000",
+        "daily_global_ko:path=50:t=0.250000",
+        "daily_global_ko:path=51:t=0.416667",
+        "daily_global_ko:path=52:t=0.166667",
+        "daily_global_ko:path=56:t=0.166667",
+        "daily_global_ko:path=62:t=0.500000",
+        "daily_global_ko:path=66:t=0.416667",
+        "daily_global_ko:path=69:t=0.500000",
+        "daily_global_ko:path=70:t=0.416667",
+        "daily_global_ko:path=71:t=0.166667",
+        "daily_global_ko:path=73:t=0.333333",
+        "daily_global_ko:path=75:t=0.166667",
+        "daily_global_ko:path=78:t=0.500000",
+        "daily_global_ko:path=80:t=0.250000",
+        "daily_global_ko:path=83:t=0.333333",
+        "daily_global_ko:path=87:t=0.166667",
+        "daily_global_ko:path=93:t=0.666667",
+        "daily_global_ko:path=94:t=0.250000",
+        "daily_global_ko:path=96:t=0.333333",
+        "daily_global_ko:path=99:t=0.250000",
+        "daily_global_ko:path=105:t=0.500000",
+        "daily_global_ko:path=106:t=0.500000",
+        "daily_global_ko:path=107:t=0.250000",
+        "daily_global_ko:path=109:t=0.166667",
+        "daily_global_ko:path=112:t=0.250000",
+        "daily_global_ko:path=115:t=0.250000",
+        "daily_global_ko:path=117:t=0.166667",
+        "daily_global_ko:path=120:t=0.250000",
+        "daily_global_ko:path=121:t=0.416667",
+        "daily_global_ko:path=125:t=0.666667",
+        "daily_global_ko:path=126:t=0.166667",
+        "daily_global_ko:path=131:t=0.166667",
+        "daily_global_ko:path=140:t=0.333333",
+        "daily_global_ko:path=141:t=0.166667",
+        "daily_global_ko:path=143:t=0.166667",
+        "daily_global_ko:path=147:t=0.333333",
+        "daily_global_ko:path=149:t=0.666667",
+        "daily_global_ko:path=153:t=0.333333",
+        "daily_global_ko:path=154:t=0.500000",
+        "daily_global_ko:path=158:t=0.166667",
+        "daily_global_ko:path=164:t=0.166667",
+        "daily_global_ko:path=167:t=0.333333",
+        "daily_global_ko:path=168:t=0.250000",
+        "daily_global_ko:path=174:t=0.333333",
+        "daily_global_ko:path=175:t=0.583333",
+        "daily_global_ko:path=176:t=0.500000",
+        "daily_global_ko:path=180:t=0.250000"
+      ]
+    },
+    "query_execution_net": {
+      "places": [
+        {
+          "id": "start",
+          "tokens": 30000
+        },
+        {
+          "id": "daily_global_ko_out",
+          "tokens": 15934
+        },
+        {
+          "id": "final_fixing_eki_out",
+          "tokens": 3010
+        },
+        {
+          "id": "memory_coupon_out",
+          "tokens": 30000
+        }
+      ],
+      "run_id": "sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+      "stats": [
+        {
+          "input_count": 30000,
+          "mean_delta": 0,
+          "mean_payoff": 0.9950419884605682,
+          "mean_vega": 0,
+          "output_count": 15934,
+          "probability": 0.5311333333333333,
+          "transition_id": "daily_global_ko",
+          "variance_payoff": 0.000014562856657243429
+        },
+        {
+          "input_count": 30000,
+          "mean_delta": 0,
+          "mean_payoff": 0.18038097055991373,
+          "mean_vega": 0,
+          "output_count": 3381,
+          "probability": 0.1127,
+          "transition_id": "final_fixing_eki",
+          "variance_payoff": 0.012111122378573928
+        },
+        {
+          "input_count": 30000,
+          "mean_delta": 0,
+          "mean_payoff": 0.03050120323638294,
+          "mean_vega": 0,
+          "output_count": 30000,
+          "probability": 1,
+          "transition_id": "memory_coupon",
+          "variance_payoff": 0.00033625926314639833
+        }
+      ],
+      "transitions": [
+        {
+          "condition": "all names >= 1.100000 during callable observations",
+          "id": "daily_global_ko",
+          "population_after": 15934,
+          "population_before": 30000,
+          "probability": 0.5311333333333333,
+          "pv_impact": 0.5258710598279193
+        },
+        {
+          "condition": "terminal worst <= 0.700000 and no prior autocall; put strike 0.780000",
+          "id": "final_fixing_eki",
+          "population_after": 3010,
+          "population_before": 14066,
+          "probability": 0.21399118441632306,
+          "pv_impact": -0.0203289353821023
+        },
+        {
+          "condition": "daily worst-of >= coupon barrier 0.100000; memory carry enabled=true",
+          "id": "memory_coupon",
+          "population_after": 30000,
+          "population_before": 30000,
+          "probability": 1,
+          "pv_impact": 0.030501203236377818
+        }
+      ]
+    },
+    "query_risk_net": {
+      "correlation_sensitivity": 0.00634053512862387,
+      "dv01": -0.24440917914314575,
+      "per_asset": [
+        {
+          "asset_index": 0,
+          "delta": 0.00010385086366310271,
+          "gamma": 0.0000020186312266331885,
+          "vega": -0.04737495625849464
+        },
+        {
+          "asset_index": 1,
+          "delta": 0.00007014197931118322,
+          "gamma": 0.00006185728926856178,
+          "vega": -0.08983777718485908
+        }
+      ],
+      "transitions": [
+        {
+          "delta_impact": 0,
+          "id": "daily_global_ko",
+          "pv_impact": 0.5258710598279193,
+          "vega_impact": 0
+        },
+        {
+          "delta_impact": 0,
+          "id": "final_fixing_eki",
+          "pv_impact": -0.0203289353821023,
+          "vega_impact": 0
+        },
+        {
+          "delta_impact": 0,
+          "id": "memory_coupon",
+          "pv_impact": 0.030501203236377818,
+          "vega_impact": 0
+        }
+      ]
+    },
+    "recommend_scenarios": {
+      "recommendations": [
+        {
+          "reason": "KI at 70% of initial spot; payoff discontinuity near activation",
+          "spot_band": [
+            0.6579999999999999,
+            0.742
+          ]
+        },
+        {
+          "reason": "KO at 110% of initial spot; autocall boundary",
+          "spot_band": [
+            1.034,
+            1.1660000000000001
+          ]
+        }
+      ]
+    },
+    "risk_batch": {
+      "assets": [
+        {
+          "asset_index": 0,
+          "delta": 0.00010385086366310271,
+          "delta_mc_error": 0.00014125118012852492,
+          "gamma": 0.0000020186312266331885,
+          "vega": -0.04737495625849464,
+          "vega_mc_error": 0.03783919240239175
+        },
+        {
+          "asset_index": 1,
+          "delta": 0.00007014197931118322,
+          "delta_mc_error": 0.00014594340356854023,
+          "gamma": 0.00006185728926856178,
+          "vega": -0.08983777718485908,
+          "vega_mc_error": 0.03772183897153564
+        }
+      ],
+      "base_pv": 1.000264636050433,
+      "correlation_sensitivity": 0.00634053512862387,
+      "dv01": -0.24440917914314575,
+      "pv_mc_error": 0.0003784998342367249,
+      "scenario_count": 13,
+      "seed": 1729
+    },
+    "scenario": {
+      "assets": [
+        {
+          "asset_index": 0,
+          "delta": 0.00010385086366310271,
+          "gamma": 0.0000020186312266331885,
+          "vega": -0.04737495625849464
+        },
+        {
+          "asset_index": 1,
+          "delta": 0.00007014197931118322,
+          "gamma": 0.00006185728926856178,
+          "vega": -0.08983777718485908
+        }
+      ],
+      "base_pv": 1.000264636050433,
+      "correlation_down_pv": 1.0002314938435237,
+      "correlation_up_pv": 1.0003583045460962,
+      "rate_down_pv": 1.0002963156004636,
+      "rate_up_pv": 1.000247433764635,
+      "scenario_count": 13
+    },
+    "validate_greeks": {
+      "flags": [
+        {
+          "message": "asset[0] delta is smaller than its MC error bound",
+          "severity": "info"
+        },
+        {
+          "message": "asset[1] delta is smaller than its MC error bound",
+          "severity": "info"
+        }
+      ]
+    },
+    "valuation_explain": {
+      "base_pv": 1.000264636050433,
+      "contributions": [
+        {
+          "contribution": 0.0000010386095681923587,
+          "factor": "spot[0]"
+        },
+        {
+          "contribution": -0.0004737495625849464,
+          "factor": "vol[0]"
+        },
+        {
+          "contribution": -6.98326928648404e-7,
+          "factor": "spot[1]"
+        },
+        {
+          "contribution": 0.0008983777718485908,
+          "factor": "vol[1]"
+        },
+        {
+          "contribution": -0.000024440917914314575,
+          "factor": "rate"
+        },
+        {
+          "contribution": 0.0000634053512862387,
+          "factor": "correlation"
+        }
+      ],
+      "current_pv": 1.0003890112982825,
+      "delta_pv": 0.00012437524784947307,
+      "predicted_dpv": 0.00046393292527511246,
+      "residual": -0.0003395576774256394
+    },
+    "compare_corpus": {
+      "count": 0,
+      "exceptions": [],
+      "name": "default",
+      "within_tolerance": true
+    },
+    "root_cause": {
+      "change_log": {
+        "baseline_pv": 1.000264636050433,
+        "current_pv": 1.000264636050433,
+        "delta_pv": 0,
+        "dominant_transitions": [
+          {
+            "pv_impact": 0.5258710598279193,
+            "transition_id": "daily_global_ko"
+          },
+          {
+            "pv_impact": -0.0203289353821023,
+            "transition_id": "final_fixing_eki"
+          },
+          {
+            "pv_impact": 0.030501203236377818,
+            "transition_id": "memory_coupon"
+          }
+        ],
+        "frozen_at_unix": 1792098327
+      },
+      "engine_model": "dupire_local_vol_calibrated_cpu",
+      "evidence_refs": [
+        "trade:termsheet1",
+        "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+        "seed:1729",
+        "trade:termsheet1",
+        "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+        "seed:1729",
+        "trade:termsheet1",
+        "market:sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+        "seed:1729"
+      ],
+      "finding": "PUT leg 0.020329; EKI rate 0.1127; dominant driver is the terminal down-and-in put",
+      "market_snapshot_id": "sha256:f502e708ccf99f35364076379899fdd58bcc96a10b701b96990f437e9ff6e345",
+      "note": "RCA is grounded in the ledger + determinism envelope; freeze_baseline first to correlate against a prior run.",
+      "trade": "termsheet1"
+    },
+    "triage_regression": {
+      "count": 0,
+      "exceptions": [],
+      "name": "default"
+    },
+    "get_path": {
+      "coupon_by_period": [
+        0.009611894280218912,
+        0.009581882561097807,
+        0.009551964549133516,
+        0.009522139951739296,
+        0.009492408477241955
+      ],
+      "coupon_pv": 0.047760289819431485,
+      "funding": 0.9844854259740673,
+      "identity": {
+        "path_id": 2100,
+        "rng_seed": 1729,
+        "sobol_index": 0
+      },
+      "ki_hit": true,
+      "knocked_out": false,
+      "ko_time": null,
+      "put_payoff": 0.5052396451560835,
+      "pv": 0.5270060706374152,
+      "worst_final": 0.266798248276565
+    },
+    "replay_path": {
+      "coupon_by_period": [
+        0.009611894280218912,
+        0.009581882561097807,
+        0.009551964549133516,
+        0.009522139951739296,
+        0.009492408477241955
+      ],
+      "coupon_pv": 0.047760289819431485,
+      "funding": 0.9844854259740673,
+      "identity": {
+        "path_id": 2100,
+        "rng_seed": 1729,
+        "sobol_index": 0
+      },
+      "ki_hit": true,
+      "knocked_out": false,
+      "ko_time": null,
+      "put_payoff": 0.5052396451560835,
+      "pv": 0.5270060706374152,
+      "worst_final": 0.266798248276565
+    }
+  },
+  "errors": {}
+}

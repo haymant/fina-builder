@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "npm run mcp:sidecar && npm run dev",
-    "beforeBuildCommand": "npm run build && npm run mcp:sidecar"
+    "beforeDevCommand": "npm run mcp:sidecar && npm run mcp:sidecar:engines && npm run dev",
+    "beforeBuildCommand": "npm run build && npm run mcp:sidecar && npm run mcp:sidecar:engines"
   },
   "app": {
     "windows": [

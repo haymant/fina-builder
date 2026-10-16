@@ -22,13 +22,13 @@ export const PanelCard = memo(function PanelCard({
   return (
     <section
       className={clsx(
-        'flex min-h-0 flex-col overflow-hidden rounded-lg border border-slate-700/80 bg-panel shadow-lg shadow-black/20',
+        'flex min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel shadow-lg shadow-black/20',
         className,
       )}
     >
-      <header className="flex items-center justify-between gap-3 border-b border-slate-700/80 px-3 py-2">
+      <header className="flex items-center justify-between gap-3 border-b border-line px-3 py-2">
         <div className="min-w-0">
-          <h2 className="truncate text-xs font-semibold tracking-wide text-slate-200 uppercase">
+          <h2 className="truncate text-xs font-semibold tracking-wide text-main uppercase">
             {title}
           </h2>
           {subtitle ? (
@@ -37,7 +37,7 @@ export const PanelCard = memo(function PanelCard({
         </div>
         {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
       </header>
-      <div className={clsx('min-h-0 flex-1 overflow-hidden', bodyClassName)}>{children}</div>
+      <div className={clsx('min-h-0 flex-1 overflow-hidden text-main', bodyClassName)}>{children}</div>
     </section>
   )
 })

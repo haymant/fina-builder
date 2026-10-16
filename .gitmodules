@@ -1,0 +1,6 @@
+[submodule "modules/tac-engine"]
+	path = modules/tac-engine
+	url = https://github.com/haymant/tac-engine.git
+[submodule "modules/riga-flow"]
+	path = modules/riga-flow
+	url = https://github.com/haymant/riga-flow.git
