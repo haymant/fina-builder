@@ -197,7 +197,9 @@ curve — `evaluationDate` anchors the tenors), otherwise it falls back to `tac-
 (`--market file|lake|auto`). It builds the `riga-flow` `PriceRequest` — including the Dupire
 `local_vol.grids[]` from the surface — and reports both the flat-ATM and the
 surface-calibrated lanes. It resolves the engines exactly like the app (`RIGA_MCP_BIN` /
-`TAC_ENGINE_BIN`, else `modules/<dir>/target/release/<bin>`).
+`TAC_ENGINE_BIN`, else `modules/<dir>/target/release/<bin>`). To reconcile against another
+pricer, `--no-call` drops the autocall gate, `--strike X` overrides the put strike, and
+`--vol a,b` overrides the flat vols (and disables the surface grid).
 
 ## Repository map
 

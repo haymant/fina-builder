@@ -458,6 +458,9 @@ const { values, positionals } = parseArgs({
     paths: { type: 'string', default: '200000' },
     lane: { type: 'string', default: 'both' },
     json: { type: 'boolean', default: false },
+    'no-call': { type: 'boolean', default: false },
+    vol: { type: 'string' },
+    strike: { type: 'string' },
   },
 })
 
@@ -496,27 +499,46 @@ try {
   }
   market.paths = Math.max(1, Number(values.paths) || 200000)
 
+  // Reconciliation overrides (default to the instrument's own spec).
+  const priced = { ...deal }
+  const overrides = []
+  if (values.strike !== undefined) {
+    priced.strike = Number(values.strike)
+    overrides.push(`strike ${priced.strike}`)
+  }
+  if (values['no-call']) {
+    priced.knockOut = null
+    overrides.push('no autocall (KO disabled)')
+  }
+  if (values.vol) {
+    market.vols = values.vol.split(',').map(Number)
+    market.grids = market.grids.map(() => null)
+    overrides.push(`vol ${market.vols.join(' / ')} (surface grid disabled)`)
+  }
+
   const wantFlat = values.lane === 'both' || values.lane === 'flat'
   const wantLocal = (values.lane === 'both' || values.lane === 'local') && market.grids.every(Boolean)
   const lanes = []
-  if (wantFlat) lanes.push(['flat GBM', await priceLane(riga, deal, market, 'flat')])
-  if (wantLocal) lanes.push(['Dupire surface', await priceLane(riga, deal, market, 'local')])
+  if (wantFlat) lanes.push(['flat GBM', await priceLane(riga, priced, market, 'flat')])
+  if (wantLocal) lanes.push(['Dupire surface', await priceLane(riga, priced, market, 'local')])
 
-  const maturityYears = (Date.parse(deal.finalFixing) - Date.parse(market.asOf)) / (MS_PER_DAY * DAYS_PER_YEAR)
+  const maturityYears = (Date.parse(priced.finalFixing) - Date.parse(market.asOf)) / (MS_PER_DAY * DAYS_PER_YEAR)
   if (values.json) {
     console.log(JSON.stringify({
-      instrument: deal,
+      instrument: priced,
       market: { provenance: market.provenance, asOf: market.asOf, spots: market.spots, vols: market.vols, correlation: market.correlation, riskFreeRate: market.riskFreeRate, dividendYields: market.dividendYields, gridShapes: market.grids.map((g) => (g ? [g.maturities_years.length, g.strikes.length] : null)), notes: market.notes },
+      overrides,
       lanes: Object.fromEntries(lanes.map(([label, result]) => [label, { pv: result.pv, put: result.legs?.down_and_in_put, legs: result.legs }])),
     }, null, 2))
   } else {
     const pct = (x) => (Number.isFinite(x) ? `${(x * 100).toFixed(3)}%` : '—')
-    console.log(`${deal.name}  (${deal.template}, leg ${deal.leg}, multiplier ${deal.multiplier})`)
-    console.log(`notional ${deal.notional} ${deal.currency}   as_of ${market.asOf}   maturity ${maturityYears.toFixed(6)}y   market ${market.provenance}`)
-    console.log(`strike ${deal.strike}   knock-in ${deal.knockIn}   knock-out ${deal.knockOut ?? '—'}`)
+    console.log(`${priced.name}  (${priced.template}, leg ${priced.leg}, multiplier ${priced.multiplier})`)
+    console.log(`notional ${priced.notional} ${priced.currency}   as_of ${market.asOf}   maturity ${maturityYears.toFixed(6)}y   market ${market.provenance}`)
+    console.log(`strike ${priced.strike}   knock-in ${priced.knockIn}   knock-out ${priced.knockOut ?? '— (no autocall)'}`)
+    if (overrides.length) console.log(`overrides: ${overrides.join('; ')}`)
     console.log('')
-    deal.symbols.forEach((symbol, i) => {
-      console.log(`  ${symbol.padEnd(6)} init ${deal.initialSpots[i]} → spot ${market.spots[i]}   vol ${pct(market.vols[i])}   div ${pct(market.dividendYields[i])}   grid ${market.grids[i] ? `${market.grids[i].maturities_years.length}×${market.grids[i].strikes.length}` : '—'}`)
+    priced.symbols.forEach((symbol, i) => {
+      console.log(`  ${symbol.padEnd(6)} init ${priced.initialSpots[i]} → spot ${market.spots[i]}   vol ${pct(market.vols[i])}   div ${pct(market.dividendYields[i])}   grid ${market.grids[i] ? `${market.grids[i].maturities_years.length}×${market.grids[i].strikes.length}` : '—'}`)
     })
     console.log(`  correlation ${market.correlation[0][1].toFixed(5)}   rate ${pct(market.riskFreeRate)}   paths ${market.paths}`)
     market.notes.forEach((note) => console.log(`  note: ${note}`))
@@ -525,7 +547,7 @@ try {
     for (const [label, result] of lanes) {
       const put = result.legs?.down_and_in_put ?? 0
       console.log(
-        `${label.padEnd(15)} ${result.pv.toFixed(6)}   ${put.toFixed(6)}   ${(put * deal.notional * deal.multiplier).toFixed(2)} ${deal.currency}`,
+        `${label.padEnd(15)} ${result.pv.toFixed(6)}   ${put.toFixed(6)}   ${(put * priced.notional * priced.multiplier).toFixed(2)} ${priced.currency}`,
       )
     }
   }
