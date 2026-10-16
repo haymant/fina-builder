@@ -32,6 +32,7 @@
     "test:run": "vitest run",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
+    "price:instrument": "node scripts/price-instrument.mjs",
     "backend:dev": "cargo run -p fina-server",
     "backend:test": "cargo test --workspace",
     "version:set": "node scripts/set-version.mjs"

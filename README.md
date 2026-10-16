@@ -187,7 +187,15 @@ npm run test:run       # 49 Vitest tests
 npm run test:coverage  # Vitest coverage
 npm run backend:test   # cargo test --workspace (296 tests)
 npm run version:set -- 0.1.1   # stamp one version into Cargo.toml, src-tauri/Cargo.toml, tauri.conf.json
+npm run price:instrument -- 1.json   # price a leg from its trading-system JSON with the live engines
 ```
+
+`price:instrument` reads an instrument JSON (e.g. an `ELIFCN_KI` KIKO note), pulls the market
+from `tac-engine` (spots, calibrated surface, correlation, rate, dividends), builds the
+`riga-flow` `PriceRequest` — including the Dupire `local_vol.grids[]` from the surface — and
+prices the down-and-in put leg. It uses the same binary resolution as the app
+(`RIGA_MCP_BIN` / `TAC_ENGINE_BIN`, else `modules/<dir>/target/release/<bin>`), and reports both
+the flat-ATM and the surface-calibrated lanes.
 
 ## Repository map
 
@@ -206,7 +214,7 @@ src/                    React frontend (unchanged location)
   api/                  Transport-agnostic command client (Tauri | HTTP)
   features/             Tiles, workspace, payoff graph, pathcube, attribution, local-agent UI/runtime, …
   store/                Zustand input/UI state + localStorage persistence
-scripts/                Golden fixture tooling, coverage gates, version stamping
+scripts/                Golden fixture tooling, live-engine instrument pricing, coverage gates, version stamping
 ```
 
 ## Release a version
