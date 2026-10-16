@@ -4,3 +4,6 @@
 [submodule "modules/riga-flow"]
 	path = modules/riga-flow
 	url = https://github.com/haymant/riga-flow.git
+[submodule "modules/riga"]
+	path = modules/riga
+	url = https://github.com/haymant/riga

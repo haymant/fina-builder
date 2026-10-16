@@ -67,3 +67,19 @@
 .agent-select option { background: var(--theme-panel); color: var(--theme-text); }
 .agent-select:focus { border-color: var(--theme-primary); }
 html.light .agent-select { color-scheme: light; }
+
+/* ── Isolate the embedded RIGA assistant ─────────────────────────────────────
+   The RIGA assistant-ui panel ships a global stylesheet that is injected when
+   its lazy chunk loads (after this file), so its bare `.icon-button`,
+   `.brand-mark`, and `.eyebrow` rules would otherwise restyle fina-builder's
+   own chrome and squeeze the header layout. Re-assert fina-builder's rules with
+   a `.fina-root` ancestor so they win on specificity; RIGA's panel is rendered
+   outside `.fina-root`, so its own styling is untouched. */
+.fina-root .icon-button,
+.fina-root .tile-action { display: inline-flex; height: 30px; width: 30px; align-items: center; justify-content: center; border: 1px solid var(--theme-border); border-radius: 7px; background: var(--theme-background); color: var(--theme-muted); padding: 0; }
+.fina-root .icon-button:hover, .fina-root .tile-action:hover { border-color: var(--theme-primary); color: var(--theme-primary); background: var(--theme-background); }
+.fina-root .brand-mark { display: flex; height: 30px; width: 30px; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: color-mix(in srgb, var(--theme-primary) 18%, transparent); color: var(--theme-primary); }
+.fina-root .eyebrow { color: var(--theme-muted); font-family: inherit; font-size: 9px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; margin: 0; }
+.fina-root .status-dot { height: 6px; width: 6px; border-radius: 999px; background: var(--theme-success); box-shadow: 0 0 8px var(--theme-success); }
+/* The assistant's `:root`/`body` rules also reach the host document. */
+html body { background: var(--theme-background); color: var(--theme-text); overflow: hidden; }

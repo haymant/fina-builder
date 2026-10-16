@@ -19,7 +19,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # merely running the app on a CUDA-capable computer.
 [features]
 default = []
-cuda = ["llama-cpp-2/cuda"]
+cuda = ["riga-server/cuda"]
+metal = ["riga-server/metal"]
 
 [build-dependencies]
 tauri-build = { version = "2.7.1", features = [] }
@@ -30,15 +31,17 @@ tauri-build = { version = "2.7.1", features = [] }
 # pure pass-throughs: no formulas, no domain defaults, no branching on values.
 fina-kernel = { workspace = true }
 
+# RIGA agent host (the chat panel). These are vendored at `modules/riga`; the
+# `cuda` feature forwards to `riga-server` so `npm run tauri:dev:cuda` runs the
+# agent's local GGUF inference on the GPU.
+riga-kernel = { path = "../modules/riga/crates/riga-kernel" }
+riga-server = { path = "../modules/riga/crates/riga-server" }
+riga-shell = { path = "../modules/riga/crates/riga-shell" }
+
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.12.1", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-opener = "2"
-llama-cpp-2 = { version = "0.1.158", default-features = false, features = ["common", "openmp"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
-sha2 = "0.10"
-encoding_rs = "0.8"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync"] }
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio = { version = "1", features = ["sync"] }

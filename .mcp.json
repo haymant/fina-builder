@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "riga-flow": {
+      "type": "stdio",
+      "command": "modules/riga-flow/target/release/riga-mcp",
+      "args": ["--transport", "stdio"]
+    },
+    "tac-engine": {
+      "type": "stdio",
+      "command": "modules/tac-engine/target/release/tac-engine",
+      "args": []
+    }
+  }
+}

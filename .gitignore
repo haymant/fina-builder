@@ -44,3 +44,7 @@ lcov.info
 .env
 .env.*
 !.env.example
+
+.riga
+# RIGA MCP registry written at runtime
+.riga-mcp-registry.json
