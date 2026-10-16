@@ -103,6 +103,11 @@ export function isPositiveDefinite(matrix: number[][]): boolean {
 /** Non-fatal warnings for a vol surface after manipulation (§6.9). */
 export function volSurfaceWarnings(surface: TacVolSurface): string[] {
   const warnings: string[] = []
+  // The engine's calibration already reports arbitrage; surface it verbatim
+  // rather than second-guessing it with a UI heuristic.
+  for (const note of surface.arbitrage ?? []) {
+    warnings.push(`${surface.underlying}: ${note}`)
+  }
   const rows = surface.volatility ?? []
   for (const row of rows) {
     for (const value of row) {
@@ -113,10 +118,14 @@ export function volSurfaceWarnings(surface: TacVolSurface): string[] {
     }
   }
   // Calendar check: total variance must not decrease with maturity (per strike).
+  const numericMaturities = (surface.maturities ?? []).filter(
+    (maturity): maturity is number => typeof maturity === 'number',
+  )
+  const baseSerial = numericMaturities.length ? Math.min(...numericMaturities) : 0
   for (let col = 0; col < (surface.strikes?.length ?? 0); col++) {
     let previous = -Infinity
     for (let row = 0; row < rows.length; row++) {
-      const t = maturityYears(surface, row)
+      const t = maturityYears(surface, row, baseSerial)
       const totalVar = (rows[row]![col]! ** 2) * t
       if (totalVar < previous - 1e-9) {
         warnings.push(`${surface.underlying}: calendar-arbitrage risk at strike index ${col}`)
@@ -128,9 +137,14 @@ export function volSurfaceWarnings(surface: TacVolSurface): string[] {
   return warnings
 }
 
-function maturityYears(surface: TacVolSurface, index: number): number {
+function maturityYears(surface: TacVolSurface, index: number, baseSerial = 0): number {
   const maturity = surface.maturities?.[index]
-  if (typeof maturity === 'number') return Math.max(maturity, 1 / 365)
+  if (typeof maturity === 'number') {
+    // tac-engine maturities are Excel serial dates (days since 1899-12-30), not
+    // years. Anchor the front to ~1 day and convert the spacing to years; using
+    // the raw serial made the calendar check hypersensitive.
+    return Math.max((maturity - baseSerial) / 365.25, 1 / 365)
+  }
   if (typeof maturity === 'string') {
     const parsed = Date.parse(maturity)
     if (!Number.isNaN(parsed)) {

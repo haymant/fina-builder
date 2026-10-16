@@ -132,6 +132,7 @@ export function toVolSurface(payload: unknown): TacVolSurface | undefined {
     calibratedAt: asString(root.calibrated_at),
     source: asString(root.source, 'lake'),
     stale: root.stale === true,
+    arbitrage: Array.isArray(root.arbitrage) ? root.arbitrage.map((note) => String(note)) : undefined,
   }
 }
 

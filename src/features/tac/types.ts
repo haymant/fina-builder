@@ -48,6 +48,8 @@ export interface TacVolSurface {
   calibratedAt?: string
   source?: TacLakeSource | string
   stale?: boolean
+  /** The engine's own calibration verdict, surfaced verbatim (e.g. "calendar violation …"). */
+  arbitrage?: string[]
 }
 
 export interface TacCurvePillar {
