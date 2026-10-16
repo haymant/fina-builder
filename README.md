@@ -190,12 +190,14 @@ npm run version:set -- 0.1.1   # stamp one version into Cargo.toml, src-tauri/Ca
 npm run price:instrument -- 1.json   # price a leg from its trading-system JSON with the live engines
 ```
 
-`price:instrument` reads an instrument JSON (e.g. an `ELIFCN_KI` KIKO note), pulls the market
-from `tac-engine` (spots, calibrated surface, correlation, rate, dividends), builds the
-`riga-flow` `PriceRequest` — including the Dupire `local_vol.grids[]` from the surface — and
-prices the down-and-in put leg. It uses the same binary resolution as the app
-(`RIGA_MCP_BIN` / `TAC_ENGINE_BIN`, else `modules/<dir>/target/release/<bin>`), and reports both
-the flat-ATM and the surface-calibrated lanes.
+`price:instrument` reads an instrument JSON (e.g. an `ELIFCN_KI` KIKO note) and prices the
+down-and-in put leg. Market data comes from the instrument's own `marketData` block when
+present (Murex equity spots + dividends, correlation, the `eqVol` surface, and the discount
+curve — `evaluationDate` anchors the tenors), otherwise it falls back to `tac-engine`
+(`--market file|lake|auto`). It builds the `riga-flow` `PriceRequest` — including the Dupire
+`local_vol.grids[]` from the surface — and reports both the flat-ATM and the
+surface-calibrated lanes. It resolves the engines exactly like the app (`RIGA_MCP_BIN` /
+`TAC_ENGINE_BIN`, else `modules/<dir>/target/release/<bin>`).
 
 ## Repository map
 
