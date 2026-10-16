@@ -12,6 +12,10 @@ declare module '@rigai/assistant-ui' {
   export interface AssistantUiOptions {
     /** Show the session-history button in the header. */
     showSessionHistoryButton?: boolean
+    /** Show RIGA's own title bar (brand + toggles). Hide it when embedding. */
+    showHeader?: boolean
+    /** Controlled theme; omit to let RIGA own it. */
+    theme?: 'dark' | 'light'
     /** Fill the host width instead of the default fixed panel width. */
     fullWidth?: boolean
     /** Feature flags / labels resolved by the package's defaults. */

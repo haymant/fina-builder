@@ -6,6 +6,7 @@ import type { AssistantUIProps } from '@rigai/assistant-ui'
 import { ThemeProvider } from './features/themes/ThemeProvider'
 import { Workspace } from './features/workspace/components/Workspace'
 import { useSimulationStore } from './store/simulationStore'
+import { useExplorerStore } from './store/explorerStore'
 
 // The chat panel is RIGA's assistant surface (§ RIGA integration). It is loaded
 // lazily so its code only enters the bundle when the panel is first opened.
@@ -43,9 +44,33 @@ class PanelErrorBoundary extends Component<{ children: ReactNode }, { error: Err
 export default function App() {
   const [localAgentOpen, setLocalAgentOpen] = useState(false)
   const [hasOpenedLocalAgent, setHasOpenedLocalAgent] = useState(false)
+  const [chatWidth, setChatWidth] = useState(() => {
+    const saved = Number(localStorage.getItem('fina-chat-width') ?? 560)
+    const base = Number.isFinite(saved) && saved > 0 ? saved : 560
+    return Math.max(360, Math.min(Math.round(window.innerWidth * 0.8), base))
+  })
+  const saveChatWidth = (value: number) => {
+    const next = Math.max(360, Math.min(Math.round(window.innerWidth * 0.8), value))
+    setChatWidth(next)
+    localStorage.setItem('fina-chat-width', String(next))
+  }
+  const startChatResize = (event: { clientX: number }) => {
+    const start = event.clientX
+    const initial = chatWidth
+    const move = (moveEvent: MouseEvent) => saveChatWidth(initial - (moveEvent.clientX - start))
+    const up = () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  }
   const status = useSimulationStore((s) => s.status)
   const error = useSimulationStore((s) => s.error)
   const load = useSimulationStore((s) => s.load)
+  // Follow fina-builder's theme instead of letting the assistant own one, and
+  // hide RIGA's own title bar so the composer is not pushed off-screen.
+  const theme = useExplorerStore((s) => s.theme)
 
   const desktop = isTauriRuntime()
   // Tauri uses in-process IPC; the browser uses RIGA's HTTP/WebSocket transport
@@ -75,9 +100,17 @@ export default function App() {
       <Workspace onOpenLocalAgent={() => { setHasOpenedLocalAgent(true); setLocalAgentOpen(true) }} />
       {hasOpenedLocalAgent && localAgentOpen ? (
         <aside
-          className="fixed inset-y-0 right-0 z-[60] flex w-full max-w-[560px] flex-col border-l border-line bg-panel shadow-2xl"
+          className="fixed inset-y-0 right-0 z-[60] flex max-w-[92vw] flex-col border-l border-line bg-panel shadow-2xl"
+          style={{ width: chatWidth }}
           aria-label="RIGA assistant"
         >
+          <div
+            className="notebook-resize"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize chat panel"
+            onMouseDown={startChatResize}
+          />
           <header className="flex shrink-0 items-center justify-between border-b border-line px-3 py-2">
             <span className="text-xs font-semibold text-main">RIGA assistant</span>
             <button type="button" className="tile-action" title="Close" onClick={() => setLocalAgentOpen(false)}>
@@ -87,7 +120,7 @@ export default function App() {
           <div className="min-h-0 flex-1 overflow-hidden">
             <Suspense fallback={<div className="p-3 text-xs text-muted">Loading assistant…</div>}>
               <PanelErrorBoundary>
-                <AssistantUI showSessionHistoryButton fullWidth transportFactory={transportFactory} />
+                <AssistantUI showSessionHistoryButton fullWidth showHeader={false} theme={theme} transportFactory={transportFactory} />
               </PanelErrorBoundary>
             </Suspense>
           </div>
