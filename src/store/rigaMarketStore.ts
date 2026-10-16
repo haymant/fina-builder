@@ -35,21 +35,31 @@ export const DEFAULT_RIGA_SIMULATION: RigaSimulationInputs = {
   varianceReduction: { kind: 'none' },
 }
 
+type Persisted = Pick<
+  RigaMarketState,
+  'market' | 'localVol' | 'useSurfaceLocalVol' | 'simulation'
+>
+
 type RigaMarketState = {
   market: RigaMarketSnapshot
   localVol: RigaImpliedVolGrid | null
+  /**
+   * When on, `composeRigaRequest` builds the Dupire local-vol grids from the
+   * effective tac-engine surfaces (maturities → years) instead of the flat ATM
+   * `vols[]` scalar. Off by default so the fixture/GBM lane stays reproducible.
+   */
+  useSurfaceLocalVol: boolean
   simulation: RigaSimulationInputs
   updateMarket: (patch: Partial<RigaMarketSnapshot>) => void
   updateLocalVol: (grid: RigaImpliedVolGrid | null) => void
+  setUseSurfaceLocalVol: (useSurfaceLocalVol: boolean) => void
   updateSimulation: (patch: Partial<RigaSimulationInputs>) => void
   resetMarket: () => void
 }
 
-function load(): Partial<Pick<RigaMarketState, 'market' | 'localVol' | 'simulation'>> {
+function load(): Partial<Persisted> {
   try {
-    return JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<
-      Pick<RigaMarketState, 'market' | 'localVol' | 'simulation'>
-    >
+    return JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Persisted>
   } catch {
     return {}
   }
@@ -57,11 +67,16 @@ function load(): Partial<Pick<RigaMarketState, 'market' | 'localVol' | 'simulati
 
 const saved = typeof window !== 'undefined' ? load() : {}
 
-function persist(state: Pick<RigaMarketState, 'market' | 'localVol' | 'simulation'>) {
+function persist(state: Persisted) {
   try {
     localStorage.setItem(
       KEY,
-      JSON.stringify({ market: state.market, localVol: state.localVol, simulation: state.simulation }),
+      JSON.stringify({
+        market: state.market,
+        localVol: state.localVol,
+        useSurfaceLocalVol: state.useSurfaceLocalVol,
+        simulation: state.simulation,
+      }),
     )
   } catch {
     /* optional */
@@ -71,6 +86,7 @@ function persist(state: Pick<RigaMarketState, 'market' | 'localVol' | 'simulatio
 export const useRigaMarketStore = create<RigaMarketState>((set, get) => ({
   market: saved.market ?? DEFAULT_RIGA_MARKET,
   localVol: saved.localVol ?? null,
+  useSurfaceLocalVol: saved.useSurfaceLocalVol ?? false,
   simulation: saved.simulation ?? DEFAULT_RIGA_SIMULATION,
   updateMarket: (patch) => {
     const market = { ...get().market, ...patch }
@@ -81,13 +97,27 @@ export const useRigaMarketStore = create<RigaMarketState>((set, get) => ({
     set({ localVol })
     persist({ ...get(), localVol })
   },
+  setUseSurfaceLocalVol: (useSurfaceLocalVol) => {
+    set({ useSurfaceLocalVol })
+    persist({ ...get(), useSurfaceLocalVol })
+  },
   updateSimulation: (patch) => {
     const simulation = { ...get().simulation, ...patch }
     set({ simulation })
     persist({ ...get(), simulation })
   },
   resetMarket: () => {
-    set({ market: DEFAULT_RIGA_MARKET, localVol: null, simulation: DEFAULT_RIGA_SIMULATION })
-    persist({ market: DEFAULT_RIGA_MARKET, localVol: null, simulation: DEFAULT_RIGA_SIMULATION })
+    set({
+      market: DEFAULT_RIGA_MARKET,
+      localVol: null,
+      useSurfaceLocalVol: false,
+      simulation: DEFAULT_RIGA_SIMULATION,
+    })
+    persist({
+      market: DEFAULT_RIGA_MARKET,
+      localVol: null,
+      useSurfaceLocalVol: false,
+      simulation: DEFAULT_RIGA_SIMULATION,
+    })
   },
 }))

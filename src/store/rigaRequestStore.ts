@@ -4,9 +4,9 @@
 // input re-runs every affected tile — including a pure market-data change.
 
 import { create } from 'zustand'
-import type { RigaPriceRequest } from '../features/riga/types'
+import type { RigaImpliedVolGrid, RigaPriceRequest } from '../features/riga/types'
 import { applyManipulations } from '../features/tac/manipulations'
-import { effectiveRigaMarket } from '../features/tac/mapping'
+import { effectiveRigaMarket, localVolGridsFromTac } from '../features/tac/mapping'
 import { useRigaTradeStore } from './rigaTradeStore'
 import { useRigaMarketStore } from './rigaMarketStore'
 import { useObservabilityStore, currentTraceLevel } from './observabilityStore'
@@ -17,15 +17,25 @@ export function composeRigaRequest(): RigaPriceRequest {
   const trade = useRigaTradeStore.getState().trade
   const marketState = useRigaMarketStore.getState()
   const config = { ...marketState.simulation, traceLevel: currentTraceLevel() }
-  const localVol = marketState.localVol ? { grids: [marketState.localVol] } : null
+  // The manual editor holds a single grid; riga-flow needs one per factor.
+  const manual: { grids: RigaImpliedVolGrid[] } | null = marketState.localVol
+    ? { grids: [marketState.localVol, marketState.localVol] }
+    : null
   try {
     const tac = useTacMarketStore.getState()
     const effective = applyManipulations(tac.raw, tac.manipulations)
     const market = effectiveRigaMarket(marketState.market, effective)
+    // When enabled, the calibrated surface becomes the Dupire grid the engine
+    // reads (maturities converted from serials to years); otherwise the flat
+    // ATM scalar / manual grid is used.
+    const grids = marketState.useSurfaceLocalVol
+      ? localVolGridsFromTac(effective, market.asOf)
+      : null
+    const localVol = grids ? { grids } : manual
     return { trade, market, config, asOf: market.asOf, localVol }
   } catch {
     // A partial/corrupt tac store must never break the trade request.
-    return { trade, market: marketState.market, config, asOf: marketState.market.asOf, localVol }
+    return { trade, market: marketState.market, config, asOf: marketState.market.asOf, localVol: manual }
   }
 }
 

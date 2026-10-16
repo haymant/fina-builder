@@ -18,7 +18,7 @@ export interface MarketDataType {
 
 export const MARKET_DATA_TYPES: MarketDataType[] = [
   { id: 'spot', label: 'Spot', group: 'Equity', tacTools: ['get_stock_snapshot', 'get_lake_bars'], rigaField: 'spots[]', editor: 'numeric' },
-  { id: 'vol_surface', label: 'Vol surface', group: 'Equity', tacTools: ['vol_surface', 'vol_surface_status'], rigaField: 'vols[] / localVol.grids[]', editor: 'grid', note: 'Full grid; the ATM read is the flat scalar.' },
+  { id: 'vol_surface', label: 'Vol surface', group: 'Equity', tacTools: ['vol_surface', 'vol_surface_status'], rigaField: 'vols[] / localVol.grids[]', editor: 'grid', note: 'ATM read is the flat scalar; enable "Dupire local vol" to send the full grid (serials → years at asOf).' },
   { id: 'correlation', label: 'Correlation', group: 'Equity', tacTools: ['corr_matrix', 'corr_calc'], rigaField: 'correlation[][]', editor: 'matrix', note: 'Resolved pairwise value — never 0.' },
   { id: 'dividends', label: 'Dividends', group: 'Equity', tacTools: ['get_corporate_actions'], rigaField: 'dividendYields[]', editor: 'table' },
   { id: 'rates', label: 'Interest rate / curve', group: 'Rates', tacTools: ['get_macro_bars'], rigaField: 'riskFreeRate', editor: 'curve', note: 'Built from FRED DGS tenors (T-EXT-1); collapsed to the scalar riga-flow consumes.' },

@@ -9,7 +9,7 @@ import { useTacMarketStore } from '../../../store/tacMarketStore'
 import { useObservabilityStore } from '../../../store/observabilityStore'
 import { composeRigaRequest } from '../../../store/rigaRequestStore'
 import { applyManipulations, clampCorrelation, volSurfaceWarnings } from '../../tac/manipulations'
-import { effectiveRigaMarket } from '../../tac/mapping'
+import { effectiveRigaMarket, localVolGridsFromTac } from '../../tac/mapping'
 import { MARKET_DATA_TYPES } from '../marketDataTypes'
 import { PanelCard } from '../../shared/components/PanelCard'
 import { DataTable, Provenance } from './primitives'
@@ -28,6 +28,8 @@ export function RigaMarketDataPanel() {
   const updateMarket = useRigaMarketStore((s) => s.updateMarket)
   const simulation = useRigaMarketStore((s) => s.simulation)
   const updateSimulation = useRigaMarketStore((s) => s.updateSimulation)
+  const useSurfaceLocalVol = useRigaMarketStore((s) => s.useSurfaceLocalVol)
+  const setUseSurfaceLocalVol = useRigaMarketStore((s) => s.setUseSurfaceLocalVol)
   const raw = useTacMarketStore((s) => s.raw)
   const manipulations = useTacMarketStore((s) => s.manipulations)
   const level = useObservabilityStore((s) => s.level)
@@ -36,10 +38,11 @@ export function RigaMarketDataPanel() {
 
   useEffect(() => {
     setJson(JSON.stringify(composeRigaRequest(), null, 2))
-  }, [market, simulation, raw, manipulations, level])
+  }, [market, simulation, raw, manipulations, level, useSurfaceLocalVol])
 
   const effective = applyManipulations(raw, manipulations)
   const warnings = Object.values(effective.volSurfaces).flatMap((surface) => volSurfaceWarnings(surface))
+  const surfaceGrids = localVolGridsFromTac(effective, market.asOf)
 
   const setCorrelation = (row: number, col: number, value: number) => {
     const matrix = market.correlation.map((r) => [...r])
@@ -123,6 +126,25 @@ export function RigaMarketDataPanel() {
             </label>
           </div>
           <p className="mt-1 text-[9px] text-muted">trace level (from title bar): {level}</p>
+        </div>
+
+        <div>
+          <p className="eyebrow mb-1">Dupire local vol</p>
+          <label className="flex items-center gap-2 text-[10px] text-muted">
+            <input
+              type="checkbox"
+              checked={useSurfaceLocalVol}
+              onChange={(e) => setUseSurfaceLocalVol(e.target.checked)}
+            />
+            Use the calibrated tac-engine surface as localVol.grids[]
+          </label>
+          <p className="mt-1 text-[9px] text-muted">
+            {useSurfaceLocalVol
+              ? surfaceGrids
+                ? `maturities → years anchored at asOf ${market.asOf}; ${surfaceGrids.length} factor grid(s)`
+                : 'unavailable — a factor has no usable surface, falling back to the flat ATM scalar'
+              : 'off — pricing on the flat ATM vols[] scalar'}
+          </p>
         </div>
 
         <button
