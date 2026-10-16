@@ -67,7 +67,9 @@ function decodeDeal(doc) {
   const kiko = root.KIKOSelect ?? {}
   const underlyings = inst.underlyings ?? []
   const symbols = (kiko.underlyingName ?? underlyings.map((u) => u.name)).map(stripMarket)
-  const initialSpots = (kiko.referencePrice ?? underlyings.map((u) => u.spot)).map(Number)
+  // `initspot` is the initial spot / reference price, **not** a current mark;
+  // the current mark only exists in `marketData.equity`.
+  const initialSpots = (kiko.referencePrice ?? underlyings.map((u) => u.initspot ?? u.spot)).map(Number)
   const asOf = isDate(root.extractedSystemDate)
     ? root.extractedSystemDate
     : isDate(inst.initialFixingDate)
@@ -85,7 +87,6 @@ function decodeDeal(doc) {
     currency: root.paymentCurrency ?? inst.paymentCurrency ?? 'USD',
     symbols,
     initialSpots,
-    fallbackSpots: underlyings.map((u) => Number(u.spot)),
     asOf,
     finalFixing,
     koStart: Number.isFinite(Number(koSerial)) ? isoFromSerial(koSerial) : asOf,
@@ -206,8 +207,8 @@ function marketFromFile(doc, deal) {
   const spots = deal.symbols.map((symbol, index) => {
     const entry = equity.get(symbol)
     if (!entry) {
-      missing.push(`${symbol}: no equity mark`)
-      return deal.fallbackSpots[index]
+      missing.push(`${symbol}: no equity mark; used the initial fixing`)
+      return deal.initialSpots[index]
     }
     return Number(entry.spot)
   })
@@ -290,14 +291,21 @@ async function marketFromLake(tac, deal) {
   const asOf = deal.asOf
   const maturityYears = (Date.parse(deal.finalFixing) - Date.parse(asOf)) / (MS_PER_DAY * DAYS_PER_YEAR)
 
-  const spots = [...deal.fallbackSpots]
+  const spots = deal.symbols.map(() => Number.NaN)
   for (let i = 0; i < symbols.length; i++) {
     try {
       const snap = await tool(tac, 'get_stock_snapshot', { symbol: symbols[i] })
       const price = snap?.latestTrade?.p ?? snap?.dailyBar?.c
       if (Number.isFinite(price)) spots[i] = price
+      else notes.push(`${symbols[i]} snapshot carried no price`)
     } catch (error) {
       notes.push(`${symbols[i]} snapshot unavailable: ${error.message}`)
+    }
+  }
+  for (let i = 0; i < symbols.length; i++) {
+    if (!Number.isFinite(spots[i])) {
+      spots[i] = deal.initialSpots[i]
+      notes.push(`${symbols[i]}: no current spot — priced at the initial fixing ${spots[i]}`)
     }
   }
 
