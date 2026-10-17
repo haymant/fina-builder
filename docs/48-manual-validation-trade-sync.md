@@ -71,6 +71,55 @@ Expected, per tile:
 probability), the negative controls do not change, and no tile shows an error
 stripe. Footer run ids stay stable (only the trade changed, not the market).
 
+### 2.1 `Risk Net` (`query_risk_net`) — detailed validation
+
+**What the tile shows.** A React-Flow graph of the **execution net** (from
+`query_execution_net`), where each transition node is labelled
+`Δ <deltaImpact> · ν <vegaImpact>` and **tinted by the signed delta impact**
+(green = +, red = −, opacity ∝ |Δ| / max|Δ|). Footer KPIs: **DV01** and
+**Correlation ρ**. Footer table: **per-asset** `Delta / Gamma / Vega`, one row per
+underlying. Engine transition ids mapped to the drawn nodes:
+`daily_global_ko` (KO gate), `final_fixing_eki` (**down-and-in put**),
+`memory_coupon`.
+
+**Where the numbers come from.** `query_risk_net` returns
+`transitions[] = { id, pv_impact, delta_impact, vega_impact }` (the put leg's
+Explain-Ledger entries) + `per_asset[] = { asset_index, delta, gamma, vega }`
+(central-FD risk batch) + `dv01` + `correlation_sensitivity`.
+
+**Procedure.** Baseline → set **Strike 0.78 → 0.60** (deeper ITM put) → wait for
+the re-run.
+
+**Expected change, per element:**
+
+| Element | Expectation after a deeper strike |
+|---|---|
+| `final_fixing_eki` (down-and-in put) node | Δ impact **grows in magnitude**, ν impact **grows**, the label digits change, the tint intensifies |
+| `daily_global_ko` / `memory_coupon` nodes | Δ/ν change modestly (they're KO/coupon driven, not strike driven) |
+| `DV01` KPI | changes (a bigger put carries more rate sensitivity) |
+| `Correlation ρ` KPI | changes (worst-of correlation sensitivity grows with the put) |
+| per-asset table | delta more negative, gamma and vega larger in magnitude |
+
+**Judging pass/fail:**
+1. **All** Δ/ν node labels and the per-asset numbers must differ from baseline —
+   that is what proves `query_risk_net` re-ran against the *edited* trade (not the
+   on-disk fixture).
+2. A node's impact **sign must be stable** across the two runs; only the
+   magnitude should grow. A sign flip on a *trade* edit is a red flag (it means
+   a different quantity is being charted, not a larger one).
+3. The **graph shape must not change** — places/transitions come from
+   `query_execution_net`, which is a separate tool call; only the overlay may
+   change. If nodes move, something else broke.
+4. Click `final_fixing_eki` → it becomes selected → the **Transition Detail** tile
+   shows PV / Δ / ν for the *same* transition. The two tiles must agree (cross-tile
+   consistency, same `request`).
+
+**Negative controls.**
+- **Trace level only** (off / sampled / full): **no** Δ/ν/DV01/ρ change — trace
+  affects detail, never pricing.
+- **Market-only change** (raise vols): vega, vega-impact and correlation ρ move
+  more than delta (delta is spot-driven).
+
 ## 3. Change the MARKET (second axis)
 
 In **Market Data (riga)** (lane **Instrument market** or **Lake**), raise both
