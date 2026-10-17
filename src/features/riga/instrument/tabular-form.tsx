@@ -34,6 +34,34 @@ function inferRenderer(value: unknown): keyof typeof builtInRenderers {
   return 'text-input'
 }
 
+/**
+ * Remember the editor a field resolved to while it held a value, so clearing a
+ * numeric field (value -> null) keeps a numeric input instead of flipping to a
+ * text input (which is what let stray strings reach the engine).
+ */
+const rendererMemory = new Map<string, keyof typeof builtInRenderers>()
+
+function resolveRendererName(path: string, value: unknown): keyof typeof builtInRenderers {
+  if (value !== null && value !== undefined) {
+    const inferred = inferRenderer(value)
+    rendererMemory.set(path, inferred)
+    return inferred
+  }
+  return rendererMemory.get(path) ?? 'text-input'
+}
+
+/** A numeric field may only ever emit a finite number, or null (cleared). */
+function coerceCellValue(next: unknown): unknown {
+  if (typeof next !== 'string') return next
+  const trimmed = next.trim()
+  if (trimmed === '') return null
+  const parsed = Number(trimmed)
+  // Promote numeric-looking input to a number so a stray string can never reach
+  // a numeric engine field (e.g. typing "0.6" - or a value that was cleared and
+  // re-typed - stays a number); genuine strings (symbols, dates, ids) pass through.
+  return Number.isFinite(parsed) ? parsed : next
+}
+
 /** `raw` blocks are verbatim source provenance — shown, never edited. */
 function isRawPath(path: string): boolean {
   return path.split('/').includes('raw')
@@ -52,9 +80,8 @@ function Cell({
 }) {
   const id = useId()
   const readOnly = isRawPath(path)
-  const Renderer = readOnly
-    ? builtInRenderers['readonly']!
-    : (builtInRenderers[inferRenderer(value)] ?? builtInRenderers['text-input']!)
+  const rendererName = readOnly ? 'readonly' : resolveRendererName(path, value)
+  const Renderer = builtInRenderers[rendererName] ?? builtInRenderers['text-input']!
   const props: DeepFormRendererProps = {
     id,
     path,
@@ -63,7 +90,7 @@ function Cell({
     label,
     readOnly,
     invalid: false,
-    onChange: (next) => onChange(path, next),
+    onChange: (next) => onChange(path, coerceCellValue(next)),
   }
   return (
     <div

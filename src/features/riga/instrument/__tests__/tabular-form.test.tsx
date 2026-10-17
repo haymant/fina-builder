@@ -2,6 +2,7 @@
 // and arrays -> collapsible cards (never a cell); cards collapse/expand.
 
 import { fireEvent, render, screen } from '@testing-library/react'
+import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { TabularForm, getAtPointer } from '../tabular-form'
 
@@ -78,6 +79,44 @@ describe('TabularForm heuristic', () => {
     expect(cell).toBeTruthy()
     // read-only: rendered as text, not an editable input
     expect(cell?.querySelector('input')).toBeNull()
+  })
+
+  it('keeps the numeric editor when a numeric value is cleared', () => {
+    function Harness() {
+      const [value, setValue] = useState<Record<string, unknown>>({ strike: 0.78 })
+      return (
+        <TabularForm
+          value={value}
+          onChange={(pointer, next) => setValue((prev) => ({ ...prev, [pointer.slice(1)]: next }))}
+        />
+      )
+    }
+    const { container } = render(<Harness />)
+    const before = container.querySelector('[data-tabular-path="/strike"] input') as HTMLInputElement
+    expect(before.type).toBe('number')
+
+    fireEvent.change(before, { target: { value: '' } })
+    // cleared -> null, and the input is STILL numeric (arrows/steppers remain)
+    const after = container.querySelector('[data-tabular-path="/strike"] input') as HTMLInputElement
+    expect(after.type).toBe('number')
+  })
+
+  it('promotes numeric-looking input to a number, never a string', () => {
+    const onChange = vi.fn()
+    const { container } = render(<TabularForm value={{ couponBarrier: null }} onChange={onChange} />)
+    fireEvent.change(container.querySelector('[data-tabular-path="/couponBarrier"] input')!, {
+      target: { value: '0.6' },
+    })
+    expect(onChange).toHaveBeenCalledWith('/couponBarrier', 0.6)
+  })
+
+  it('leaves a genuine string alone', () => {
+    const onChange = vi.fn()
+    const { container } = render(<TabularForm value={{ symbol: 'ADBE' }} onChange={onChange} />)
+    fireEvent.change(container.querySelector('[data-tabular-path="/symbol"] input')!, {
+      target: { value: 'MSFT' },
+    })
+    expect(onChange).toHaveBeenCalledWith('/symbol', 'MSFT')
   })
 
   it('reports edits as (pointer, value)', () => {
