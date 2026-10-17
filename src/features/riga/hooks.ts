@@ -52,6 +52,53 @@ type ToolOptions = {
   deps?: readonly unknown[]
 }
 
+/** Every riga-mcp fixture tool whose param struct now accepts an inline
+ * `request` (see docs/46 §8). `health` takes no params; `price_trade` already
+ * carries the request itself. Injecting it here is what keeps every tile
+ * pricing the same live trade as `price_trade`. */
+const TOOLS_WITH_REQUEST = new Set<string>([
+  'price_put',
+  'explain_pv_attribution',
+  'replay_path',
+  'query_path_cube',
+  'query_pathcube',
+  'risk_batch',
+  'list_markets',
+  'get_market',
+  'generate_paths',
+  'get_path',
+  'get_branch_stats',
+  'get_distributions',
+  'get_mc_diagnostics',
+  'build_cashflows',
+  'execution_events',
+  'compute_risk',
+  'compute_book_risk',
+  'price_book',
+  'price_book_async',
+  'pl_explain',
+  'get_ledger',
+  'query_execution_net',
+  'query_risk_net',
+  'validate_greeks',
+  'recommend_scenarios',
+  'root_cause',
+  'export_governance_evidence',
+  'freeze_baseline',
+  'compare_corpus',
+  'triage_regression',
+  'estimate_aad_greeks',
+  'valuation_explain',
+  'scenario',
+])
+
+/** Attach the live request to a fixture tool's args when it accepts one. */
+function withRequest(tool: string, args: unknown, request: unknown): unknown {
+  if (!TOOLS_WITH_REQUEST.has(tool)) return args
+  const base = args && typeof args === 'object' ? (args as Record<string, unknown>) : {}
+  return { ...base, request }
+}
+
 /** Shared plumbing: subscribe to the request key + level, debounce the call. */
 function useRigaTool<T>(
   tool: string,
@@ -59,13 +106,14 @@ function useRigaTool<T>(
   options: ToolOptions = {},
 ): AsyncState<T> {
   const key = useRigaRequestStore((s) => s.key)
+  const request = useRigaRequestStore((s) => s.request)
   const level = useObservabilityStore((s) => s.level)
   const enabled = options.enabled ?? true
   const extra = options.deps ?? []
   return useDebouncedAsync<T>(
     () =>
       enabled
-        ? riga.callTool<T>(tool, buildArgs())
+        ? riga.callTool<T>(tool, withRequest(tool, buildArgs(), request))
         : Promise.resolve(null as unknown as T),
     [tool, key, level, enabled, ...extra],
   )
@@ -144,7 +192,10 @@ export function useRigaPath(pathId: string | null): AsyncState<PathRecord> {
 }
 
 export async function replayRigaPath(pathId: string): Promise<PathRecord> {
-  return riga.callTool<PathRecord>('replay_path', { pathId })
+  return riga.callTool<PathRecord>('replay_path', {
+    pathId,
+    request: useRigaRequestStore.getState().request,
+  })
 }
 
 // --- Statistics / diagnostics ----------------------------------------------
@@ -225,7 +276,10 @@ export function useRigaTriageRegression(): AsyncState<RigaRegressionResult> {
 }
 
 export async function freezeRigaBaseline(name = 'default'): Promise<RigaBaseline> {
-  return riga.callTool<RigaBaseline>('freeze_baseline', { name })
+  return riga.callTool<RigaBaseline>('freeze_baseline', {
+    name,
+    request: useRigaRequestStore.getState().request,
+  })
 }
 
 /**
@@ -237,7 +291,10 @@ export async function priceBookAsync(
   notionals: number[],
   onProgress?: (task: RigaTask) => void,
 ): Promise<RigaBookRisk> {
-  const result = await riga.callTool<Record<string, unknown>>('price_book_async', { notionals })
+  const result = await riga.callTool<Record<string, unknown>>('price_book_async', {
+    notionals,
+    request: useRigaRequestStore.getState().request,
+  })
   if (result && typeof result === 'object' && 'taskId' in result) {
     let task = result as unknown as RigaTask
     for (let attempt = 0; attempt < 120; attempt++) {
