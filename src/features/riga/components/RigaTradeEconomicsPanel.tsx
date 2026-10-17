@@ -6,14 +6,12 @@
 // never a UI-local rule.
 
 import { useRef, useState } from 'react'
-import { DeepForm } from '../../../components/deep-form'
-import type { DeepFormValue } from '../../../components/deep-form'
 import { useInstrumentStore } from '../../../store/instrumentStore'
 import { useRigaSourceStore } from '../../../store/rigaSourceStore'
 import { useRigaTradePrice } from '../hooks'
 import { RIGA_TRADE_PRESETS } from '../../../store/rigaTradeStore'
-import { INSTRUMENT_FIELD_HINTS, INSTRUMENT_LAYOUT } from '../instrument/ui'
-import type { InstrumentDocument } from '../instrument/schema'
+import { INSTRUMENT_FORM_SECTIONS } from '../instrument/ui'
+import { TabularForm } from '../instrument/tabular-form'
 import { PanelCard } from '../../shared/components/PanelCard'
 import { Kpi, num, Provenance } from './primitives'
 
@@ -26,6 +24,7 @@ const SOURCE_BADGE: Record<string, string> = {
 export function RigaTradeEconomicsPanel() {
   const document = useInstrumentStore((s) => s.document)
   const applyDocument = useInstrumentStore((s) => s.applyDocument)
+  const patch = useInstrumentStore((s) => s.patch)
   const importText = useInstrumentStore((s) => s.importText)
   const reset = useInstrumentStore((s) => s.reset)
   const source = useRigaSourceStore((s) => s.source)
@@ -131,13 +130,11 @@ export function RigaTradeEconomicsPanel() {
           ))}
         </div>
 
-        {/* The document ----------------------------------------------------- */}
-        <DeepForm
-          value={document as unknown as DeepFormValue}
-          onChange={(next) => applyDocument(next as unknown as InstrumentDocument)}
-          fieldHints={INSTRUMENT_FIELD_HINTS}
-          layout={INSTRUMENT_LAYOUT}
-          defaultExpandedDepth={2}
+        {/* The document, as a finap-style tabular form. */}
+        <TabularForm
+          value={document as unknown as Record<string, unknown>}
+          sections={INSTRUMENT_FORM_SECTIONS}
+          onChange={patch}
         />
 
         {/* Findings --------------------------------------------------------- */}

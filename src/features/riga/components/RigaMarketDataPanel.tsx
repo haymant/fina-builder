@@ -6,8 +6,6 @@
 // The lane selects which market `composeRigaRequest` prices against.
 
 import { useEffect, useRef, useState } from 'react'
-import { DeepForm } from '../../../components/deep-form'
-import type { DeepFormValue } from '../../../components/deep-form'
 import { useRigaMarketStore } from '../../../store/rigaMarketStore'
 import { useInstrumentStore } from '../../../store/instrumentStore'
 import { useTacMarketStore } from '../../../store/tacMarketStore'
@@ -15,8 +13,8 @@ import { useObservabilityStore } from '../../../store/observabilityStore'
 import { composeRigaRequest } from '../../../store/rigaRequestStore'
 import { applyManipulations, clampCorrelation, volSurfaceWarnings } from '../../tac/manipulations'
 import { effectiveRigaMarket, localVolGridsFromTac } from '../../tac/mapping'
-import { INSTRUMENT_FIELD_HINTS, INSTRUMENT_MARKET_LAYOUT } from '../instrument/ui'
-import type { InstrumentMarket } from '../instrument/schema'
+import { MARKET_FORM_SECTIONS } from '../instrument/ui'
+import { TabularForm } from '../instrument/tabular-form'
 import { MARKET_DATA_TYPES } from '../marketDataTypes'
 import { PanelCard } from '../../shared/components/PanelCard'
 import { DataTable, Provenance } from './primitives'
@@ -44,7 +42,7 @@ export function RigaMarketDataPanel() {
   const document = useInstrumentStore((s) => s.document)
   const marketSource = useInstrumentStore((s) => s.marketSource)
   const setMarketSource = useInstrumentStore((s) => s.setMarketSource)
-  const applyMarket = useInstrumentStore((s) => s.applyMarket)
+  const patch = useInstrumentStore((s) => s.patch)
   const importMarketText = useInstrumentStore((s) => s.importMarketText)
 
   const fileRef = useRef<HTMLInputElement>(null)
@@ -133,12 +131,10 @@ export function RigaMarketDataPanel() {
             {message && (
               <p className="rounded border border-border bg-surface px-2 py-1 text-[10px] text-muted" role="status">{message}</p>
             )}
-            <DeepForm
-              value={document.market as unknown as DeepFormValue}
-              onChange={(next) => applyMarket(next as unknown as InstrumentMarket)}
-              fieldHints={INSTRUMENT_FIELD_HINTS}
-              layout={INSTRUMENT_MARKET_LAYOUT}
-              defaultExpandedDepth={2}
+            <TabularForm
+              value={document as unknown as Record<string, unknown>}
+              sections={MARKET_FORM_SECTIONS}
+              onChange={patch}
             />
           </>
         ) : (

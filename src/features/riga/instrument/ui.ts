@@ -1,126 +1,88 @@
-// Deep-form schema/layout/hints for the `fina.instrument/v1` document (docs/46 §7.2).
+// Tabular form sections for the `fina.instrument/v1` document (finap's
+// `.fina-form-grid` layout). Field pointers are JSON pointers from the form
+// root, so the same component edits the whole document or just the market.
 
-import type { DeepFormFieldHints, DeepFormLayout } from '../../../components/deep-form'
+import type { TabularSection } from './tabular-form'
 
-/** JSON pointers -> labels/units for the instrument editor. */
-export const INSTRUMENT_FIELD_HINTS: DeepFormFieldHints = {
-  '/meta/name': { label: 'Trade name' },
-  '/meta/template': { label: 'Template', readOnly: true },
-  '/meta/product': { label: 'Product', readOnly: true },
-  '/meta/currency': { label: 'Currency' },
-  '/meta/notional': { label: 'Notional' },
-  '/meta/multiplier': { label: 'Multiplier' },
-  '/legs/0/put/initialSpots': { label: 'Initial fixings (P0 — not a mark)' },
-  '/legs/0/put/strike': { label: 'Strike (× initial)' },
-  '/legs/0/put/knockInBarrier': { label: 'Knock-in barrier (× initial)' },
-  '/legs/0/put/knockOutBarrier': { label: 'Autocall / KO barrier (× initial)' },
-  '/legs/0/put/couponBarrier': { label: 'Coupon barrier (× initial)' },
-  '/legs/0/put/couponRate': { label: 'Coupon / period (return)' },
-  '/legs/0/put/couponPeriods': { label: 'Coupon periods' },
-  '/legs/0/put/memoryCoupon': { label: 'Memory coupon' },
-  '/legs/0/put/fixedFirstCoupon': { label: 'Fixed first coupon' },
-  '/legs/0/put/maturityYears': { label: 'Maturity (years)' },
-  '/legs/0/put/steps': { label: 'Observation steps' },
-  '/legs/0/put/callStartStep': { label: 'Call start step' },
-  '/legs/0/put/knockInType': { label: 'Knock-in type', readOnly: true },
-  '/legs/0/put/knockOutKind': { label: 'Knock-out kind', readOnly: true },
-  '/market/asOf': { label: 'As-of (ISO)' },
-  '/market/spots': { label: 'Spots (current marks)' },
-  '/market/vols': { label: 'Flat ATM vols' },
-  '/market/dividendYields': { label: 'Dividend yields' },
-  '/simulation/paths': { label: 'Paths' },
-  '/simulation/pathBlockSize': { label: 'Path block size' },
-  '/simulation/seed': { label: 'Seed' },
-  '/source/adapter': { label: 'Adapter', readOnly: true },
-  '/source/fileName': { label: 'Source file', readOnly: true },
-}
+/** Whole-document editor (trade tile). */
+export const INSTRUMENT_FORM_SECTIONS: TabularSection[] = [
+  {
+    title: 'Identity',
+    fields: [
+      { path: '/meta/name', label: 'Trade name' },
+      { path: '/meta/template', label: 'Template', readOnly: true },
+      { path: '/meta/product', label: 'Product', readOnly: true },
+      { path: '/meta/currency', label: 'Currency', renderer: 'currency-code' },
+      { path: '/meta/notional', label: 'Notional', renderer: 'money-input' },
+      { path: '/meta/multiplier', label: 'Multiplier' },
+      { path: '/meta/systemDate', label: 'System date', renderer: 'date-input' },
+      { path: '/meta/expiryDate', label: 'Expiry', renderer: 'date-input' },
+    ],
+  },
+  {
+    title: 'Put leg',
+    fields: [
+      { path: '/legs/0/put/strike', label: 'Strike (× initial)' },
+      { path: '/legs/0/put/knockInBarrier', label: 'Knock-in barrier (× initial)' },
+      { path: '/legs/0/put/knockOutBarrier', label: 'Autocall / KO barrier (× initial)' },
+      { path: '/legs/0/put/couponBarrier', label: 'Coupon barrier (× initial)' },
+      { path: '/legs/0/put/couponRate', label: 'Coupon / period (return)' },
+      { path: '/legs/0/put/couponPeriods', label: 'Coupon periods' },
+      { path: '/legs/0/put/memoryCoupon', label: 'Memory coupon', renderer: 'switch' },
+      { path: '/legs/0/put/fixedFirstCoupon', label: 'Fixed first coupon', renderer: 'switch' },
+      { path: '/legs/0/put/maturityYears', label: 'Maturity (years)' },
+      { path: '/legs/0/put/steps', label: 'Observation steps' },
+      { path: '/legs/0/put/callStartStep', label: 'Call start step' },
+      { path: '/legs/0/put/knockInType', label: 'Knock-in type', readOnly: true },
+      { path: '/legs/0/put/knockOutKind', label: 'Knock-out kind', readOnly: true },
+      { path: '/legs/0/put/initialSpots/0', label: 'Initial fixing 1 (P0)' },
+      { path: '/legs/0/put/initialSpots/1', label: 'Initial fixing 2 (P0)' },
+    ],
+  },
+  {
+    title: 'Market',
+    fields: [
+      { path: '/market/asOf', label: 'As-of (ISO)' },
+      { path: '/market/symbols/0', label: 'Symbol 1' },
+      { path: '/market/symbols/1', label: 'Symbol 2' },
+      { path: '/market/spots/0', label: 'Spot 1 (mark)' },
+      { path: '/market/spots/1', label: 'Spot 2 (mark)' },
+      { path: '/market/vols/0', label: 'ATM vol 1' },
+      { path: '/market/vols/1', label: 'ATM vol 2' },
+      { path: '/market/dividendYields/0', label: 'Dividend yield 1' },
+      { path: '/market/dividendYields/1', label: 'Dividend yield 2' },
+      { path: '/market/correlation/0/1', label: 'Correlation' },
+      { path: '/market/riskFreeRate', label: 'Risk-free rate', readOnly: true },
+    ],
+  },
+  {
+    title: 'Simulation',
+    fields: [
+      { path: '/simulation/paths', label: 'Paths' },
+      { path: '/simulation/pathBlockSize', label: 'Path block size' },
+      { path: '/simulation/seed', label: 'Seed' },
+      { path: '/simulation/traceLevel', label: 'Trace level' },
+    ],
+  },
+]
 
-/** Curated layout for the market lane of the market tile (no `raw`). */
-export const INSTRUMENT_MARKET_LAYOUT: DeepFormLayout = {
-  title: 'Market',
-  children: [
-    {
-      kind: 'group',
-      title: 'Snapshot',
-      path: '/market',
-      children: [
-        { kind: 'field', path: '/market/asOf' },
-        { kind: 'field', path: '/market/symbols' },
-        { kind: 'field', path: '/market/initialFixings' },
-        { kind: 'field', path: '/market/spots' },
-        { kind: 'field', path: '/market/vols' },
-        { kind: 'field', path: '/market/dividendYields' },
-        { kind: 'field', path: '/market/correlation' },
-      ],
-    },
-  ],
-}
-
-export const INSTRUMENT_LAYOUT: DeepFormLayout = {
-  title: 'Instrument',
-  children: [
-    {
-      kind: 'group',
-      title: 'Identity',
-      path: '/meta',
-      children: [
-        { kind: 'field', path: '/meta/name' },
-        { kind: 'field', path: '/meta/template' },
-        { kind: 'field', path: '/meta/currency' },
-        { kind: 'field', path: '/meta/notional' },
-        { kind: 'field', path: '/meta/multiplier' },
-      ],
-    },
-    {
-      kind: 'group',
-      title: 'Put leg',
-      path: '/legs/0/put',
-      children: [
-        { kind: 'field', path: '/legs/0/put/strike' },
-        { kind: 'field', path: '/legs/0/put/knockInBarrier' },
-        { kind: 'field', path: '/legs/0/put/knockOutBarrier' },
-        { kind: 'field', path: '/legs/0/put/couponBarrier' },
-        { kind: 'field', path: '/legs/0/put/couponRate' },
-        { kind: 'field', path: '/legs/0/put/couponPeriods' },
-        { kind: 'field', path: '/legs/0/put/memoryCoupon' },
-        { kind: 'field', path: '/legs/0/put/fixedFirstCoupon' },
-        { kind: 'field', path: '/legs/0/put/initialSpots' },
-        { kind: 'field', path: '/legs/0/put/maturityYears' },
-        { kind: 'field', path: '/legs/0/put/steps' },
-        { kind: 'field', path: '/legs/0/put/callStartStep' },
-      ],
-    },
-    {
-      kind: 'group',
-      title: 'Market',
-      path: '/market',
-      children: [
-        { kind: 'field', path: '/market/asOf' },
-        { kind: 'field', path: '/market/spots' },
-        { kind: 'field', path: '/market/vols' },
-        { kind: 'field', path: '/market/dividendYields' },
-      ],
-    },
-    {
-      kind: 'group',
-      title: 'Simulation',
-      path: '/simulation',
-      children: [
-        { kind: 'field', path: '/simulation/paths' },
-        { kind: 'field', path: '/simulation/pathBlockSize' },
-        { kind: 'field', path: '/simulation/seed' },
-      ],
-    },
-    {
-      kind: 'group',
-      title: 'Provenance',
-      path: '/source',
-      collapsible: true,
-      defaultExpanded: false,
-      children: [
-        { kind: 'field', path: '/source/adapter' },
-        { kind: 'field', path: '/source/fileName' },
-      ],
-    },
-  ],
-}
+/** Market-only editor (market tile, document lane). */
+export const MARKET_FORM_SECTIONS: TabularSection[] = [
+  {
+    title: 'Snapshot',
+    fields: [
+      { path: '/market/asOf', label: 'As-of (ISO)' },
+      { path: '/market/symbols/0', label: 'Symbol 1' },
+      { path: '/market/symbols/1', label: 'Symbol 2' },
+      { path: '/market/initialFixings/0', label: 'Initial fixing 1 (P0)' },
+      { path: '/market/initialFixings/1', label: 'Initial fixing 2 (P0)' },
+      { path: '/market/spots/0', label: 'Spot 1 (mark)' },
+      { path: '/market/spots/1', label: 'Spot 2 (mark)' },
+      { path: '/market/vols/0', label: 'ATM vol 1' },
+      { path: '/market/vols/1', label: 'ATM vol 2' },
+      { path: '/market/dividendYields/0', label: 'Dividend yield 1' },
+      { path: '/market/dividendYields/1', label: 'Dividend yield 2' },
+      { path: '/market/correlation/0/1', label: 'Correlation' },
+    ],
+  },
+]

@@ -78,7 +78,7 @@
   --popover: var(--theme-panel);
   --popover-foreground: var(--theme-text);
   --primary: var(--theme-primary);
-  --primary-foreground: #ffffff;
+  --primary-foreground: var(--theme-background);
   --secondary: var(--theme-grid);
   --secondary-foreground: var(--theme-text);
   --muted: var(--theme-grid);
@@ -86,7 +86,7 @@
   --accent: var(--theme-grid);
   --accent-foreground: var(--theme-text);
   --destructive: var(--theme-danger);
-  --destructive-foreground: #ffffff;
+  --destructive-foreground: oklch(0.985 0 0);
   --border: var(--theme-border);
   --input: var(--theme-border);
   --ring: var(--theme-primary);
@@ -98,7 +98,7 @@
   --sidebar: var(--theme-panel);
   --sidebar-foreground: var(--theme-text);
   --sidebar-primary: var(--theme-primary);
-  --sidebar-primary-foreground: #ffffff;
+  --sidebar-primary-foreground: var(--theme-background);
   --sidebar-accent: var(--theme-grid);
   --sidebar-accent-foreground: var(--theme-text);
   --sidebar-border: var(--theme-border);
@@ -111,7 +111,40 @@
     @apply border-border;
   }
 }
-:root { --theme-background: #0f172a; --theme-panel: #111827; --theme-border: #374151; --theme-text: #f8fafc; --theme-muted: #94a3b8; --theme-primary: #3b82f6; --theme-success: #22c55e; --theme-danger: #ef4444; --theme-warning: #f59e0b; --theme-grid: #1e293b; }
+
+/* finap's tabular form grid: 1 column, then 6 at >=400px, then 12 at >=1281px,
+   measured against the form container (`.fina-form-container`). Each cell is a
+   bordered Field | Value block and the last cell fills the row. */
+.fina-form-container {
+  container-type: inline-size;
+  container-name: fina-form;
+}
+.fina-form-grid {
+  display: grid;
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+}
+.fina-form-fill-right {
+  grid-column: span var(--fina-form-small-span, 1);
+}
+
+@container fina-form (min-width: 400px) {
+  .fina-form-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+  .fina-form-fill-right {
+    grid-column: span var(--fina-form-medium-span, 6);
+  }
+}
+
+@container fina-form (min-width: 1281px) {
+  .fina-form-grid {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+  }
+  .fina-form-fill-right {
+    grid-column: span var(--fina-form-large-span, 12);
+  }
+}
+:root { --theme-background: oklch(0.145 0 0); --theme-panel: oklch(0.205 0 0); --theme-border: oklch(1 0 0 / 12%); --theme-text: oklch(0.985 0 0); --theme-muted: oklch(0.708 0 0); --theme-primary: oklch(0.922 0 0); --theme-success: oklch(0.696 0.17 162); --theme-danger: oklch(0.704 0.191 22.216); --theme-warning: oklch(0.769 0.188 70); --theme-grid: oklch(0.269 0 0); --theme-chartMuted: oklch(0.556 0 0); }
 @layer base { * { box-sizing: border-box; } html, body, #root { height: 100%; margin: 0; overflow: hidden; } body { background: var(--theme-background); color: var(--theme-text); font-family: var(--font-sans); transition: background .2s, color .2s; } button, input, select { font: inherit; } ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-track { background: var(--theme-background); } ::-webkit-scrollbar-thumb { background: var(--theme-border); border-radius: 5px; } }
 .text-main { color: var(--theme-text); } .text-muted { color: var(--theme-muted); } .bg-bg { background: var(--theme-background); } .bg-panel { background: var(--theme-panel); } .border-line { border-color: var(--theme-border); } .bg-surface { background: color-mix(in srgb, var(--theme-background) 72%, var(--theme-panel)); }
 .fina-root .eyebrow { color: var(--theme-muted); font-size: 9px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; } .fina-root .brand-mark { display:flex; height:30px; width:30px; align-items:center; justify-content:center; border-radius:8px; background: color-mix(in srgb, var(--theme-primary) 18%, transparent); color: var(--theme-primary); } .fina-root .status-dot { height:6px; width:6px; border-radius:999px; background: var(--theme-success); box-shadow: 0 0 8px var(--theme-success); }

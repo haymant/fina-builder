@@ -104,4 +104,11 @@ describe('useInstrumentStore', () => {
 
     expect(useRigaMarketStore.getState().market.spots).toEqual([1, 2])
   })
+
+  it('patch sets a JSON pointer and syncs the flat trade', () => {
+    useInstrumentStore.getState().importText(read('termsheet1.json'), 'termsheet1.json')
+    useInstrumentStore.getState().patch('/legs/0/put/strike', 0.6)
+    expect(useInstrumentStore.getState().document.legs[0].put?.strike).toBe(0.6)
+    expect(useRigaTradeStore.getState().trade.strike).toBe(0.6)
+  })
 })

@@ -32,10 +32,13 @@ describe('RigaTradeEconomicsPanel', () => {
     expect(screen.getAllByText('price_trade').length).toBeGreaterThan(0)
   })
 
-  it('shows the field labels from the instrument layout', () => {
+  it('renders the instrument fields as a tabular grid', () => {
     render(<RigaTradeEconomicsPanel />)
     expect(screen.getByText('Strike (× initial)')).toBeTruthy()
-    expect(screen.getByText('Initial fixings (P0 — not a mark)')).toBeTruthy()
+    expect(screen.getByText('Initial fixing 1 (P0)')).toBeTruthy()
+    // finap's `.fina-form-grid` layout, one bordered cell per field.
+    expect(document.querySelector('.fina-form-grid')).toBeTruthy()
+    expect(document.querySelector('[data-tabular-path="/legs/0/put/strike"]')).toBeTruthy()
   })
 
   it('imports pasted JSON through the store', async () => {

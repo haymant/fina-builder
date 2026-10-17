@@ -124,6 +124,19 @@ function normalise(next: InstrumentDocument, prev: InstrumentDocument): Instrume
   return { ...doc, issues: validateDocument(doc) }
 }
 
+/** Immutably set a JSON pointer on a document (array indices are numeric keys). */
+function setAtPointer<T>(root: T, pointer: string, next: unknown): T {
+  const keys = pointer.split('/').filter(Boolean)
+  if (keys.length === 0) return next as T
+  const clone = structuredClone(root) as unknown as Record<string, unknown>
+  let node: Record<string, unknown> = clone
+  for (let i = 0; i < keys.length - 1; i++) {
+    node = node[keys[i]] as Record<string, unknown>
+  }
+  node[keys[keys.length - 1]] = next
+  return clone as unknown as T
+}
+
 function pushFlat(document: InstrumentDocument, marketSource: MarketSource) {
   try {
     useRigaTradeStore.setState({ trade: tradeFromDocument(document) })
@@ -150,6 +163,7 @@ interface InstrumentState {
   importMarketText: (text: string, fileName?: string | null) => ParseResult
   applyDocument: (next: InstrumentDocument) => void
   applyMarket: (next: InstrumentDocument['market']) => void
+  patch: (pointer: string, next: unknown) => void
   setMarketSource: (source: MarketSource) => void
   updateSimulation: (patch: Partial<InstrumentSimulation>) => void
   reset: () => void
@@ -198,6 +212,13 @@ export const useInstrumentStore = create<InstrumentState>((set, get) => ({
 
   applyMarket: (next) => {
     const document = normalise({ ...get().document, market: next }, get().document)
+    set({ document })
+    persist(document)
+    pushFlat(document, get().marketSource)
+  },
+
+  patch: (pointer, next) => {
+    const document = normalise(setAtPointer(get().document, pointer, next), get().document)
     set({ document })
     persist(document)
     pushFlat(document, get().marketSource)
