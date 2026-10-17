@@ -34,52 +34,41 @@ function inferRenderer(value: unknown): keyof typeof builtInRenderers {
   return 'text-input'
 }
 
-/** Last visible cell of a row spans the remaining 6/12 columns. */
-function fillSpan(index: number, size: number): Record<string, number> {
-  const medium = size - (index % 6)
-  const large = size - (index % 12)
-  return {
-    '--fina-form-small-span': 1,
-    '--fina-form-medium-span': medium <= 0 ? 6 : medium,
-    '--fina-form-large-span': large <= 0 ? 12 : large,
-  }
+/** `raw` blocks are verbatim source provenance — shown, never edited. */
+function isRawPath(path: string): boolean {
+  return path.split('/').includes('raw')
 }
 
 function Cell({
   path,
   label,
   value,
-  last,
-  size,
   onChange,
 }: {
   path: string
   label: string
   value: unknown
-  last: boolean
-  size: number
   onChange: (pointer: string, next: unknown) => void
 }) {
   const id = useId()
-  const Renderer = builtInRenderers[inferRenderer(value)] ?? builtInRenderers['text-input']!
+  const readOnly = isRawPath(path)
+  const Renderer = readOnly
+    ? builtInRenderers['readonly']!
+    : (builtInRenderers[inferRenderer(value)] ?? builtInRenderers['text-input']!)
   const props: DeepFormRendererProps = {
     id,
     path,
     segments: path.split('/').filter(Boolean),
     value,
     label,
-    readOnly: false,
+    readOnly,
     invalid: false,
     onChange: (next) => onChange(path, next),
   }
   return (
     <div
       data-tabular-path={path}
-      style={last ? fillSpan(size - 1, size) : undefined}
-      className={cn(
-        'min-w-0 border-border/70 border-r border-b px-3 py-2 align-top',
-        last && 'fina-form-fill-right',
-      )}
+      className="min-w-0 border-border/70 border-r border-b px-3 py-2 align-top"
     >
       <label htmlFor={id} className="block text-[10px] font-medium text-muted-foreground">
         {label}
@@ -102,26 +91,20 @@ function Grid({
   labels?: TabularLabels
   onChange: (pointer: string, next: unknown) => void
 }) {
-  // Each grid is its own container so the 1/6/12-column rule responds to THIS
-  // block's width — a deep, narrow card must not inherit the root's 12 columns.
   return (
-    <div className="fina-form-container">
-      <div className="fina-form-grid overflow-hidden rounded-lg border border-border">
-        {entries.map(([key, value], index) => {
-          const path = `${basePath}/${key}`
-          return (
-            <Cell
-              key={key}
-              path={path}
-              label={labels?.[path] ?? humanizeKey(key)}
-              value={value}
-              last={index === entries.length - 1}
-              size={entries.length}
-              onChange={onChange}
-            />
-          )
-        })}
-      </div>
+    <div className="fina-form-grid overflow-hidden rounded-lg border border-border">
+      {entries.map(([key, value]) => {
+        const path = `${basePath}/${key}`
+        return (
+          <Cell
+            key={key}
+            path={path}
+            label={labels?.[path] ?? humanizeKey(key)}
+            value={value}
+            onChange={onChange}
+          />
+        )
+      })}
     </div>
   )
 }
@@ -310,7 +293,7 @@ export function TabularForm({
   className?: string
 }) {
   return (
-    <div className={cn('fina-form-container w-full', className)}>
+    <div className={cn('w-full', className)}>
       <ObjectBlock
         path={pathPrefix}
         value={value}

@@ -56,17 +56,6 @@ describe('TabularForm heuristic', () => {
     expect(container.querySelector('[data-tabular-path="/nested/child"]')).toBeTruthy()
   })
 
-  it('wraps every grid in its own container so deep cards size to their own width', () => {
-    const { container } = render(
-      <TabularForm value={{ a: 1, nested: { b: 2, deep: { c: 3 } } }} onChange={() => {}} />,
-    )
-    const grids = Array.from(container.querySelectorAll('.fina-form-grid'))
-    expect(grids.length).toBeGreaterThan(1)
-    for (const grid of grids) {
-      expect(grid.parentElement?.classList.contains('fina-form-container')).toBe(true)
-    }
-  })
-
   it('keeps primitives of a mixed array as cells and containers as cards', () => {
     const { container } = render(
       <TabularForm value={{ mixed: [1, { obj: 2 }, 'three'] }} onChange={() => {}} />,
@@ -76,6 +65,19 @@ describe('TabularForm heuristic', () => {
     expect(container.querySelector('[data-tabular-path="/mixed/2"]')).toBeTruthy()
     // the object entry is a card, not a cell
     expect(container.querySelector('[data-tabular-path="/mixed/1"]')).toBeNull()
+  })
+
+  it('renders raw (verbatim source) fields read-only', () => {
+    const onChange = vi.fn()
+    const { container } = render(
+      <TabularForm value={{ rails: { raw: { PRKI2: -1, KIBarrier: 0.7 } } }} onChange={onChange} />,
+    )
+    // `raw` is collapsed by default; expand it to inspect.
+    fireEvent.click(screen.getByRole('button', { name: /Raw/ }))
+    const cell = container.querySelector('[data-tabular-path="/rails/raw/PRKI2"]')
+    expect(cell).toBeTruthy()
+    // read-only: rendered as text, not an editable input
+    expect(cell?.querySelector('input')).toBeNull()
   })
 
   it('reports edits as (pointer, value)', () => {

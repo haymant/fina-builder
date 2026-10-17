@@ -112,37 +112,12 @@
   }
 }
 
-/* finap's tabular form grid: 1 column, then 6 at >=400px, then 12 at >=1281px,
-   measured against the form container (`.fina-form-container`). Each cell is a
-   bordered Field | Value block and the last cell fills the row. */
-.fina-form-container {
-  container-type: inline-size;
-  container-name: fina-form;
-}
+/* Tabular form grid: columns are content-sized (`auto-fill` + a minimum cell
+   width) so an object with many fields wraps into readable rows instead of
+   squeezing into a fixed 12 columns. */
 .fina-form-grid {
   display: grid;
-  grid-template-columns: repeat(1, minmax(0, 1fr));
-}
-.fina-form-fill-right {
-  grid-column: span var(--fina-form-small-span, 1);
-}
-
-@container fina-form (min-width: 400px) {
-  .fina-form-grid {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
-  .fina-form-fill-right {
-    grid-column: span var(--fina-form-medium-span, 6);
-  }
-}
-
-@container fina-form (min-width: 1281px) {
-  .fina-form-grid {
-    grid-template-columns: repeat(12, minmax(0, 1fr));
-  }
-  .fina-form-fill-right {
-    grid-column: span var(--fina-form-large-span, 12);
-  }
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
 }
 :root { --theme-background: oklch(0.145 0 0); --theme-panel: oklch(0.205 0 0); --theme-border: oklch(1 0 0 / 12%); --theme-text: oklch(0.985 0 0); --theme-muted: oklch(0.708 0 0); --theme-primary: oklch(0.922 0 0); --theme-success: oklch(0.696 0.17 162); --theme-danger: oklch(0.704 0.191 22.216); --theme-warning: oklch(0.769 0.188 70); --theme-grid: oklch(0.269 0 0); --theme-chartMuted: oklch(0.556 0 0); }
 @layer base { * { box-sizing: border-box; } html, body, #root { height: 100%; margin: 0; overflow: hidden; } body { background: var(--theme-background); color: var(--theme-text); font-family: var(--font-sans); transition: background .2s, color .2s; } button, input, select { font: inherit; } ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-track { background: var(--theme-background); } ::-webkit-scrollbar-thumb { background: var(--theme-border); border-radius: 5px; } }
