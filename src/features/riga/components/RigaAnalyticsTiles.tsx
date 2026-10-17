@@ -18,6 +18,7 @@ import {
   useRigaMcDiagnostics,
   useRigaPathCube,
   useRigaPlExplain,
+  useRigaRiskNet,
   useRigaRootCause,
   useRigaScenario,
   useRigaStressBands,
@@ -198,12 +199,11 @@ export const RigaStatisticsSummaryTile = memo(function RigaStatisticsSummaryTile
               { key: 'probability', label: 'Prob', render: (row) => pct(row.probability) },
               { key: 'meanPayoff', label: 'Mean payoff', render: (row) => num(row.meanPayoff) },
               { key: 'variancePayoff', label: 'Variance', render: (row) => num(row.variancePayoff) },
-              { key: 'meanDelta', label: 'Δ', render: (row) => num(row.meanDelta) },
-              { key: 'meanVega', label: 'ν', render: (row) => num(row.meanVega) },
             ]}
             rows={branch.data ?? []}
             empty="No transition stats"
           />
+          <p className="mt-1 text-[10px] text-muted">Per-transition Δ/ν: see the Leg Attribution or Risk Net tile.</p>
         </div>
         <div>
           <p className="eyebrow mb-1">Worst-final deciles</p>
@@ -637,9 +637,12 @@ export const RigaExecutionTapeTile = memo(function RigaExecutionTapeTile() {
   )
 })
 
-/** PV by leg + PV/Δ/ν by transition (`explain_pv_attribution`). */
+/** PV by leg + PV/Δ/ν by transition (`explain_pv_attribution` + `query_risk_net`). */
 export const RigaAttributionTile = memo(function RigaAttributionTile() {
   const state = useRigaAttribution()
+  // Per-transition Δ/ν is only produced by the risk batch (the ledger's own
+  // delta/vega impacts are zero in the engine), so overlay `query_risk_net`.
+  const risk = useRigaRiskNet()
   return (
     <RigaPanel
       title="Leg Attribution"
@@ -680,19 +683,27 @@ export const RigaAttributionTile = memo(function RigaAttributionTile() {
               <DataTable
                 columns={[
                   { key: 'transitionId', label: 'Transition' },
-                  { key: 'inputCount', label: 'In' },
-                  { key: 'outputCount', label: 'Out' },
                   { key: 'probability', label: 'Prob', render: (row) => pct(row.probability) },
-                  { key: 'meanPayoff', label: 'PV impact', render: (row) => num(row.meanPayoff) },
-                  { key: 'meanDelta', label: 'Δ', render: (row) => num(row.meanDelta) },
-                  { key: 'meanVega', label: 'ν', render: (row) => num(row.meanVega) },
+                  { key: 'pvImpact', label: 'PV impact', render: (row) => num(row.pvImpact) },
+                  { key: 'deltaImpact', label: 'Δ', render: (row) => num(row.deltaImpact) },
+                  { key: 'vegaImpact', label: 'ν', render: (row) => num(row.vegaImpact) },
                 ]}
-                rows={data.stats}
+                rows={(data.stats ?? []).map((stat) => {
+                  const entry = (risk.data?.transitions ?? []).find((t) => t.id === stat.transitionId)
+                  return {
+                    transitionId: stat.transitionId,
+                    probability: stat.probability,
+                    pvImpact: entry?.pvImpact ?? stat.meanPayoff,
+                    deltaImpact: entry?.deltaImpact ?? stat.meanDelta,
+                    vegaImpact: entry?.vegaImpact ?? stat.meanVega,
+                  }
+                })}
                 empty="No transition stats"
               />
               <p className="mt-1 text-[10px] text-muted">
-                The engine reports sensitivities per transition, not per leg; the down-and-in put is
-                the vol-driven term.
+                Δ/ν are attributed per transition by the risk batch (`query_risk_net`); the
+                down-and-in put is the vol-driven term. The engine does not report per-leg
+                sensitivities.
               </p>
             </div>
           </div>

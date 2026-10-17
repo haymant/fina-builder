@@ -387,8 +387,6 @@ export const TransitionDetailTile = memo(function TransitionDetailTile() {
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Kpi label="Mean payoff" value={num((stat as { meanPayoff?: number }).meanPayoff)} />
             <Kpi label="Variance" value={num((stat as { variancePayoff?: number }).variancePayoff)} />
-            <Kpi label="Mean delta" value={num((stat as { meanDelta?: number }).meanDelta)} />
-            <Kpi label="Mean vega" value={num((stat as { meanVega?: number }).meanVega)} />
           </div>
         ) : null}
         <div>

@@ -5,7 +5,7 @@
     "name": "riga-mcp",
     "version": "0.1.0"
   },
-  "recordedAt": "2026-10-15T21:06:24.875Z",
+  "recordedAt": "2026-10-17T14:00:41.597Z",
   "tools": {
     "generate_paths": {
       "checksum": 13424780670936460000,
@@ -783,7 +783,7 @@
         ],
         "correlation_sensitivity": 0.00634053512862387,
         "dv01": -0.24440917914314575,
-        "frozen_at_unix": 1792098327,
+        "frozen_at_unix": 1792245583,
         "pv": 1.000264636050433
       },
       "name": "default"
@@ -1493,7 +1493,7 @@
         "cpu_gbm": true,
         "gpu": false
       },
-      "git_sha": "08b15a9",
+      "git_sha": "1b0b5fb",
       "status": "ok",
       "version": "0.1.0"
     },
@@ -2034,22 +2034,22 @@
       ],
       "transitions": [
         {
-          "delta_impact": 0,
+          "delta_impact": 0.013067983232924858,
           "id": "daily_global_ko",
           "pv_impact": 0.5258710598279193,
-          "vega_impact": 0
+          "vega_impact": 0.599758315695037
         },
         {
-          "delta_impact": 0,
+          "delta_impact": 0.0006224514887630396,
           "id": "final_fixing_eki",
           "pv_impact": -0.0203289353821023,
-          "vega_impact": 0
+          "vega_impact": -0.11487122964730055
         },
         {
-          "delta_impact": 0,
+          "delta_impact": -0.0006642468107022965,
           "id": "memory_coupon",
           "pv_impact": 0.030501203236377818,
-          "vega_impact": 0
+          "vega_impact": -0.03309171939665373
         }
       ]
     },
@@ -2189,7 +2189,7 @@
             "transition_id": "memory_coupon"
           }
         ],
-        "frozen_at_unix": 1792098327
+        "frozen_at_unix": 1792245583
       },
       "engine_model": "dupire_local_vol_calibrated_cpu",
       "evidence_refs": [

@@ -46,7 +46,7 @@ Expected, per tile:
 | Tile | Tool | Expected |
 |---|---|---|
 | Trade Economics | `price_trade` | **PV rises**; engine model unchanged; seed unchanged |
-| Leg Attribution | `explain_pv_attribution` | **Down-and-in put PV rises**, **Total PV rises**, **KI probability rises** |
+| Leg Attribution | `explain_pv_attribution` + `query_risk_net` | **Down-and-in put PV rises**, **Total PV rises**, **KI probability rises**, per-transition Δ/ν change |
 | Statistics Summary | `get_branch_stats` `get_mc_diagnostics` `get_distributions` | PV, MC error, KI rate change together |
 | Risk Net | `query_risk_net` | per-transition signed risk changes |
 | Explain Net | `get_ledger` | ledger rows' PV impact changes |
@@ -83,9 +83,18 @@ underlying. Engine transition ids mapped to the drawn nodes:
 `memory_coupon`.
 
 **Where the numbers come from.** `query_risk_net` returns
-`transitions[] = { id, pv_impact, delta_impact, vega_impact }` (the put leg's
-Explain-Ledger entries) + `per_asset[] = { asset_index, delta, gamma, vega }`
-(central-FD risk batch) + `dv01` + `correlation_sensitivity`.
+`transitions[] = { id, pv_impact, delta_impact, vega_impact }` + `per_asset[] =
+{ asset_index, delta, gamma, vega }` (central-FD risk batch) + `dv01` +
+`correlation_sensitivity`.
+
+> **Δ/ν are attributed, not zero.** The engine's *ledger* entries hard-code
+> `delta_impact = vega_impact = 0`. `query_risk_net` now attributes per-transition
+> Δ/ν by differencing each transition's PV impact across the CRN spot/vol bump
+> pairs already priced for the per-asset Greeks (no extra valuation runs).
+> Baseline (recorded fixture): `daily_global_ko` Δ `+0.0131` · ν `+0.5998`;
+> `final_fixing_eki` (put) Δ `+0.00062` · ν `−0.1149`; `memory_coupon` Δ
+> `−0.00066` · ν `−0.0331`. If you see `0.0000` here, the tile is talking to a
+> stale `riga-mcp` binary — rebuild it (`cargo build --release -p riga-mcp`).
 
 **Procedure.** Baseline → set **Strike 0.78 → 0.60** (deeper ITM put) → wait for
 the re-run.
