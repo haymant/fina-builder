@@ -10,7 +10,7 @@ import { useInstrumentStore } from '../../../store/instrumentStore'
 import { useRigaSourceStore } from '../../../store/rigaSourceStore'
 import { useRigaTradePrice } from '../hooks'
 import { RIGA_TRADE_PRESETS } from '../../../store/rigaTradeStore'
-import { INSTRUMENT_FORM_SECTIONS } from '../instrument/ui'
+import { INSTRUMENT_LABELS } from '../instrument/ui'
 import { TabularForm } from '../instrument/tabular-form'
 import { PanelCard } from '../../shared/components/PanelCard'
 import { Kpi, num, Provenance } from './primitives'
@@ -130,10 +130,10 @@ export function RigaTradeEconomicsPanel() {
           ))}
         </div>
 
-        {/* The document, as a finap-style tabular form. */}
+        {/* The document, as a finap-style heuristic tabular form. */}
         <TabularForm
           value={document as unknown as Record<string, unknown>}
-          sections={INSTRUMENT_FORM_SECTIONS}
+          labels={INSTRUMENT_LABELS}
           onChange={patch}
         />
 

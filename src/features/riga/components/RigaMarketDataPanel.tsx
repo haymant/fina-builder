@@ -13,7 +13,7 @@ import { useObservabilityStore } from '../../../store/observabilityStore'
 import { composeRigaRequest } from '../../../store/rigaRequestStore'
 import { applyManipulations, clampCorrelation, volSurfaceWarnings } from '../../tac/manipulations'
 import { effectiveRigaMarket, localVolGridsFromTac } from '../../tac/mapping'
-import { MARKET_FORM_SECTIONS } from '../instrument/ui'
+import { INSTRUMENT_LABELS } from '../instrument/ui'
 import { TabularForm } from '../instrument/tabular-form'
 import { MARKET_DATA_TYPES } from '../marketDataTypes'
 import { PanelCard } from '../../shared/components/PanelCard'
@@ -132,8 +132,9 @@ export function RigaMarketDataPanel() {
               <p className="rounded border border-border bg-surface px-2 py-1 text-[10px] text-muted" role="status">{message}</p>
             )}
             <TabularForm
-              value={document as unknown as Record<string, unknown>}
-              sections={MARKET_FORM_SECTIONS}
+              value={document.market as unknown as Record<string, unknown>}
+              pathPrefix="/market"
+              labels={INSTRUMENT_LABELS}
               onChange={patch}
             />
           </>

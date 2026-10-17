@@ -41,6 +41,22 @@ describe('RigaTradeEconomicsPanel', () => {
     expect(document.querySelector('[data-tabular-path="/legs/0/put/strike"]')).toBeTruthy()
   })
 
+  it('renders nested objects as collapsible cards, never as cells', () => {
+    render(<RigaTradeEconomicsPanel />)
+    expect(screen.getByRole('button', { name: /Put leg/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Phoenix rails/ })).toBeTruthy()
+    for (const pointer of ['/legs', '/legs/0', '/market', '/source', '/issues', '/unmapped']) {
+      expect(document.querySelector(`[data-tabular-path="${pointer}"]`)).toBeNull()
+    }
+  })
+
+  it('collapses a section from its header', () => {
+    render(<RigaTradeEconomicsPanel />)
+    expect(document.querySelector('[data-tabular-path="/market/asOf"]')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /^Market/ }))
+    expect(document.querySelector('[data-tabular-path="/market/asOf"]')).toBeNull()
+  })
+
   it('imports pasted JSON through the store', async () => {
     render(<RigaTradeEconomicsPanel />)
     fireEvent.click(screen.getByText('Paste'))
