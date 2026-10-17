@@ -56,7 +56,7 @@ Each tile footer names the tool and the run/snapshot id. The **Data Lineage** ti
 \`freeze_baseline\` → \`compare_corpus\` → \`triage_regression\`; \`root_cause\` renders the RCA finding and change log; \`export_governance_evidence\` lists assumptions, limitations and sampled paths.
 
 ## Related Dashboards
-[[Market Data Workbench (tac-engine)]]`, tileTypes: ['RigaHealthRun','RigaTradeEconomics','RigaMarketData','RigaPayoffPetriNet','RigaTransitionDetail','RigaTokenDetail','RigaRiskNet','RigaExplainNet','RigaDataLineage','RigaStatisticsSummary','RigaTaylorExplain','RigaPlvaExplain','RigaScenarioComparison','RigaBookRisk','RigaRegressionTriage','RigaRootCause','RigaGovernanceEvidence','RigaPathCubeQuery','RigaExecutionTape'] },
+[[Market Data Workbench (tac-engine)]]`, tileTypes: ['RigaHealthRun','RigaTradeEconomics','RigaMarketData','RigaPayoffPetriNet','RigaTransitionDetail','RigaTokenDetail','RigaRiskNet','RigaExplainNet','RigaDataLineage','RigaStatisticsSummary','RigaTaylorExplain','RigaScenarioComparison','RigaBookRisk','RigaRegressionTriage','RigaRootCause','RigaGovernanceEvidence','RigaPathCubeQuery','RigaExecutionTape'] },
  { id: 'tac-market-data', name: 'Market Data Workbench (tac-engine)', description: 'Fetch market data from tac-engine (tac-lake/Alpaca), manipulate it, and feed the priced trade.', targetRoles: ['Desk Quant', 'Trader', 'Market Risk'], usageMarkdown: `# Market Data Workbench (tac-engine)
 
 ## Purpose
