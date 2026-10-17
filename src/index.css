@@ -9,7 +9,108 @@
 @import 'react-grid-layout/css/styles.css';
 @import 'react-resizable/css/styles.css';
 
-@theme { --color-bg: var(--theme-background); --color-panel: var(--theme-panel); --color-primary: var(--theme-primary); --color-success: var(--theme-success); --color-danger: var(--theme-danger); --color-warning: var(--theme-warning); --color-muted: var(--theme-muted); --font-sans: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif; --font-mono: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, monospace; }
+/* Token layer shared with the vendored shadcn component kit (`src/components/`).
+   fina-builder's chrome uses `--theme-*` (set per light/dark by ThemeProvider);
+   the kit uses the shadcn names (`bg-background`, `text-foreground`,
+   `border-border`, `text-muted-foreground`, …). Deriving the shadcn tokens from
+   `--theme-*` gives ONE source of truth, so the kit is legible in both themes —
+   the same token layer finap's `globals.css` defines. */
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  /* fina-builder chrome tokens */
+  --color-bg: var(--theme-background);
+  --color-panel: var(--theme-panel);
+  --color-success: var(--theme-success);
+  --color-danger: var(--theme-danger);
+  --color-warning: var(--theme-warning);
+  /* shadcn token names */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* shadcn token values derived from the app's `--theme-*` variables. Because
+   `--theme-*` are set on `<html>` for both `html.light` and `html.dark`
+   (ThemeProvider), these resolve correctly in either theme with no `.dark`
+   block of our own. */
+:root {
+  --radius: 0.5rem;
+  --background: var(--theme-background);
+  --foreground: var(--theme-text);
+  --card: var(--theme-panel);
+  --card-foreground: var(--theme-text);
+  --popover: var(--theme-panel);
+  --popover-foreground: var(--theme-text);
+  --primary: var(--theme-primary);
+  --primary-foreground: #ffffff;
+  --secondary: var(--theme-grid);
+  --secondary-foreground: var(--theme-text);
+  --muted: var(--theme-grid);
+  --muted-foreground: var(--theme-muted);
+  --accent: var(--theme-grid);
+  --accent-foreground: var(--theme-text);
+  --destructive: var(--theme-danger);
+  --destructive-foreground: #ffffff;
+  --border: var(--theme-border);
+  --input: var(--theme-border);
+  --ring: var(--theme-primary);
+  --chart-1: var(--theme-primary);
+  --chart-2: var(--theme-success);
+  --chart-3: var(--theme-warning);
+  --chart-4: var(--theme-danger);
+  --chart-5: var(--theme-chartMuted);
+  --sidebar: var(--theme-panel);
+  --sidebar-foreground: var(--theme-text);
+  --sidebar-primary: var(--theme-primary);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: var(--theme-grid);
+  --sidebar-accent-foreground: var(--theme-text);
+  --sidebar-border: var(--theme-border);
+  --sidebar-ring: var(--theme-primary);
+}
+
+@layer base {
+  /* Default border colour the kit's `border` utilities expect (shadcn). */
+  * {
+    @apply border-border;
+  }
+}
 :root { --theme-background: #0f172a; --theme-panel: #111827; --theme-border: #374151; --theme-text: #f8fafc; --theme-muted: #94a3b8; --theme-primary: #3b82f6; --theme-success: #22c55e; --theme-danger: #ef4444; --theme-warning: #f59e0b; --theme-grid: #1e293b; }
 @layer base { * { box-sizing: border-box; } html, body, #root { height: 100%; margin: 0; overflow: hidden; } body { background: var(--theme-background); color: var(--theme-text); font-family: var(--font-sans); transition: background .2s, color .2s; } button, input, select { font: inherit; } ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-track { background: var(--theme-background); } ::-webkit-scrollbar-thumb { background: var(--theme-border); border-radius: 5px; } }
 .text-main { color: var(--theme-text); } .text-muted { color: var(--theme-muted); } .bg-bg { background: var(--theme-background); } .bg-panel { background: var(--theme-panel); } .border-line { border-color: var(--theme-border); } .bg-surface { background: color-mix(in srgb, var(--theme-background) 72%, var(--theme-panel)); }
