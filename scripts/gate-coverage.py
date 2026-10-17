@@ -5,7 +5,6 @@
 Gates (line coverage):
   - fina-kernel:  >= 70%   (spec §6.1)
   - fina-server:  >= 85%   on non-main.rs sources (the lib is the adapter)
-  - fina-cli:     >= 80%   main.rs *is* the adapter (binary-only crate)
   - payoff-explorer (src-tauri): >= 75% on non-main sources (commands)
 
 Binary mains (`src/main.rs`) are excluded for server/tauri because they are a
@@ -23,7 +22,6 @@ from collections import defaultdict
 MIN = {
     "fina-kernel": 70.0,
     "fina-server": 85.0,
-    "fina-cli": 80.0,
     # `run()`/window glue in lib.rs is not unit-testable without a webview;
     # `src/commands/` (the adapters this crate is actually responsible for)
     # are at 100%.
@@ -33,7 +31,6 @@ MIN = {
 DIRS = {
     "fina-kernel": "crates/fina-kernel/",
     "fina-server": "crates/fina-server/",
-    "fina-cli": "crates/fina-cli/",
     "payoff-explorer": "src-tauri/",
 }
 # Files excluded from a crate's denominator, with the reason each one is out:

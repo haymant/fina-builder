@@ -6,12 +6,12 @@
 //   node scripts/set-version.mjs v0.1.1       # leading `v` is stripped
 //
 // Touched files:
-//   Cargo.toml              [workspace.package] version   (fina-cli, fina-server, fina-mcp)
+//   Cargo.toml              [workspace.package] version   (fina-server, fina-mcp)
 //   src-tauri/Cargo.toml    [package] version             (the Tauri crate is not in the workspace)
 //   src-tauri/tauri.conf.json version                     (bundles, `/health`, the Tauri binary)
 //
 // `cargo` also needs `Cargo.lock` refreshed when the version changes; run
-// `cargo check -p fina-cli` (or commit the lockfile update) after this script.
+// `cargo check -p fina-server` (or commit the lockfile update) after this script.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'

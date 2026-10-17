@@ -14,7 +14,7 @@
 
 | Part | Contents | Read it when |
 | --- | --- | --- |
-| **Part I — Feature inventory** (this part) | What the application does: the four surfaces, the twelve commands, the kernel modules, the 51-tile UI, the parity/CI/release machinery, and the known gaps. | You want to know what exists, or what to change next. |
+| **Part I — Feature inventory** (this part) | What the application does: the transport surfaces, the twelve commands, the kernel modules, the 51-tile UI, the parity/CI/release machinery, and the known gaps. | You want to know what exists, or what to change next. |
 | **Part II — Migration specification & record** | The normative spec that was executed Phase 0 → 6: architecture, invariants, per-phase tasks and exit criteria, testing strategy, pitfalls, and Appendices A–F recording deviations and verified golden values. | You need the reasoning, the exact formulas, or the history of a decision. |
 
 Part II is prescriptive ("must", "do not"); Part I is descriptive ("is", "does not").
@@ -93,6 +93,12 @@ The layering rule, stated once:
       └───────────────────┘       └───────────────────┘
 ```
 
+> **Transport status (docs/49).** The `crates/fina-cli` clap adapter was **retired** in
+> docs/49 §P1 — the headless CLI is no longer shipped, built or released. The twelve
+> commands remain available through Tauri IPC and `fina-server`, and via `fina-mcp` for
+> external MCP clients. `fina-server` and `fina-mcp` are scheduled for retirement in
+> docs/49 §P5, once every demo tile has a riga-flow counterpart.
+
 `fina-kernel` may depend on `serde`, `serde_json` and `thiserror` — nothing else. This is
 machine-enforced by `crates/fina-kernel/tests/dependency_hygiene.rs`, which also fails if the
 allowlist in that test drifts from the one in Part II §4.
@@ -148,7 +154,11 @@ path. `simulationStore.load()` does exactly that.
 > `@tauri-apps/api/core` → `tauriMock.ts` alias **only** under Vitest, and CI fails if the
 > mock's error string appears in `dist/`.
 
-### CLI mode (headless)
+### CLI mode (retired — docs/49 §P1)
+
+> **Retired.** The `fina-cli` binary is no longer built or shipped. The commands remain
+> available via Tauri IPC, `fina-server` and `fina-mcp`. The examples below are kept for
+> historical reference only.
 
 ```bash
 cargo run -p fina-cli -- generate-paths --seed 42 --paths 100 --out bundle.json
@@ -368,9 +378,9 @@ import/export.
 | --- | --- |
 | Kernel tests | 296 across unit tests and integration tests (`golden_parity`, `path_generator_semantics`, `tofixed_conformance`, `dependency_hygiene`). Exact float equality on purpose — an epsilon would hide a rounding or ordering regression. |
 | Frontend tests | 49 Vitest tests (jsdom + MSW + testing-library), including a transport-parity suite that asserts the Tauri and HTTP clients return identical payloads. No Playwright, by design. |
-| Coverage gates | `scripts/gate-coverage.py` enforces kernel ≥ 70%, server ≥ 85%, cli ≥ 80%, tauri ≥ 75% lines. |
+| Coverage gates | `scripts/gate-coverage.py` enforces kernel ≥ 70%, server ≥ 85%, tauri ≥ 75% lines. |
 | CI | `.github/workflows/ci.yml`: frontend, Rust core, adapters, coverage, dependency-hygiene — plus a guard that fails if a test mock reaches `dist/`. |
-| Releases | `.github/workflows/release.yml` builds desktop bundles (Linux x64, macOS x64/arm64, Windows x64) and `fina-cli` binaries (Linux gnu/musl/arm64, macOS x64/arm64, Windows x64) on a version tag and publishes one GitHub Release. See the README. |
+| Releases | `.github/workflows/release.yml` builds desktop bundles (Linux x64, macOS x64/arm64, Windows x64) on a version tag and publishes one GitHub Release. See the README. |
 | Versioning | `scripts/set-version.mjs` writes one version into `Cargo.toml`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`; CI re-derives it from the tag. |
 | Toolchain | `rust-toolchain.toml` pins one Rust version (1.99.0) for local development and every CI job; the workflows pin the same version and a guard step fails if the two drift, so a clippy or rustfmt release cannot turn CI red on its own. The MSRV (`rust-version = "1.77"`) is separate. |
 | Linux build deps | `scripts/ci/install-tauri-linux-deps.sh` is the single copy of the Tauri v2 prerequisite list, used by CI and runnable locally. |
@@ -431,7 +441,7 @@ Appendix F):
 | Parity fixture | `crates/fina-kernel/tests/fixtures/golden.json`, generator `scripts/generate-golden-fixture.ts` + snapshot `scripts/golden-src/` |
 | Desktop adapter | `src-tauri/src/lib.rs`, `src-tauri/src/commands/` |
 | HTTP adapter | `crates/fina-server/src/{lib,main}.rs`, `crates/fina-server/tests/parity.rs` |
-| CLI adapter | `crates/fina-cli/src/main.rs`, `crates/fina-cli/tests/cli.rs` |
+| CLI adapter | **retired** (docs/49 §P1) — was `crates/fina-cli/src/main.rs`, `crates/fina-cli/tests/cli.rs` |
 | MCP stdio server | `crates/fina-mcp/src/main.rs` |
 | Frontend transport | `src/api/{index,transport,tauriTransport,httpTransport,types}.ts` |
 | Frontend hooks | `src/hooks/index.ts` |

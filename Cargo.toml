@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/fina-kernel",
     "crates/fina-server",
-    "crates/fina-cli",
     "crates/fina-mcp",
     "src-tauri",
 ]
@@ -36,8 +35,8 @@ lto = "fat"
 opt-level = 3
 strip = "symbols"
 
-# Size-optimized profile for embedded/headless runner binaries.
-# Used with `cargo build --profile release-runner -p fina-cli -p fina-server`.
+# Size-optimized profile for headless runner binaries.
+# Used with `cargo build --profile release-runner -p fina-server`.
 [profile.release-runner]
 inherits = "release"
 opt-level = "z"

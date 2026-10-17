@@ -8,8 +8,7 @@
 #                       as "latest".
 #   2. desktop         — Tauri bundles per platform: Linux (AppImage/deb/rpm),
 #                       macOS (dmg, Intel + Apple Silicon), Windows (msi + setup.exe).
-#   3. cli             — `fina-cli` binaries, including a static musl build.
-#   4. release-publish — flips the draft to published. It needs 2 and 3 to be green,
+#   3. release-publish — flips the draft to published. It needs 2 to be green,
 #                       so a failed platform build can never ship a partial release.
 #
 # Signing: no secrets are required. If the APPLE_* / WINDOWS_* secrets below exist they
@@ -207,107 +206,9 @@ jobs:
           # the release does not mean the builds are lost.
           uploadWorkflowArtifacts: true
 
-  cli:
-    name: CLI ${{ matrix.target }}
-    needs: release-create
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    env:
-      VERSION: ${{ needs.release-create.outputs.version }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # `runnable` marks the targets the runner can actually execute, so the
-          # smoke test below is not attempted for a cross-built binary.
-          - { target: x86_64-unknown-linux-gnu, os: ubuntu-24.04, archive: raw, runnable: true }
-          - { target: x86_64-unknown-linux-musl, os: ubuntu-24.04, archive: raw, runnable: true }
-          # aarch64 is built on a NATIVE arm64 runner, not cross-compiled from
-          # x86_64: cross-linking makes rustc pass the aarch64-only
-          # `--fix-cortex-a53-843419` workaround flag to the host linker, which
-          # then refuses with "only supported on AArch64". Building natively also
-          # lets the smoke test below actually run this binary.
-          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm, archive: raw, runnable: true }
-          - { target: x86_64-apple-darwin, os: macos-15, archive: tar.gz, runnable: false }
-          # Native on the Apple Silicon runner, so unlike x86_64 this one runs.
-          - { target: aarch64-apple-darwin, os: macos-15, archive: tar.gz, runnable: true }
-          - { target: x86_64-pc-windows-msvc, os: windows-latest, archive: zip, runnable: true }
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TAG }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - uses: dtolnay/rust-toolchain@1.99.0
-        with:
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: . -> target
-          key: cli-${{ matrix.target }}
-      # No cross toolchain is installed for aarch64-linux: that job builds
-      # natively on an arm64 runner (see the matrix note above).
-      - name: Install the musl toolchain
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
-      - name: Stamp the release version into the manifests
-        run: node scripts/set-version.mjs ${{ needs.release-create.outputs.version }}
-      # No --locked: the version stamp above deliberately makes Cargo.lock stale,
-      # so cargo has to rewrite the package versions.
-      - name: Build
-        run: cargo build --release -p fina-cli --target ${{ matrix.target }}
-      - name: Smoke test the binary
-        if: matrix.runnable
-        shell: bash
-        run: "target/${{ matrix.target }}/release/fina-cli${{ matrix.target == 'x86_64-pc-windows-msvc' && '.exe' || '' }} health"
-      # The braces around $VERSION are load-bearing. Without them bash reads
-      # `$VERSION_aarch64-apple-darwin` as a variable called
-      # VERSION_aarch64-apple-darwin's prefix `VERSION_aarch64` (underscores are
-      # legal inside names), which is unset, so the version silently vanishes —
-      # and both Apple targets collapse to the same asset name. PowerShell does
-      # the same with `$env:VERSION_...`.
-      - name: Package for unix
-        if: matrix.archive == 'tar.gz'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist-cli
-          name="fina-cli_${VERSION}_${{ matrix.target }}"
-          cp "target/${{ matrix.target }}/release/fina-cli" "dist-cli/$name"
-          chmod +x "dist-cli/$name"
-          tar -C dist-cli -czf "dist-cli/$name.tar.gz" "$name"
-          rm "dist-cli/$name"
-      - name: Package for linux
-        if: matrix.archive == 'raw'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist-cli
-          install -m 755 \
-            "target/${{ matrix.target }}/release/fina-cli" \
-            "dist-cli/fina-cli_${VERSION}_${{ matrix.target }}"
-      - name: Package for windows
-        if: matrix.archive == 'zip'
-        shell: pwsh
-        run: |
-          $name = "fina-cli_${env:VERSION}_${{ matrix.target }}"
-          New-Item -ItemType Directory -Force dist-cli | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/fina-cli.exe" "dist-cli/$name.exe"
-          Compress-Archive -Path "dist-cli/$name.exe" -DestinationPath "dist-cli/$name.zip"
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG }}
-          draft: true
-          # Everything is staged in dist-cli/, including the archives, so this one
-          # glob picks up every target.
-          files: dist-cli/*
-
   release-publish:
     name: Publish release
-    needs: [release-create, desktop, cli]
+    needs: [release-create, desktop]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

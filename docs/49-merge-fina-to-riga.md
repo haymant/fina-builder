@@ -85,11 +85,13 @@ they change together).
 ### P0 — Plan + baseline freeze
 **Entrance:** `main` green; `riga-engine` unmodified since the last release.
 **Changes:** this document only.
+**Baseline (2026-10-18):** `tsc` 0 · `build` exit 0 · `vitest` 40 files / 225
+tests · `cargo test -p fina-kernel` 273 passed (2 ignored) · `cargo build
+--workspace` exit 0 · `riga-engine` 43 passed · `riga-mcp` 9 passed.
 **Exit:**
 - [x] `docs/49-merge-fina-to-riga.md` present and reviewed.
-- [ ] Baseline recorded: the six gate commands above all pass, verbatim output in
-      the commit body.
-- [ ] `git diff --stat` for the phase touches **only** `docs/`.
+- [x] Baseline recorded above (verbatim gate output in the commit body).
+- [x] `git diff --stat` for the phase touches **only** `docs/`.
 
 ### P1 — Retire `fina-cli` (immediate)
 **Entrance:** P0 exit met.
@@ -101,13 +103,18 @@ they change together).
   `release-publish`'s `needs`, and update the header job list;
 - `scripts/gate-coverage.py`: drop the `fina-cli` threshold + path mapping;
 - note the retirement in `FEATURES.md` (command-surface section).
-**Exit:**
-- [ ] `grep -rn "fina-cli\|fina_cli" Cargo.toml .github scripts FEATURES.md docs src-tauri`
-      returns **only** this plan document.
-- [ ] `cargo metadata --no-deps --format-version 1 | grep -c fina-cli` → `0`.
-- [ ] `cargo build --workspace` → exit 0.
-- [ ] `cargo test -p fina-server` → pass (kernel tests unaffected).
-- [ ] The six gate commands pass.
+**Exit (verified 2026-10-18):**
+- [x] **No build/runtime reference remains:**
+      `grep -rn "fina-cli\|fina_cli" Cargo.toml Cargo.lock .github scripts src-tauri src package.json`
+      → nothing. (`FEATURES.md` keeps one explicitly-marked *retired* entry plus Part II
+      history; those are not build/runtime references.)
+- [x] `cargo metadata --no-deps` members = `fina-kernel, fina-server, fina-mcp,
+      payoff-explorer` → no `fina-cli`; `crates/fina-cli/` deleted.
+- [x] `cargo build --workspace` → exit 0 (lockfile refreshed, no `fina-cli`).
+- [x] `cargo test -p fina-server` 9 passed · `cargo test -p fina-kernel` all pass.
+- [x] Gate commands: `tsc` 0 · `build` 0 · `vitest` 40 files / 225 tests.
+- [x] Engine guard unchanged: `riga-engine` 43 passed · `riga-mcp` 9 passed, **no
+      riga-flow diff** (transport-only phase).
 
 ### P2 — Port the demo charts as riga tiles (frontend only)
 Sub-phases, each its own commit, each **zero engine diff** (G2):

@@ -78,7 +78,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p fina-cli -p fina-server
+      - run: cargo test -p fina-server
       # `payoff-explorer`'s build script (tauri-build) validates every
       # `bundle.externalBin` resource at compile time and fails the build if one
       # is missing: "resource path `binaries/fina-mcp-<triple>` doesn't exist".
