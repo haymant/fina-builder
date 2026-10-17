@@ -24,17 +24,24 @@ const LANE_NOTE: Record<string, string> = {
 export const TileCard = memo(function TileCard({
   tile,
   group,
+  source = 'demo',
   onRemove,
   onExpand,
   children,
 }: {
   tile: Tile
   group?: string
+  /** Active pricing source; demo-lane tiles are stood down in `riga` mode. */
+  source?: 'demo' | 'riga'
   onRemove: () => void
   onExpand: () => void
   children: ReactNode
 }) {
   const lane = tileLane(group)
+  // fina-kernel (demo) is the parity/illustration harness, not the product
+  // surface — so demo tiles stand down when the riga-flow source is active.
+  const stoodDown = source === 'riga' && lane === 'demo'
+
   return (
     <section className="tile-shell flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-sm">
       <header className="tile-header flex h-10 shrink-0 items-center gap-2 border-b border-line px-3">
@@ -59,7 +66,21 @@ export const TileCard = memo(function TileCard({
           <X size={14} />
         </button>
       </header>
-      <div className="flex min-h-0 h-full flex-1 flex-col overflow-hidden p-1">{children}</div>
+      <div className="flex min-h-0 h-full flex-1 flex-col overflow-hidden p-1">
+        {stoodDown ? (
+          <div className="flex h-full flex-col items-center justify-center gap-1 p-4 text-center">
+            <p className="text-xs font-medium text-muted">Stood down in riga mode</p>
+            <p className="max-w-[32ch] text-[10px] text-muted">
+              This tile reads the <span className="font-mono">demo</span> engine (fina-kernel) — the
+              parity/illustration harness. Switch the pricing source to{' '}
+              <span className="font-mono">demo</span> to use it, or add the equivalent{' '}
+              <span className="font-mono">riga-flow</span> tile.
+            </p>
+          </div>
+        ) : (
+          children
+        )}
+      </div>
     </section>
   )
 })

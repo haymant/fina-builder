@@ -37,4 +37,35 @@ describe('TileCard', () => {
     expect(screen.getByText('riga-flow')).toBeTruthy()
     expect(screen.getByText(/live engine/)).toBeTruthy()
   })
+
+  it('stands a demo tile down when the riga source is active', () => {
+    render(
+      <TileCard
+        tile={{ id: 'x', type: 'Sankey', title: 'Branch Statistics' }}
+        group="Risk Analytics"
+        source="riga"
+        onRemove={noop}
+        onExpand={noop}
+      >
+        <div>live content</div>
+      </TileCard>,
+    )
+    expect(screen.getByText(/Stood down in riga mode/)).toBeTruthy()
+    expect(screen.queryByText('live content')).toBeNull()
+  })
+
+  it('keeps a riga tile live while the riga source is active', () => {
+    render(
+      <TileCard
+        tile={{ id: 'y', type: 'RigaRiskNet', title: 'Risk Net' }}
+        group="riga-flow"
+        source="riga"
+        onRemove={noop}
+        onExpand={noop}
+      >
+        <div>live content</div>
+      </TileCard>,
+    )
+    expect(screen.getByText('live content')).toBeTruthy()
+  })
 })
