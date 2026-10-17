@@ -13,275 +13,47 @@
 // eqVol grid, disc curve, evaluationDate) and only falls back to `tac-engine`
 // (`--market lake`) when it is not.
 //
+// The Murex deal/market decoders live in
+// `src/features/riga/instrument/decoders.ts`, shared with the app (docs/46 §4),
+// and are imported here under Node's TypeScript type-stripping (Node >= 23.6).
+//
 // The engines resolve the same way as the app: the `RIGA_MCP_BIN` /
 // `TAC_ENGINE_BIN` overrides, else the submodule default relative path
 // (`modules/<dir>/target/release/<bin>`).
-//
-// The surface→grid conversion mirrors `src/features/tac/mapping.ts`
-// (`surfaceToImpliedVolGrid`): maturities are Excel serials (or ISO dates)
-// converted to years anchored at the valuation date, strikes are made absolute
-// against the calibration reference, and both axes are sorted/de-duplicated.
 
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { createStdioClient } from './lib/mcpStdio.mjs'
+import {
+  DAYS_PER_YEAR,
+  MS_PER_DAY,
+  atmVol,
+  businessDays,
+  decodeDeal,
+  fileMarketBlock,
+  marketFromFile,
+  normaliseSurface,
+  pearson,
+  rateFromPillars,
+  serialFromIso,
+  stripMarket,
+  surfaceToGrid,
+} from '../src/features/riga/instrument/decoders.ts'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30)
-const MS_PER_DAY = 86_400_000
-const DAYS_PER_YEAR = 365
-const AXIS_EPSILON = 1e-9
-
-const isoFromSerial = (serial) =>
-  new Date(EXCEL_EPOCH_MS + Number(serial) * MS_PER_DAY).toISOString().slice(0, 10)
-const serialFromIso = (iso) => Math.round((Date.parse(iso) - EXCEL_EPOCH_MS) / MS_PER_DAY)
-const isDate = (value) => typeof value === 'string' && !Number.isNaN(Date.parse(value))
-const stripMarket = (name) => String(name ?? '').trim().replace(/\s+[A-Z]{2}$/, '').toUpperCase()
-const yearsFrom = (maturity, asOf) => {
-  const ms = typeof maturity === 'number' ? EXCEL_EPOCH_MS + maturity * MS_PER_DAY : Date.parse(maturity)
-  return Number.isNaN(ms) ? NaN : (ms - Date.parse(asOf)) / (MS_PER_DAY * DAYS_PER_YEAR)
-}
-
-function businessDays(fromIso, toIso) {
-  const start = Date.parse(fromIso)
-  const end = Date.parse(toIso)
-  let count = 0
-  for (let t = start + MS_PER_DAY; t <= end; t += MS_PER_DAY) {
-    const day = new Date(t).getUTCDay()
-    if (day !== 0 && day !== 6) count++
-  }
-  return count
-}
-
-// ---------------------------------------------------------------------------
-// Deal decoding (the ELIFCN_KI / KIKO-note family this repo prices)
-// ---------------------------------------------------------------------------
-
-function decodeDeal(doc) {
-  // The instrument block sits under Chunk.Jobs[0].commonData.dealData; tolerate
-  // the bare form used by earlier extracts.
-  const root = doc?.Chunk?.Jobs?.[0]?.commonData?.dealData ?? doc
-  const inst = root.instrument ?? root
-  const kiko = root.KIKOSelect ?? {}
-  const underlyings = inst.underlyings ?? []
-  const symbols = (kiko.underlyingName ?? underlyings.map((u) => u.name)).map(stripMarket)
-  // `initspot` is the initial spot / reference price, **not** a current mark;
-  // the current mark only exists in `marketData.equity`.
-  const initialSpots = (kiko.referencePrice ?? underlyings.map((u) => u.initspot ?? u.spot)).map(Number)
-  const asOf = isDate(root.extractedSystemDate)
-    ? root.extractedSystemDate
-    : isDate(inst.initialFixingDate)
-      ? inst.initialFixingDate
-      : isoFromSerial(root.expiryDate)
-  const finalFixing = isDate(inst.finalFixingDate) ? inst.finalFixingDate : isoFromSerial(root.expiryDate)
-  const koSerial = root.globalKOStar?.obvDate?.[0] ?? root.RGACCLKO?.endDate?.[0]
-
-  return {
-    name: root.instrumentName ?? inst.name ?? 'instrument',
-    template: root.productTemplate ?? inst.classification?.productTemplate?.name ?? 'ELIFCN_KI',
-    leg: root.legName ?? inst.legName ?? 'PUT',
-    notional: Number(inst.notional ?? root.notional ?? 0),
-    multiplier: Number(inst.multiplier ?? root.multiplier ?? 1),
-    currency: root.paymentCurrency ?? inst.paymentCurrency ?? 'USD',
-    symbols,
-    initialSpots,
-    asOf,
-    finalFixing,
-    koStart: Number.isFinite(Number(koSerial)) ? isoFromSerial(koSerial) : asOf,
-    strike: Number(root.strike ?? root.knockInStar?.strikeKI2 ?? kiko.maturBarrier),
-    knockIn: Number(root.knockInStar?.KIBarrier ?? kiko.maturBarrier),
-    knockOut: root.RGACCLKO?.gblBarPrice != null ? Number(root.RGACCLKO.gblBarPrice) : null,
-    coupon: null, // ELIFCN_KI here has accruRate/fixCoupon 0 — a pure put leg
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Surface model — one shape for both sources, then the shared grid/ATM reads
-// ---------------------------------------------------------------------------
-
-/** `{ maturities, strikes, volatility (fractions), reference, strikeType }`. */
-function normaliseSurface(raw) {
-  if (raw?.maturities) {
-    return { maturities: raw.maturities, strikes: raw.strikes.map(Number), volatility: raw.volatility, reference: Number(raw.reference), strikeType: raw.strike_type }
-  }
-  // Murex eqVol: `maturity` / `strike` / `vol` (percent points) / `Reference`.
-  return {
-    maturities: (raw.maturity ?? []).map(Number),
-    strikes: (raw.strike ?? []).map(Number),
-    volatility: (raw.vol ?? []).map((row) => row.map((v) => Number(v) / 100)),
-    reference: Number(raw.Reference),
-    strikeType: raw.strike_type,
-  }
-}
-
-/** Mirrors `surfaceToImpliedVolGrid` (src/features/tac/mapping.ts). */
-function surfaceToGrid(surface, asOf) {
-  if (!surface || surface.strikes.length === 0 || surface.maturities.length === 0) return null
-  const relative = surface.strikeType === 'relative' && Number.isFinite(surface.reference)
-  const columns = surface.strikes
-    .map((strike, index) => ({ strike: relative ? strike * surface.reference : strike, index }))
-    .filter((entry) => Number.isFinite(entry.strike) && entry.strike > 0)
-    .sort((a, b) => a.strike - b.strike)
-  const ordered = []
-  for (const entry of columns) {
-    const last = ordered[ordered.length - 1]
-    if (last && entry.strike <= last.strike + AXIS_EPSILON) continue
-    ordered.push(entry)
-  }
-  if (ordered.length === 0) return null
-
-  const rows = []
-  for (let r = 0; r < Math.min(surface.volatility.length, surface.maturities.length); r++) {
-    const years = yearsFrom(surface.maturities[r], asOf)
-    const vols = surface.volatility[r]
-    if (!Number.isFinite(years) || years <= 0 || !vols || vols.length !== surface.strikes.length) continue
-    rows.push({ years, vols })
-  }
-  rows.sort((a, b) => a.years - b.years)
-  const kept = []
-  for (const row of rows) {
-    const last = kept[kept.length - 1]
-    if (last && row.years <= last.years + AXIS_EPSILON) continue
-    kept.push(row)
-  }
-  if (kept.length === 0) return null
-  return {
-    maturities_years: kept.map((row) => row.years),
-    strikes: ordered.map((entry) => entry.strike),
-    vols: kept.map((row) => ordered.map((entry) => row.vols[entry.index])),
-  }
-}
-
-/** ATM read at the maturity nearest `targetYears`, struck nearest the reference. */
-function atmVol(surface, asOf, targetYears) {
-  if (!surface || surface.volatility.length === 0) return null
-  let ci = 0
-  let best = Infinity
-  surface.strikes.forEach((strike, index) => {
-    const distance = Math.abs(strike - surface.reference)
-    if (distance < best) {
-      best = distance
-      ci = index
-    }
-  })
-  let ri = 0
-  let bestYears = Infinity
-  surface.maturities.forEach((maturity, index) => {
-    const distance = Math.abs(yearsFrom(maturity, asOf) - targetYears)
-    if (distance < bestYears) {
-      bestYears = distance
-      ri = index
-    }
-  })
-  const value = surface.volatility[ri]?.[ci]
-  return Number.isFinite(value) ? value : null
-}
-
-// ---------------------------------------------------------------------------
-// Market from the instrument's own `marketData` block (Murex)
-// ---------------------------------------------------------------------------
-
-function fileMarketBlock(doc) {
-  return (
-    doc?.Chunk?.Jobs?.[0]?.commonData?.marketData ??
-    doc?.commonData?.marketData ??
-    doc?.marketData ??
-    null
-  )
-}
-
-function marketFromFile(doc, deal) {
-  const md = fileMarketBlock(doc)
-  if (!md) return null
-  const asOf = Number.isFinite(Number(md.evaluationDate)) ? isoFromSerial(md.evaluationDate) : deal.asOf
-  const finalSerial = serialFromIso(deal.finalFixing)
-  const asOfSerial = serialFromIso(asOf)
-  const maturityYears = (Date.parse(deal.finalFixing) - Date.parse(asOf)) / (MS_PER_DAY * DAYS_PER_YEAR)
-
-  const equity = new Map((md.equity ?? []).map((entry) => [stripMarket(entry._id), entry]))
-  const surfaces = new Map((md.eqVol ?? []).map((entry) => [stripMarket(entry._id), normaliseSurface(entry)]))
-
-  const missing = []
-  const spots = deal.symbols.map((symbol, index) => {
-    const entry = equity.get(symbol)
-    if (!entry) {
-      missing.push(`${symbol}: no equity mark; used the initial fixing`)
-      return deal.initialSpots[index]
-    }
-    return Number(entry.spot)
-  })
-  const dividendYields = deal.symbols.map((symbol, index) => {
-    const entry = equity.get(symbol)
-    const spot = spots[index]
-    if (!entry || !(spot > 0)) return 0
-    const total = (entry.dividend ?? [])
-      .filter((row) => Number(row.exDate) > asOfSerial && Number(row.exDate) <= finalSerial)
-      .reduce((sum, row) => sum + Number(row.div ?? 0), 0)
-    return total / spot
-  })
-
-  const curve = md.discCurves?.[0] ?? md.estCurves?.[0]
-  const riskFreeRate = rateFromCurve(curve, asOf, maturityYears) ?? 0.04
-
-  const rho = md.corr?.[0]?.correlation?.[0]?.correlation
-  const correlation = Number.isFinite(Number(rho))
-    ? [[1, Number(rho)], [Number(rho), 1]]
-    : [[1, 0.4], [0.4, 1]]
-
-  const grids = deal.symbols.map((symbol) => {
-    const surface = surfaces.get(symbol)
-    if (!surface) {
-      missing.push(`${symbol}: no eqVol surface`)
-      return null
-    }
-    return surfaceToGrid(surface, asOf)
-  })
-  const vols = deal.symbols.map((symbol) => {
-    const surface = surfaces.get(symbol)
-    return (surface && atmVol(surface, asOf, maturityYears)) ?? 0.2
-  })
-
-  return {
-    provenance: `file (1.json marketData, eval ${asOf})`,
-    asOf,
-    spots,
-    vols,
-    correlation,
-    riskFreeRate,
-    dividendYields,
-    grids,
-    notes: missing.length ? missing.map((note) => `marketData: ${note}`) : [],
-  }
-}
-
-function rateFromCurve(curve, asOf, targetYears) {
-  const pillars = (curve?.curve ?? [])
-    .map((point) => ({ years: yearsFrom(Number(point.date), asOf), rate: Number(point.rate) }))
-    .filter((point) => Number.isFinite(point.years) && Number.isFinite(point.rate))
-    .sort((a, b) => a.years - b.years)
-  if (pillars.length === 0) return null
-  if (targetYears <= pillars[0].years) return pillars[0].rate
-  for (let i = 1; i < pillars.length; i++) {
-    if (targetYears <= pillars[i].years) {
-      const a = pillars[i - 1]
-      const b = pillars[i]
-      const w = (targetYears - a.years) / (b.years - a.years)
-      return a.rate + w * (b.rate - a.rate)
-    }
-  }
-  return pillars[pillars.length - 1].rate
-}
-
-// ---------------------------------------------------------------------------
-// Market from tac-engine (the lake lane)
-// ---------------------------------------------------------------------------
 
 async function tool(client, name, args = {}) {
   const reply = await client.request('tools/call', { name, arguments: args }, 120000)
-  if (reply.isError) throw new Error(`${name}: ${JSON.stringify(reply.structuredContent ?? reply.content).slice(0, 200)}`)
-  return reply.structuredContent ?? (reply.content?.[0]?.text ? JSON.parse(reply.content[0].text) : reply.content)
+  if (reply.isError)
+    throw new Error(
+      `${name}: ${JSON.stringify(reply.structuredContent ?? reply.content).slice(0, 200)}`,
+    )
+  return (
+    reply.structuredContent ??
+    (reply.content?.[0]?.text ? JSON.parse(reply.content[0].text) : reply.content)
+  )
 }
 
 async function marketFromLake(tac, deal) {
@@ -323,7 +95,11 @@ async function marketFromLake(tac, deal) {
       notes.push(`correlation unavailable (${error.message}); defaulted to 0.4`)
     }
   }
-  if (!correlation) correlation = [[1, 0.4], [0.4, 1]]
+  if (!correlation)
+    correlation = [
+      [1, 0.4],
+      [0.4, 1],
+    ]
 
   const riskFreeRate = await lakeRate(tac, maturityYears, notes)
   const dividendYields = [0, 0]
@@ -332,13 +108,17 @@ async function marketFromLake(tac, deal) {
   const dealExpiry = serialFromIso(deal.finalFixing)
   for (const symbol of symbols) {
     try {
-      surfaces[symbol] = normaliseSurface(await tool(tac, 'vol_surface', { underlying: symbol, deal_expiry: dealExpiry }))
+      surfaces[symbol] = normaliseSurface(
+        await tool(tac, 'vol_surface', { underlying: symbol, deal_expiry: dealExpiry }),
+      )
     } catch (error) {
       notes.push(`${symbol} vol surface unavailable: ${error.message}`)
     }
   }
   const grids = symbols.map((symbol) => surfaceToGrid(surfaces[symbol], asOf))
-  const vols = symbols.map((symbol) => (surfaces[symbol] && atmVol(surfaces[symbol], asOf, maturityYears)) ?? 0.2)
+  const vols = symbols.map(
+    (symbol) => (surfaces[symbol] && atmVol(surfaces[symbol], asOf, maturityYears)) ?? 0.2,
+  )
 
   return { provenance: 'tac-engine (lake)', asOf, spots, vols, correlation, riskFreeRate, dividendYields, grids, notes }
 }
@@ -361,50 +141,6 @@ async function lakeRate(tac, maturityYears, notes) {
     notes.push(`rate unavailable (${error.message}); defaulted to 4%`)
     return 0.04
   }
-}
-
-function rateFromPillars(pillars, targetYears) {
-  const sorted = [...pillars].sort((a, b) => a.years - b.years)
-  if (sorted.length === 0) return 0.04
-  if (targetYears <= sorted[0].years) return sorted[0].rate
-  for (let i = 1; i < sorted.length; i++) {
-    if (targetYears <= sorted[i].years) {
-      const a = sorted[i - 1]
-      const b = sorted[i]
-      const w = (targetYears - a.years) / (b.years - a.years)
-      return a.rate + w * (b.rate - a.rate)
-    }
-  }
-  return sorted[sorted.length - 1].rate
-}
-
-function pearson(symbols, bars) {
-  const closes = (symbol) => (bars?.bars?.[symbol] ?? []).map((bar) => Number(bar.c))
-  const a = closes(symbols[0])
-  const b = closes(symbols[1])
-  const n = Math.min(a.length, b.length)
-  if (n < 3) return null
-  const ra = []
-  const rb = []
-  for (let i = 1; i < n; i++) {
-    if (a[i - 1] > 0 && b[i - 1] > 0) {
-      ra.push(Math.log(a[i] / a[i - 1]))
-      rb.push(Math.log(b[i] / b[i - 1]))
-    }
-  }
-  const mean = (x) => x.reduce((s, v) => s + v, 0) / x.length
-  const ma = mean(ra)
-  const mb = mean(rb)
-  let cov = 0
-  let va = 0
-  let vb = 0
-  for (let i = 0; i < ra.length; i++) {
-    cov += (ra[i] - ma) * (rb[i] - mb)
-    va += (ra[i] - ma) ** 2
-    vb += (rb[i] - mb) ** 2
-  }
-  const rho = cov / Math.sqrt(va * vb)
-  return Number.isFinite(rho) ? [[1, rho], [rho, 1]] : null
 }
 
 // ---------------------------------------------------------------------------
