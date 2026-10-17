@@ -924,3 +924,66 @@ Murex dialects plus the riga fixture with one schema.
    `put.koLocked`/`koDates`; no engine branch change.
 3. **Resources** (`riga://…`) stay fixture-bound; revisit only if a resource
    consumer needs the live request.
+
+---
+
+## 15. Implementation status (as built)
+
+All phases landed on `main`, each with its own commit and green gates.
+
+| Phase | Commit | Evidence |
+|---|---|---|
+| P0 build integration | `014df9c` | `tsc -b` 0 · `npm run build` 0 · `vitest` 149 |
+| docs | `ac39456` | — |
+| styling bridge | `03ba3c7` | shadcn tokens emitted in `dist` CSS; theme tests |
+| P3 engine `request` | `1b0b5fb` (submodule) | `cargo test -p riga-mcp` 8/8 · `-p riga-engine` 43/43 |
+| P5 request injection | `51c32af` | `fixtureRequestInjection` + reactivity |
+| P1 schema/adapters/CLI | `f1f7903` | CLI `--json` byte-identical for `1.json`; 20 adapter tests |
+| P2 instrument store | `70528d3` | 9 store tests |
+| P4 deep-form UI | `9fbe783` | 6 panel tests |
+
+Final gates: `npx tsc -b` 0 · `npm run build` 0 · `npx vitest run` **34 files /
+195 tests** · `cargo test -p riga-mcp -- --test-threads=1` green.
+
+### 15.1 Corrections discovered during implementation (evidence-based)
+
+1. **CLI golden is `1.json` only.** The pre-existing `scripts/price-instrument.mjs`
+   is Murex-only; it throws on the riga fixture `termsheet1.json` (a non-serial
+   `as_of` reaches `isoFromSerial`). Parity was therefore pinned on `1.json`
+   (byte-identical), and `termsheet1.json` is covered by the `rigaFixture`
+   adapter unit tests instead.
+2. **The kit needed more than the plan listed.** Making `tsc -b` green also
+   required pinning `@tanstack/react-table@^8` (the vendored `data-grid` targets
+   the v8 API, not v9), installing `simple-icons`, and adding two support modules
+   the kit imports (`src/hooks/use-mobile.ts`,
+   `src/stores/preferences/preferences-provider.tsx`).
+3. **Store integration is push, not pull.** To avoid rewriting every tile and
+   the request-composition tests, `useInstrumentStore` **pushes** the derived
+   flat values into the existing `rigaTradeStore` / `rigaMarketStore` that
+   `composeRigaRequest` already reads (the trade always; the market only on the
+   `document` lane with real market data). This is functionally the "one store"
+   decision with less churn than repointing `composeRigaRequest`; the flat stores
+   are now projections.
+4. **Engine test cost.** The `inline_request_matches_fixture_*` tests originally
+   priced the 30 000-path fixture ~30× (~800 s in a debug build). They now use a
+   reduced-path copy of the fixture (800 paths) written to a temp file, so both
+   the on-disk and inline sides use the same request and the suite runs in ~21 s.
+5. **Styling/theme.** `src/index.css` now derives the shadcn token names
+   (`--color-background` … `--color-ring`, radius scale, `@custom-variant dark`)
+   from the app's `--theme-*` variables — the token layer finap's `globals.css`
+   defines — so the vendored kit is legible in both light and dark.
+
+### 15.2 Test coverage of the updated features
+
+| Feature | Test file |
+|---|---|
+| Component kit adoption | `src/lib/__tests__/utils.test.ts` (`cn`) |
+| Theme token bridge + light/dark | `src/features/themes/__tests__/themeProvider.test.tsx` |
+| Request injection (P5) | `src/features/riga/__tests__/fixtureRequestInjection.test.tsx` |
+| Reactivity/debounce | `src/features/riga/__tests__/rigaReactivity.test.tsx` |
+| Adapters + toRequest + parse (P1) | `src/features/riga/instrument/__tests__/adapters.test.ts` |
+| Instrument store (P2) | `src/store/__tests__/instrumentStore.test.ts` |
+| Trade editor UI (P4) | `src/features/riga/__tests__/tradeEconomicsPanel.test.tsx` |
+| Market lanes UI (P4) | `src/features/riga/__tests__/marketDataPanel.test.tsx` |
+| Engine `request` param (P3) | `crates/riga-mcp` `inline_request_*` (cargo) |
+

@@ -1,5 +1,10 @@
 # 47 — Coding hand-off prompt: instrument-store revamp
 
+> **Status: IMPLEMENTED.** This prompt was executed on `main`; see
+> `docs/46-instrument-store-revamp-plan.md` §15 for the commits, evidence and the
+> corrections discovered during implementation. Kept here as the historical
+> dispatch prompt.
+
 Copy the block below into the coding agent's first message. It is self-contained;
 `docs/46-instrument-store-revamp-plan.md` is the full design if more detail is
 needed.
