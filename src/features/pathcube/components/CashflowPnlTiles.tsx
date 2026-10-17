@@ -1,4 +1,4 @@
-import ReactECharts from 'echarts-for-react'
+import ReactECharts from '../../shared/components/Chart'
 import { memo } from 'react'
 import { useCashflows } from '../../../hooks'
 import { useCashflowStore } from '../../../store/cashflowStore'

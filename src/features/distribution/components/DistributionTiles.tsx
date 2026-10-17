@@ -1,4 +1,4 @@
-import ReactECharts from 'echarts-for-react'
+import ReactECharts from '../../shared/components/Chart'
 import { memo, useMemo } from 'react'
 import type { SimulationBundle } from '../../../api/types'
 import { useSelectedPath } from '../../../store/explorerStore'

@@ -3,7 +3,7 @@
 // in the header, plus a fetch/refresh affordance. Manipulations are applied by
 // the pure selector and the effective market feeds the riga-flow request.
 
-import ReactECharts from 'echarts-for-react'
+import ReactECharts from '../../shared/components/Chart'
 import { memo, useMemo, useState, type ReactNode } from 'react'
 import { PanelCard } from '../../shared/components/PanelCard'
 import { useTheme } from '../../themes/ThemeProvider'

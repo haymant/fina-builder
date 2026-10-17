@@ -1,4 +1,4 @@
-import ReactECharts from 'echarts-for-react'
+import ReactECharts from '../../shared/components/Chart'
 import { memo, useMemo } from 'react'
 import { MC_PATH_COUNTS } from '../../../api/types'
 import { useMcDiagnostics } from '../../../hooks'

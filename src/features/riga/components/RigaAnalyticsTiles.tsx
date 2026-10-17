@@ -3,7 +3,7 @@
 // and stress bands. Every tile states its tool + run id and respects the trace
 // level (§10).
 
-import ReactECharts from 'echarts-for-react'
+import ReactECharts from '../../shared/components/Chart'
 import { memo, useEffect, useMemo, useState } from 'react'
 import {
   freezeRigaBaseline,

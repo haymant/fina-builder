@@ -1,4 +1,4 @@
-import ReactECharts from 'echarts-for-react'
+import ReactECharts from '../../shared/components/Chart'
 import { memo, useEffect, useState } from 'react'
 import { useExplorerStore, useSelectedPath } from '../../../store/explorerStore'
 import { useExecutionEvents } from '../../../hooks'

@@ -1,4 +1,4 @@
-import ReactECharts from 'echarts-for-react'
+import ReactECharts from '../../shared/components/Chart'
 import { memo, useMemo } from 'react'
 import { DEFAULT_TRADE_ECONOMICS, useTradeEconomicsStore } from '../../../store/tradeEconomicsStore'
 import { useTradeAnalytics } from '../../../hooks'
