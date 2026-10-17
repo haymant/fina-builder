@@ -56,6 +56,28 @@ describe('TabularForm heuristic', () => {
     expect(container.querySelector('[data-tabular-path="/nested/child"]')).toBeTruthy()
   })
 
+  it('wraps every grid in its own container so deep cards size to their own width', () => {
+    const { container } = render(
+      <TabularForm value={{ a: 1, nested: { b: 2, deep: { c: 3 } } }} onChange={() => {}} />,
+    )
+    const grids = Array.from(container.querySelectorAll('.fina-form-grid'))
+    expect(grids.length).toBeGreaterThan(1)
+    for (const grid of grids) {
+      expect(grid.parentElement?.classList.contains('fina-form-container')).toBe(true)
+    }
+  })
+
+  it('keeps primitives of a mixed array as cells and containers as cards', () => {
+    const { container } = render(
+      <TabularForm value={{ mixed: [1, { obj: 2 }, 'three'] }} onChange={() => {}} />,
+    )
+    // primitives keep their index cells
+    expect(container.querySelector('[data-tabular-path="/mixed/0"]')).toBeTruthy()
+    expect(container.querySelector('[data-tabular-path="/mixed/2"]')).toBeTruthy()
+    // the object entry is a card, not a cell
+    expect(container.querySelector('[data-tabular-path="/mixed/1"]')).toBeNull()
+  })
+
   it('reports edits as (pointer, value)', () => {
     const onChange = vi.fn()
     const { container } = render(<TabularForm value={value} onChange={onChange} />)

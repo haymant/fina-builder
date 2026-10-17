@@ -102,22 +102,26 @@ function Grid({
   labels?: TabularLabels
   onChange: (pointer: string, next: unknown) => void
 }) {
+  // Each grid is its own container so the 1/6/12-column rule responds to THIS
+  // block's width — a deep, narrow card must not inherit the root's 12 columns.
   return (
-    <div className="fina-form-grid overflow-hidden rounded-lg border border-border">
-      {entries.map(([key, value], index) => {
-        const path = `${basePath}/${key}`
-        return (
-          <Cell
-            key={key}
-            path={path}
-            label={labels?.[path] ?? humanizeKey(key)}
-            value={value}
-            last={index === entries.length - 1}
-            size={entries.length}
-            onChange={onChange}
-          />
-        )
-      })}
+    <div className="fina-form-container">
+      <div className="fina-form-grid overflow-hidden rounded-lg border border-border">
+        {entries.map(([key, value], index) => {
+          const path = `${basePath}/${key}`
+          return (
+            <Cell
+              key={key}
+              path={path}
+              label={labels?.[path] ?? humanizeKey(key)}
+              value={value}
+              last={index === entries.length - 1}
+              size={entries.length}
+              onChange={onChange}
+            />
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -241,28 +245,24 @@ function ArrayBlock({
 }) {
   if (items.length === 0) return <p className="px-1 text-muted-foreground text-xs">No items.</p>
 
-  // Array of primitives -> a tabular grid of value cells.
-  if (items.every((item) => !isContainer(item))) {
-    return (
-      <Grid
-        entries={items.map((item, index) => [String(index), item])}
-        basePath={path}
-        labels={labels}
-        onChange={onChange}
-      />
-    )
-  }
+  // Primitives (and any null/mixed entries) render as tabular cells; containers
+  // render as a collapsible card each. A mixed array is split accordingly.
+  const indexed = items.map((item, index) => [String(index), item] as [string, unknown])
+  const primitives = indexed.filter(([, item]) => !isContainer(item))
+  const containers = indexed.filter(([, item]) => isContainer(item))
 
-  // Array of objects/arrays -> a collapsible card per item.
   return (
     <div className="space-y-2">
-      {items.map((item, index) => {
-        const itemPath = `${path}/${index}`
-        const summary = Array.isArray(item) ? item.length : isContainer(item) ? Object.keys(item as object).length : 0
+      {primitives.length > 0 && (
+        <Grid entries={primitives} basePath={path} labels={labels} onChange={onChange} />
+      )}
+      {containers.map(([key, item]) => {
+        const itemPath = `${path}/${key}`
+        const summary = Array.isArray(item) ? item.length : Object.keys(item as object).length
         return (
           <CollapsibleCard
-            key={index}
-            title={leafLabel(labels, itemPath, `#${index + 1}`)}
+            key={key}
+            title={leafLabel(labels, itemPath, `#${key}`)}
             summary={summary}
             defaultOpen={depth < openDepth}
           >
