@@ -65,7 +65,6 @@ export const TILE_CATALOG: TileMeta[] = [
   { id: 'riga-execution-tape', type: 'RigaExecutionTape', title: 'Execution Tape', description: 'Bounded per-path event tape from execution_events.', group: 'riga-flow', icon: '▤' },
   { id: 'riga-book-risk', type: 'RigaBookRisk', title: 'Book Risk', description: 'Portfolio aggregation and the async price_book_async task.', group: 'riga-flow', icon: '▥' },
   { id: 'riga-scenario-comparison', type: 'RigaScenarioComparison', title: 'Scenario Comparison (riga)', description: 'Real riga-flow bump scenarios.', group: 'riga-flow', icon: '⇄' },
-  { id: 'riga-pl-attribution', type: 'RigaPlAttribution', title: 'P&L Attribution', description: 'pl_explain contributions by factor.', group: 'riga-flow', icon: '▥' },
   { id: 'riga-taylor-explain', type: 'RigaTaylorExplain', title: 'Taylor Explain (riga)', description: 'valuation_explain Taylor + residual.', group: 'riga-flow', icon: 'Δ' },
   { id: 'riga-plva-explain', type: 'RigaPlvaExplain', title: 'PLVA Explain (riga)', description: 'Valuation adjustments base → current.', group: 'riga-flow', icon: 'P' },
   { id: 'riga-statistics-summary', type: 'RigaStatisticsSummary', title: 'Statistics Summary', description: 'TransitionStats, MC diagnostics and distributions.', group: 'riga-flow', icon: '◉' },

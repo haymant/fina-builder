@@ -17,7 +17,6 @@ import {
   useRigaGovernanceEvidence,
   useRigaMcDiagnostics,
   useRigaPathCube,
-  useRigaPlExplain,
   useRigaRiskNet,
   useRigaRootCause,
   useRigaScenario,
@@ -88,22 +87,6 @@ function AttributionBody({ items, total, totalLabel }: { items: RigaFactorContri
     </div>
   )
 }
-
-export const RigaPlAttributionTile = memo(function RigaPlAttributionTile() {
-  const state = useRigaPlExplain()
-  const level = useObservabilityStore((s) => s.level)
-  return (
-    <RigaPanel
-      title="P&L Attribution"
-      subtitle="pl_explain contributions by factor"
-      tool="pl_explain"
-      state={state}
-      empty={level === 'off' ? 'trace off — aggregate only.' : null}
-    >
-      {(data) => <AttributionBody items={data.contributions} total={data.total} />}
-    </RigaPanel>
-  )
-})
 
 export const RigaTaylorExplainTile = memo(function RigaTaylorExplainTile() {
   const state = useRigaValuationExplain()

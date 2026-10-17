@@ -56,8 +56,7 @@ Expected, per tile:
 | Execution Tape | `execution_events` | KO/KI/maturity events change |
 | Book Risk | `compute_book_risk` | per-notional PV & greeks change |
 | Scenario Comparison | `scenario` | base / up / down PV change |
-| P&L Attribution | `pl_explain` | contributions change |
-| Taylor Explain | `valuation_explain` | base→current PV & residual change |
+| Taylor Explain | `valuation_explain` | factor contributions, base→current PV & residual change (P&L Attribution was folded into this tile — it showed the same `pnl_explain` contributions without the base/current/residual) |
 | Greeks Sanity | `validate_greeks` | flags may change |
 | Stress Bands | `recommend_scenarios` | KI/KO band recommendations change |
 
