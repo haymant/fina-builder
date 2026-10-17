@@ -8,6 +8,7 @@ import { memo, useEffect, useMemo, useState } from 'react'
 import {
   freezeRigaBaseline,
   priceBookAsync,
+  useRigaAttribution,
   useRigaBookRisk,
   useRigaBranchStats,
   useRigaCompareCorpus,
@@ -632,6 +633,71 @@ export const RigaExecutionTapeTile = memo(function RigaExecutionTapeTile() {
           {selected ? <p className="text-[10px] text-muted">selected path {selected}</p> : null}
         </div>
       )}
+    </RigaPanel>
+  )
+})
+
+/** PV by leg + PV/Δ/ν by transition (`explain_pv_attribution`). */
+export const RigaAttributionTile = memo(function RigaAttributionTile() {
+  const state = useRigaAttribution()
+  return (
+    <RigaPanel
+      title="Leg Attribution"
+      subtitle="explain_pv_attribution · PV by leg, PV/Δ/ν by transition"
+      tool="explain_pv_attribution"
+      runId={state.data?.determinism?.marketSnapshotId}
+      state={state}
+    >
+      {(data) => {
+        const legs = data.legs
+        return (
+          <div className="space-y-3 p-3">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <Kpi label="Total PV" value={num(legs.total)} tone="primary" />
+              <Kpi label="KI probability" value={pct(data.kiProbability)} tone="danger" />
+              <Kpi label="Engine model" value={data.engineModel} />
+            </div>
+            <div>
+              <p className="eyebrow mb-1">PV by leg</p>
+              <DataTable
+                columns={[
+                  { key: 'leg', label: 'Leg' },
+                  { key: 'pv', label: 'PV', render: (row) => num(row.pv) },
+                ]}
+                rows={[
+                  { leg: 'Par redemption', pv: legs.parRedemption },
+                  { leg: 'Coupon', pv: legs.coupon },
+                  { leg: 'Memory coupon', pv: legs.memoryCoupon },
+                  { leg: 'Down-and-in put', pv: legs.downAndInPut },
+                  { leg: 'Funding', pv: legs.funding },
+                  { leg: 'Discounting', pv: legs.discounting },
+                  { leg: 'Total', pv: legs.total },
+                ]}
+              />
+            </div>
+            <div>
+              <p className="eyebrow mb-1">PV &amp; sensitivities by transition</p>
+              <DataTable
+                columns={[
+                  { key: 'transitionId', label: 'Transition' },
+                  { key: 'inputCount', label: 'In' },
+                  { key: 'outputCount', label: 'Out' },
+                  { key: 'probability', label: 'Prob', render: (row) => pct(row.probability) },
+                  { key: 'meanPayoff', label: 'PV impact', render: (row) => num(row.meanPayoff) },
+                  { key: 'meanDelta', label: 'Δ', render: (row) => num(row.meanDelta) },
+                  { key: 'meanVega', label: 'ν', render: (row) => num(row.meanVega) },
+                ]}
+                rows={data.stats}
+                empty="No transition stats"
+              />
+              <p className="mt-1 text-[10px] text-muted">
+                The engine reports sensitivities per transition, not per leg; the down-and-in put is
+                the vol-driven term.
+              </p>
+            </div>
+          </div>
+        )
+      }}
     </RigaPanel>
   )
 })

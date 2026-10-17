@@ -51,6 +51,7 @@ const initialDashboards: Dashboard[] = [
     { i: 'riga-governance-evidence', x: 0, y: 33, w: 6, h: 4, minW: 4, minH: 3 },
     { i: 'riga-path-cube-query', x: 6, y: 33, w: 6, h: 4, minW: 4, minH: 3 },
     { i: 'riga-execution-tape', x: 0, y: 37, w: 12, h: 4, minW: 5, minH: 3 },
+    { i: 'riga-attribution', x: 0, y: 41, w: 12, h: 4, minW: 5, minH: 3 },
   ] },
   { id: 'tac-market-data', name: 'Market Data Workbench (tac-engine)', layout: [
     { i: 'tac-market-data-panel', x: 0, y: 0, w: 6, h: 4, minW: 4, minH: 3 },
