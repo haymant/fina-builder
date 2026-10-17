@@ -8,6 +8,12 @@ import { defineConfig } from 'vitest/config'
 // `tsconfig.app.json` for type-checking.
 const rigaPkg = new URL('./modules/riga/packages/assistant-ui/src', import.meta.url).pathname
 
+// The vendored shadcn-style component kit (`src/components/{ui,data-grid,deep-form}`)
+// imports through the `@/…` root alias. Map it to `./src` here and in
+// `tsconfig.app.json` `paths`. The `'@/'` prefix never collides with the
+// `@rigai/*` or `@tauri-apps/*` package aliases below.
+const rootSrc = new URL('./src', import.meta.url).pathname
+
 // Vitest-only alias for the Tauri IPC mock. This MUST NOT apply to
 // `vite build` / `tauri build`: rewriting `@tauri-apps/api/core` unconditionally
 // bundles the throwing test mock into the desktop app, which then fails every
@@ -19,6 +25,8 @@ export default defineConfig({
   resolve: {
     dedupe: ['react', 'react-dom'],
     alias: [
+      // Root source alias for the vendored component kit (`@/…`).
+      { find: '@/', replacement: `${rootSrc}/` },
       // RIGA assistant surface (chat panel) — vendored package sources.
       { find: '@rigai/assistant-ui/styles.css', replacement: `${rigaPkg}/styles.css` },
       { find: '@rigai/assistant-ui/tauri', replacement: `${rigaPkg}/tauri/index.ts` },
