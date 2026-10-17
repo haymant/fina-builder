@@ -42,7 +42,6 @@ const initialDashboards: Dashboard[] = [
     { i: 'riga-data-lineage', x: 8, y: 13, w: 4, h: 4, minW: 3, minH: 3 },
     { i: 'riga-statistics-summary', x: 0, y: 17, w: 6, h: 4, minW: 4, minH: 3 },
     { i: 'riga-taylor-explain', x: 0, y: 21, w: 6, h: 4, minW: 4, minH: 3 },
-    { i: 'riga-plva-explain', x: 6, y: 21, w: 6, h: 4, minW: 4, minH: 3 },
     { i: 'riga-scenario-comparison', x: 0, y: 25, w: 6, h: 4, minW: 4, minH: 3 },
     { i: 'riga-book-risk', x: 6, y: 25, w: 6, h: 4, minW: 4, minH: 3 },
     { i: 'riga-regression-triage', x: 0, y: 29, w: 6, h: 4, minW: 4, minH: 3 },

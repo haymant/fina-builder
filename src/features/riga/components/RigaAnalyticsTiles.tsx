@@ -64,30 +64,6 @@ function Waterfall({ items, sign }: { items: RigaFactorContribution[]; sign?: nu
   return <ReactECharts option={option} style={{ height: '100%', width: '100%' }} notMerge />
 }
 
-function AttributionBody({ items, total, totalLabel }: { items: RigaFactorContribution[]; total?: number; totalLabel?: string }) {
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="h-40 min-h-[10rem] shrink-0">
-        <Waterfall items={items} />
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto">
-        <DataTable
-          columns={[
-            { key: 'factor', label: 'Factor' },
-            { key: 'contribution', label: 'Contribution', render: (row) => num(row.contribution) },
-          ]}
-          rows={items}
-        />
-      </div>
-      {total !== undefined ? (
-        <div className="border-t border-line/60 px-3 py-1 text-[10px] text-muted">
-          {totalLabel ?? 'Total'}: <span className="font-mono text-main">{num(total)}</span>
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
 export const RigaTaylorExplainTile = memo(function RigaTaylorExplainTile() {
   const state = useRigaValuationExplain()
   const level = useObservabilityStore((s) => s.level)
@@ -104,7 +80,8 @@ export const RigaTaylorExplainTile = memo(function RigaTaylorExplainTile() {
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Kpi label="Base PV" value={num(data.basePv)} />
             <Kpi label="Current PV" value={num(data.currentPv)} tone="primary" />
-            <Kpi label="Predicted ΔPV" value={num(data.predictedDpv)} />
+            <Kpi label="ΔPV (base→current)" value={num(data.deltaPv)} />
+            <Kpi label="Predicted ΔPV (Taylor)" value={num(data.predictedDpv)} />
             <Kpi label="Residual" value={num(data.residual)} tone={Math.abs(data.residual) > 1e-6 ? 'warning' : 'success'} />
           </div>
           <div className="h-40 min-h-[10rem]">
@@ -119,37 +96,6 @@ export const RigaTaylorExplainTile = memo(function RigaTaylorExplainTile() {
           />
         </div>
       )}
-    </RigaPanel>
-  )
-})
-
-export const RigaPlvaExplainTile = memo(function RigaPlvaExplainTile() {
-  const state = useRigaValuationExplain()
-  const level = useObservabilityStore((s) => s.level)
-  return (
-    <RigaPanel
-      title="PLVA Explain"
-      subtitle="valuation adjustments (base → current)"
-      tool="valuation_explain"
-      state={state}
-      empty={level === 'off' ? 'trace off — aggregate only.' : null}
-    >
-      {(data) => {
-        const items = data.contributions.map((c) => ({ factor: c.factor, contribution: c.contribution }))
-        const plva = data.currentPv - data.basePv - data.predictedDpv
-        return (
-          <div className="flex h-full flex-col">
-            <div className="grid grid-cols-3 gap-2 p-3">
-              <Kpi label="Base → current" value={num(data.currentPv - data.basePv)} />
-              <Kpi label="Market (Taylor)" value={num(data.predictedDpv)} />
-              <Kpi label="PLVA / residual" value={num(plva)} tone="warning" />
-            </div>
-            <div className="min-h-0 flex-1">
-              <AttributionBody items={items} />
-            </div>
-          </div>
-        )
-      }}
     </RigaPanel>
   )
 })
