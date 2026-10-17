@@ -81,4 +81,27 @@ describe('useInstrumentStore', () => {
     expect(localStorage.getItem('fina-instrument')).toBeNull()
     expect(useInstrumentStore.getState().document.source.adapter).toBe('manual')
   })
+
+  it('importMarketText replaces the market but keeps the current legs', () => {
+    // Start from the Murex chunk (3 legs), then import the riga-market fixture.
+    useInstrumentStore.getState().importText(read('termsheet1.md.json'), 'termsheet1.md.json')
+    const legsBefore = useInstrumentStore.getState().document.legs.length
+    useInstrumentStore.getState().importMarketText(read('termsheet1.json'), 'termsheet1.json')
+
+    const doc = useInstrumentStore.getState().document
+    expect(doc.legs).toHaveLength(legsBefore)
+    expect(doc.market.asOf).toBe('2026-09-07')
+    expect(doc.market.correlation[0][1]).toBeCloseTo(0.4593248181, 9)
+    expect(useInstrumentStore.getState().marketSource).toBe('document')
+  })
+
+  it('applyMarket pushes an edited market into the flat request store', () => {
+    useInstrumentStore.getState().importText(read('termsheet1.json'), 'termsheet1.json')
+    const current = useInstrumentStore.getState().document
+    const next = structuredClone(current.market)
+    next.spots = [1, 2]
+    useInstrumentStore.getState().applyMarket(next)
+
+    expect(useRigaMarketStore.getState().market.spots).toEqual([1, 2])
+  })
 })

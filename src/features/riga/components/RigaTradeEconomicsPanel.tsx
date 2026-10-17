@@ -1,106 +1,64 @@
-// Schema-driven trade-economics editor for the riga-flow product (§6.1/§6.2).
-// Both a workspace side-panel and a placeable tile (`RigaTradeEconomics`).
-// `price_trade` is the authority: an invalid combination shows the structured
-// `{code,message}` returned by the engine, never a UI-local rule.
+// Instrument editor for the riga-flow product (§6.1/§6.2, docs/46 §7.2). The
+// tile edits the canonical `fina.instrument/v1` document with the deep-form
+// editor and imports/pastes instrument JSON (`1.json`, `termsheet1.md.json`,
+// `termsheet1.json`). `price_trade` remains the authority: an invalid
+// combination shows the structured `{code,message}` returned by the engine,
+// never a UI-local rule.
 
-import { useMemo } from 'react'
-import { useRigaTradeStore } from '../../../store/rigaTradeStore'
+import { useRef, useState } from 'react'
+import { DeepForm } from '../../../components/deep-form'
+import type { DeepFormValue } from '../../../components/deep-form'
+import { useInstrumentStore } from '../../../store/instrumentStore'
 import { useRigaSourceStore } from '../../../store/rigaSourceStore'
 import { useRigaTradePrice } from '../hooks'
-import { PRODUCT_TYPES, type TradeFieldSpec } from '../productTypes'
+import { RIGA_TRADE_PRESETS } from '../../../store/rigaTradeStore'
+import { INSTRUMENT_FIELD_HINTS, INSTRUMENT_LAYOUT } from '../instrument/ui'
+import type { InstrumentDocument } from '../instrument/schema'
 import { PanelCard } from '../../shared/components/PanelCard'
 import { Kpi, num, Provenance } from './primitives'
-import type { RigaPhoenixTrade } from '../types'
 
-function Field({ spec, value, onChange }: { spec: TradeFieldSpec; value: unknown; onChange: (patch: Partial<RigaPhoenixTrade>) => void }) {
-  if (spec.kind === 'boolean') {
-    return (
-      <label className="flex items-center justify-between gap-2 text-[10px] text-muted">
-        <span>{spec.label}</span>
-        <input
-          type="checkbox"
-          checked={Boolean(value)}
-          onChange={(e) => onChange({ [spec.key]: e.target.checked } as Partial<RigaPhoenixTrade>)}
-        />
-      </label>
-    )
-  }
-  if (spec.kind === 'text') {
-    return (
-      <label className="block text-[10px] text-muted">
-        {spec.label}
-        <input
-          className="economics-number-input mt-0.5 w-full"
-          value={String(value ?? '')}
-          onChange={(e) => onChange({ [spec.key]: e.target.value } as Partial<RigaPhoenixTrade>)}
-        />
-      </label>
-    )
-  }
-  if (spec.kind === 'numberArray') {
-    const array = Array.isArray(value) ? (value as number[]) : []
-    return (
-      <label className="block text-[10px] text-muted">
-        {spec.label}
-        <span className="mt-0.5 flex gap-1">
-          {[0, 1].map((index) => (
-            <input
-              key={index}
-              className="economics-number-input w-full"
-              type="number"
-              step={spec.step ?? 'any'}
-              value={array[index] ?? ''}
-              onChange={(e) => {
-                const next = [array[0] ?? 0, array[1] ?? 0]
-                next[index] = Number(e.target.value)
-                onChange({ [spec.key]: next } as Partial<RigaPhoenixTrade>)
-              }}
-            />
-          ))}
-        </span>
-      </label>
-    )
-  }
-  return (
-    <label className="block text-[10px] text-muted">
-      {spec.label}
-      <input
-        className="economics-number-input mt-0.5 w-full"
-        type="number"
-        step={spec.kind === 'int' ? 1 : (spec.step ?? 'any')}
-        value={value === null || value === undefined ? '' : Number(value)}
-        onChange={(e) => {
-          const raw = e.target.value
-          const parsed = raw === '' ? null : Number(raw)
-          const keyed = spec.kind === 'int' && parsed !== null ? Math.round(parsed) : parsed
-          onChange({ [spec.key]: keyed } as Partial<RigaPhoenixTrade>)
-        }}
-      />
-    </label>
-  )
+const SOURCE_BADGE: Record<string, string> = {
+  'murex-chunk@1': 'Murex chunk',
+  'riga-fixture@1': 'riga fixture',
+  manual: 'manual',
 }
 
 export function RigaTradeEconomicsPanel() {
-  const trade = useRigaTradeStore((s) => s.trade)
-  const updateTrade = useRigaTradeStore((s) => s.updateTrade)
-  const applyPreset = useRigaTradeStore((s) => s.applyPreset)
-  const resetTrade = useRigaTradeStore((s) => s.resetTrade)
+  const document = useInstrumentStore((s) => s.document)
+  const applyDocument = useInstrumentStore((s) => s.applyDocument)
+  const importText = useInstrumentStore((s) => s.importText)
+  const reset = useInstrumentStore((s) => s.reset)
   const source = useRigaSourceStore((s) => s.source)
   const price = useRigaTradePrice()
 
-  const product = PRODUCT_TYPES[0]!
-  const groups = useMemo(() => {
-    const map = new Map<string, TradeFieldSpec[]>()
-    for (const field of product.fields) {
-      map.set(field.group, [...(map.get(field.group) ?? []), field])
-    }
-    return [...map.entries()]
-  }, [product])
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [pasteOpen, setPasteOpen] = useState(false)
+  const [pasteText, setPasteText] = useState('')
+  const [message, setMessage] = useState<string | null>(null)
+
+  const runImport = (text: string, fileName: string | null) => {
+    const result = importText(text, fileName)
+    setMessage(result.ok ? `Imported (${SOURCE_BADGE[result.adapter ?? ''] ?? result.adapter})` : (result.error ?? 'import failed'))
+  }
+
+  const applyPreset = (name: string) => {
+    const preset = RIGA_TRADE_PRESETS[name]
+    if (!preset) return
+    const next = structuredClone(document)
+    const put = next.legs.find((leg) => leg.put)?.put
+    if (!put) return
+    put.strike = preset.strike
+    put.knockInBarrier = preset.knockInBarrier
+    put.knockOutBarrier = preset.knockOutBarrier
+    put.couponRate = preset.couponRate
+    put.memoryCoupon = preset.memoryCoupon
+    applyDocument(next)
+  }
 
   return (
     <PanelCard
       title="riga-flow Trade Economics"
-      subtitle={product.name}
+      subtitle="fina.instrument/v1"
       className="h-full"
       bodyClassName="overflow-auto"
       actions={
@@ -110,27 +68,102 @@ export function RigaTradeEconomicsPanel() {
       }
     >
       <div className="space-y-3 p-3">
-        <p className="text-[10px] text-muted">{product.description}</p>
+        {/* Import / paste / reset ------------------------------------------- */}
+        <div className="flex flex-wrap items-center gap-1">
+          <button type="button" className="shock-button" onClick={() => fileRef.current?.click()}>
+            Import JSON
+          </button>
+          <button type="button" className="shock-button" onClick={() => setPasteOpen((open) => !open)}>
+            Paste
+          </button>
+          <button type="button" className="shock-button" onClick={() => { reset(); setMessage('Reset to the flat defaults') }}>
+            Reset
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            data-testid="instrument-file-input"
+            onChange={async (event) => {
+              const file = event.target.files?.[0]
+              if (file) runImport(await file.text(), file.name)
+              event.target.value = ''
+            }}
+          />
+          <span className="ml-auto rounded border border-border bg-panel px-1.5 py-0.5 text-[9px] text-muted">
+            {SOURCE_BADGE[document.source.adapter] ?? document.source.adapter}
+            {document.source.fileName ? ` · ${document.source.fileName}` : ''}
+          </span>
+        </div>
+
+        {pasteOpen && (
+          <div className="space-y-1">
+            <textarea
+              className="economics-number-input h-24 w-full font-mono text-[10px]"
+              placeholder="Paste instrument JSON (1.json, termsheet1.md.json, termsheet1.json)…"
+              value={pasteText}
+              onChange={(event) => setPasteText(event.target.value)}
+            />
+            <button
+              type="button"
+              className="shock-button"
+              data-testid="instrument-paste-import"
+              onClick={() => { runImport(pasteText, 'pasted.json'); setPasteOpen(false) }}
+            >
+              Import pasted JSON
+            </button>
+          </div>
+        )}
+
+        {message && (
+          <p className="rounded border border-border bg-surface px-2 py-1 text-[10px] text-muted" role="status">
+            {message}
+          </p>
+        )}
+
+        {/* Presets ---------------------------------------------------------- */}
         <div className="flex flex-wrap gap-1">
           {['Termsheet 1', 'Defensive Phoenix', 'Aggressive Yield', 'No Memory'].map((preset) => (
             <button key={preset} type="button" className="shock-button" onClick={() => applyPreset(preset)}>
               {preset}
             </button>
           ))}
-          <button type="button" className="shock-button" onClick={resetTrade}>
-            reset
-          </button>
         </div>
-        {groups.map(([group, fields]) => (
-          <div key={group}>
-            <p className="eyebrow mb-1">{group}</p>
-            <div className="grid grid-cols-2 gap-2">
-              {fields.map((field) => (
-                <Field key={String(field.key)} spec={field} value={trade[field.key]} onChange={updateTrade} />
+
+        {/* The document ----------------------------------------------------- */}
+        <DeepForm
+          value={document as unknown as DeepFormValue}
+          onChange={(next) => applyDocument(next as unknown as InstrumentDocument)}
+          fieldHints={INSTRUMENT_FIELD_HINTS}
+          layout={INSTRUMENT_LAYOUT}
+          defaultExpandedDepth={2}
+        />
+
+        {/* Findings --------------------------------------------------------- */}
+        {document.issues.length > 0 && (
+          <div>
+            <p className="eyebrow mb-1">Findings ({document.issues.length})</p>
+            <ul className="space-y-1">
+              {document.issues.map((issue, index) => (
+                <li
+                  key={`${issue.code}-${index}`}
+                  className={
+                    issue.severity === 'error'
+                      ? 'rounded border border-danger/40 bg-danger/10 px-2 py-1 text-[10px] text-danger'
+                      : issue.severity === 'warn'
+                        ? 'rounded border border-warning/40 bg-warning/10 px-2 py-1 text-[10px] text-text-main'
+                        : 'rounded border border-border bg-surface px-2 py-1 text-[10px] text-muted'
+                  }
+                >
+                  <span className="font-mono">{issue.code}</span> · {issue.message}
+                </li>
               ))}
-            </div>
+            </ul>
           </div>
-        ))}
+        )}
+
+        {/* price_trade — the authority -------------------------------------- */}
         <div>
           <p className="eyebrow mb-1">price_trade</p>
           {price.status === 'error' ? (

@@ -147,7 +147,9 @@ interface InstrumentState {
   marketSource: MarketSource
   lastImport: ParseResult | null
   importText: (text: string, fileName?: string | null) => ParseResult
+  importMarketText: (text: string, fileName?: string | null) => ParseResult
   applyDocument: (next: InstrumentDocument) => void
+  applyMarket: (next: InstrumentDocument['market']) => void
   setMarketSource: (source: MarketSource) => void
   updateSimulation: (patch: Partial<InstrumentSimulation>) => void
   reset: () => void
@@ -175,6 +177,27 @@ export const useInstrumentStore = create<InstrumentState>((set, get) => ({
 
   applyDocument: (next) => {
     const document = normalise(next, get().document)
+    set({ document })
+    persist(document)
+    pushFlat(document, get().marketSource)
+  },
+
+  importMarketText: (text, fileName = null) => {
+    const result = parseInstrumentText(text, fileName)
+    if (!result.ok || !result.document) {
+      set({ lastImport: result })
+      return result
+    }
+    // Replace only the market; keep the current legs/identity.
+    const merged = normalise({ ...get().document, market: result.document.market }, get().document)
+    set({ document: merged, marketSource: 'document', lastImport: result })
+    persist(merged)
+    pushFlat(merged, 'document')
+    return result
+  },
+
+  applyMarket: (next) => {
+    const document = normalise({ ...get().document, market: next }, get().document)
     set({ document })
     persist(document)
     pushFlat(document, get().marketSource)
