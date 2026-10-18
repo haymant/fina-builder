@@ -22,6 +22,7 @@ import type {
   RigaGovernanceEvidence,
   RigaHealth,
   RigaMarketEntry,
+  RigaMcConvergence,
   RigaMcDiagnostics,
   RigaPlExplain,
   RigaPricePut,
@@ -70,6 +71,7 @@ const TOOLS_WITH_REQUEST = new Set<string>([
   'get_branch_stats',
   'get_distributions',
   'get_mc_diagnostics',
+  'mc_convergence',
   'build_cashflows',
   'execution_events',
   'compute_risk',
@@ -210,6 +212,11 @@ export function useRigaDistributions(): AsyncState<RigaDistributions> {
 
 export function useRigaMcDiagnostics(): AsyncState<RigaMcDiagnostics> {
   return useRigaTool<RigaMcDiagnostics>('get_mc_diagnostics', () => ({}))
+}
+
+/** Monte-Carlo convergence series (PV / SE / CI / KI / KO vs path count). */
+export function useRigaMcConvergence(): AsyncState<RigaMcConvergence> {
+  return useRigaTool<RigaMcConvergence>('mc_convergence', () => ({}))
 }
 
 // --- Risk -------------------------------------------------------------------

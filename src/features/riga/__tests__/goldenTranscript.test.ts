@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { RIGA_TRANSCRIPT, TAC_TRANSCRIPT } from '../../../tests/mocks/transcripts'
 
-const RIGA_TOOLS_SHA256 = 'dbc3074f4c0dac35fd7c0c95c6f6b1b60347e2ce81f0cf5bc658148cd86c6e1e'
+const RIGA_TOOLS_SHA256 = 'bbaa45b5fc76c158c02063e4e01cad66af756baa0d97d2797fd20800e0d538bf'
 const TAC_TOOLS_SHA256 = '6813ee7e366f554ad1ce09f69cb2614889573cf77522952749bf4ae0eefe7945'
 
 function sha256(value: unknown): string {
@@ -17,7 +17,7 @@ function sha256(value: unknown): string {
 const REQUIRED_RIGA_TOOLS = [
   'health', 'price_put', 'price_trade', 'explain_pv_attribution', 'list_markets', 'get_market', 'get_ledger',
   'query_execution_net', 'query_risk_net', 'get_branch_stats', 'get_distributions', 'get_mc_diagnostics',
-  'risk_batch', 'compute_book_risk', 'price_book_async', 'scenario', 'validate_greeks', 'recommend_scenarios',
+  'mc_convergence', 'risk_batch', 'compute_book_risk', 'price_book_async', 'scenario', 'validate_greeks', 'recommend_scenarios',
   'query_path_cube', 'execution_events', 'get_path', 'replay_path', 'pl_explain', 'valuation_explain',
   'root_cause', 'export_governance_evidence', 'freeze_baseline', 'compare_corpus', 'triage_regression',
 ]

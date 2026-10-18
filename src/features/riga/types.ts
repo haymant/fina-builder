@@ -269,6 +269,24 @@ export interface RigaMcDiagnostics {
   stats: TransitionStats[] | unknown
 }
 
+/** One Monte-Carlo convergence point (`mc_convergence`). */
+export interface RigaConvergencePoint {
+  paths: number
+  pv: number
+  se: number
+  relativeSe: number
+  lower: number
+  upper: number
+  ki: number
+  ko: number
+}
+
+export interface RigaMcConvergence {
+  points: RigaConvergencePoint[]
+  final: RigaConvergencePoint | null
+  traceLevel: string
+}
+
 export interface RigaAssetGreeks {
   assetIndex: number
   delta: number

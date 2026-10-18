@@ -162,6 +162,10 @@ same commit, and **no hot-loop change** (G2).
 
 - **P3a `mc_convergence`** — PV / SE / CI / KI / KO / percentiles vs path count →
   the 10 Monte Carlo Diagnostics tiles + `ConvergenceHealth` + `SimulationEfficiency`.
+  **Status (2026-10-18):** engine tool landed and verified — `mc_convergence`
+  (additive, one batched call, `TraceLevel::Off` ⇒ final point only), frozen SHA
+  bumped, transcript re-recorded (36 tools), `useRigaMcConvergence` hook added.
+  The 10 MC tiles are the remaining P3a UI work.
 - **P3b `distributions_histogram`** — per-metric histogram `values[]` + percentiles →
   Distribution Analysis (Payoff Histogram, Distribution Explorer).
 - **P3c `risk_detailed`** — theta, rho, fxDelta, `bucketVegas[]`, crossGamma →
@@ -230,7 +234,7 @@ additive riga tool — P3).
 |---|---|---|
 | **Monte Carlo Diagnostics** | | |
 | Simulation Summary | `riga-statistics-summary` | **covered** |
-| PV Convergence · CI Shrinkage · Error vs Path Count · Percentile Convergence · KI/KO Probability Convergence · Distribution Stability · Simulation Efficiency · Convergence Health | — (demo has a 10-point series; riga is a snapshot) | **engine P3a** |
+| PV Convergence · CI Shrinkage · Error vs Path Count · Percentile Convergence · KI/KO Probability Convergence · Distribution Stability · Simulation Efficiency · Convergence Health | `mc_convergence` (P3a) | **tool ready · tiles pending (P3a)** |
 | **Distribution Analysis** | | |
 | Payoff Histogram · Selected Path | — (needs histogram `values[]`) | **engine P3b** |
 | Distribution Explorer · Metric Compare | — (needs histogram `values[]`) | **engine P3b** |
