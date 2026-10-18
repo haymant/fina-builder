@@ -49,7 +49,8 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    allowedHosts: ['5173-isfrrzvtdzt80v0qqywhj-41cb09c2.sg2.manus.computer'],
+    // Manus public preview hostnames vary by session but remain under this domain.
+    allowedHosts: ['.manus.computer'],
     // Same-origin proxies. The webview cannot call the local engines directly:
     // riga-mcp sends no CORS / private-network headers, so the browser blocks the
     // request (leaving it pending). Proxying keeps every request same-origin.

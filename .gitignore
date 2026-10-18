@@ -46,6 +46,8 @@ lcov.info
 !.env.example
 
 .riga
+# Local TAC lake data downloaded/generated during development.
+.lake/
 # RIGA MCP registry written at runtime
 .riga-mcp-registry.json
 .draft

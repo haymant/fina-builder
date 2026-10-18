@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:all": "concurrently -k -n riga,tac,web -c blue,magenta,green \"npm:backend:dev\" \"npm:mcp:http:tac\" \"npm:dev\"",
+    "dev:http": "node scripts/dev-http.mjs",
     "dev:web": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",

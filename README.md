@@ -25,7 +25,8 @@ drives them.
 - Rust/Cargo. The version is pinned in `rust-toolchain.toml` (currently **1.99.0**);
   `rustup` installs it automatically, so `cargo build` just works.
 - **The engines.** `riga-flow` and `tac-engine` live under `modules/` as standalone
-  workspaces (they are *excluded* from the root workspace). Build them once:
+  workspaces (they are *excluded* from the root workspace). The `dev:http` launcher
+  builds their HTTP binaries automatically; Rust/Cargo must be installed first:
 
   ```bash
   cargo build --release --manifest-path modules/riga-flow/Cargo.toml   # → modules/riga-flow/target/release/riga-mcp
@@ -48,10 +49,32 @@ drives them.
 
 ### 1. Web mode (browser + HTTP engines) — three processes
 
+Alpaca credentials are optional. Without them, `tac-engine` serves Yahoo Finance daily stock
+history and free Yahoo/ECB daily FX rates; account/order tools and Alpaca-only data (such as
+intraday bars, quotes, options, and streams) are unavailable. Set both `APCA_API_KEY_ID` and
+`APCA_API_SECRET_KEY` in the shell or `modules/tac-engine/.env` to enable those features (template:
+`modules/tac-engine/.env.example`). If `TAC_LAKE_DIR` is unset, `dev:http` uses the absolute
+workspace path `.lake/`; an explicit environment or `.env` value takes precedence. The lake can be
+empty and will be populated on demand with supported daily history. The launcher never supplies
+placeholder credentials or synthetic market data.
+
 ```bash
 npm ci
-npm run dev:all          # riga-mcp (http) + tac-engine (http bridge) + Vite
+npm run dev:http          # builds both Rust backends, then starts them with Vite (CPU default)
+# Optional: enable CUDA for riga-mcp; requires CUDA Toolkit 13+ and a visible NVIDIA GPU.
+npm run dev:http -- --cuda
+# Optional: bind Vite to 0.0.0.0 for a forwarded/public preview; backend ports remain local.
+npm run dev:http -- --public
 ```
+
+`npm run dev:all` remains available when both backend binaries have already been built. The
+`dev:http` command builds `riga-mcp` and `tac-engine` before launching all three services,
+checks that ports 5173/8788/8790 are free, and stops the other processes if one exits. CPU is
+the default. The first build may take several minutes because `tac-engine` bundles DuckDB;
+subsequent runs reuse the compiled artifacts. `--cuda` adds the `riga-mcp` `gpu` Cargo feature (CUDA 13+); `tac-engine` remains
+CPU-only. The CUDA option is explicit and fails early when the toolkit or NVIDIA GPU is not
+available; omit it on Manus. This is separate from `tauri:dev:cuda`, which enables CUDA for
+RIGA's local GGUF inference in the desktop shell.
 
 | | |
 | --- | --- |
@@ -69,7 +92,8 @@ npm run dev              # vite
 ```
 
 > Starting only `npm run dev` gives you a frontend with **no** engines; the tiles then show
-> their unavailable/error state (they never fall back to fake data). Start the engines too.
+> their unavailable/error state (they never fall back to fake data). Use `npm run dev:http`
+> to build and start the HTTP backends with the frontend.
 
 Configuration: `VITE_RIGA_UPSTREAM` / `VITE_TAC_UPSTREAM` override the proxy targets, and
 `VITE_RIGA_TRANSPORT=tauri|http` / `VITE_TAC_TRANSPORT=tauri|http` force a transport
@@ -88,6 +112,10 @@ forwards `.env` files (repo root, app-data, `modules/tac-engine/.env`, `modules/
 to the engine children, so `TAC_LAKE_DIR`, `APCA_*` and `FRED_API_KEY` work without exporting
 shell variables. Keys live in the host environment or a user-owned `.env` only — never in the
 UI, logs or persisted state.
+
+The TAC desktop sidecar still uses the same stdio transport and full Alpaca tool set when both
+API keys are configured. If both are omitted, it starts in the same Yahoo daily-stock/FX fallback
+mode as web mode; account/order tools are omitted, and Alpaca-only market data remains unavailable.
 
 #### Optional NVIDIA CUDA backend
 
