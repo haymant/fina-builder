@@ -62,14 +62,15 @@ not a validation result.
 ## 2. Change the TRADE (the core test)
 
 In **Trade Economics (riga)** → `Legs → Leg 1 → Put leg` → set
-**Strike (× initial)** from `0.78` → **`0.60`** (a deep-ITM put: bigger payoff).
+**Strike (× initial)** from `0.78` → **`0.60`** (a *lower* exercise: a **cheaper**
+put leg and a **higher** total note PV; the knock-in probability is unchanged).
 
 Expected, per tile:
 
 | Tile | Tool | Expected |
 |---|---|---|
-| Trade Economics | `price_trade` | **PV rises**; engine model unchanged; seed unchanged |
-| Leg Attribution | `explain_pv_attribution` + `query_risk_net` | **Down-and-in put PV rises**, **Total PV rises**, **KI probability rises**, per-transition Δ/ν change |
+| Trade Economics | `price_trade` | **total PV rises**; engine model unchanged; seed unchanged |
+| Leg Attribution | `explain_pv_attribution` + `query_risk_net` | **Down-and-in put PV falls**, **Total PV rises**, **KI probability unchanged**, per-transition Δ/ν change |
 | Statistics Summary | `get_branch_stats` `get_mc_diagnostics` `get_distributions` | PV, MC error, KI rate change together |
 | Risk Net *(watcher)* | `query_risk_net` | the pinned transition's Δ/ν and the per-transition table change (§2.1) |
 | Explain Net *(watcher)* | `get_ledger` | the pinned ledger row's populations / PV impact change (§2.1) |
@@ -96,9 +97,17 @@ Expected, per tile:
 - **Market Explorer (riga)** — same reason.
 
 **Pass criteria:** every tile in the table changes in the *expected direction*
-(a deeper strike ⇒ larger down-and-in put ⇒ larger total PV and higher KI
-probability), the negative controls do not change, and no tile shows an error
-stripe. **Footer run ids stay stable** (only the trade changed, not the market).
+(a lower strike ⇒ a **cheaper** down-and-in put ⇒ a **higher** total note PV, with
+the KI probability unchanged), the negative controls do not change, and no tile
+shows an error stripe. **Footer run ids stay stable** (only the trade changed,
+not the market).
+
+> **Ground truth (measured with `riga-cli --call riga-flow/price_trade`, 2026-10-19).**
+> strike `0.60` → put `0.002713`, total PV `0.996124` · strike `0.78` → put
+> `0.021093`, total `0.977744` · strike `0.90` → put `0.036312`, total `0.962525`;
+> `ki_probability` `0.148267` for all three. A lower exercise makes the put
+> **cheaper** and the note **more valuable**; KI is strike-independent. The note's
+> total is `funding + coupon − put`, which is why it moves opposite to the put leg.
 
 ### 2.1 The Petri net — one source of truth, the rest are watchers
 
@@ -147,24 +156,25 @@ It no longer does. The layout is **1 diagram + 4 inspectors**:
 > `−0.00066` · ν `−0.0331`. If you see `0.0000` on a node, the tile is talking to a
 > stale `riga-mcp` binary — rebuild it (`cargo build --release -p riga-mcp`).
 
-**Expected after a deeper strike (0.78 → 0.60):**
+**Expected after a lower strike (0.78 → 0.60):**
 
 | Element | Expectation |
 |---|---|
-| `final_fixing_eki` (down-and-in put) node/row | Δ impact **grows in magnitude**, ν impact **grows**, the tint intensifies |
+| `final_fixing_eki` (down-and-in put) node/row | Δ impact **shrinks in magnitude**, ν impact **shrinks** (a cheaper put), the tint fades — the *sign* is unchanged |
 | `daily_global_ko` / `memory_coupon` | change modestly (KO/coupon driven, not strike driven) |
-| Risk Net `DV01` / `Correlation ρ` | change (a bigger put carries more rate/correlation sensitivity) |
-| Risk Net per-asset table | delta more negative; gamma and vega larger in magnitude |
+| Risk Net `DV01` / `Correlation ρ` | change (a cheaper put carries less rate/correlation sensitivity) |
+| Risk Net per-asset table | delta less negative; gamma and vega smaller in magnitude |
 | Explain Net pinned row | populations before/after and PV impact change |
 | Transition Detail | populations / Δ / ν for the pinned transition change |
-| Token Detail | sampled `putPayoff` values rise; KI-hit proportion rises |
+| Token Detail | sampled `putPayoff` values fall (a cheaper put); the KI-hit proportion is **unchanged** (the KI barrier did not move) |
 
 **Judging pass/fail:**
 1. **All** Δ/ν labels, the per-transition table and the per-asset numbers must
    differ from baseline — that proves `query_risk_net` re-ran against the *edited*
    trade, not the on-disk fixture.
 2. A transition's impact **sign must be stable** across the two runs; only the
-   magnitude should grow. A sign flip on a *trade* edit is a red flag.
+   magnitude may change (it **shrinks** for the put when the strike is lowered).
+   A sign flip on a *trade* edit is a red flag.
 3. The **graph shape must not change**, and dragged node positions must survive
    the re-run (selection changes must not snap nodes back).
 
@@ -228,7 +238,7 @@ depend on that axis.
 
 | Tile | Tool | Watch | Trade edit | Market edit |
 |---|---|---|---|---|
-| Cashflow Summary (riga) | `build_cashflows` | mean per-leg PV, sampled paths | put PV rises | curves/vols change |
+| Cashflow Summary (riga) | `build_cashflows` | mean per-leg PV, sampled paths | put PV falls; funding/coupon legs drive the total up | curves/vols change |
 | Cashflow Timeline (riga) | `build_cashflows` | expected coupon PV + paid prob per period | coupon/put legs shift | discounting shifts |
 | Distribution Summary (riga) | `get_distributions` | worst-of deciles, KI rate, mean put | KI rate + mean put rise | distribution shifts |
 | Payoff Histogram (riga) | `distributions_histogram` | PV histogram + percentiles | mean/percentiles shift | shift |

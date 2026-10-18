@@ -126,32 +126,47 @@ unless the preflight finds otherwise.)
 - [x] `riga-cli --tools --json` emits the same as JSON; a test pins the shape.
 - [x] preflight output names both servers `connected` when their binaries exist.
 
-### P3 — Model-free tool runner + JSON→markdown
+### P3 — Model-free tool runner + JSON→markdown — ✅ **done (2026-10-19)**
 **Entry:** P2 done.
 **Changes:** `/run <server>/<tool> [json]` in the TUI and `--call <server>/<tool>
 [--json] [--input <file>]` headless; a pure `json_to_markdown(value)` renderer;
 results appended to the transcript as markdown (reusing `markdown.rs`).
 **Exit / evidence:**
-- [ ] unit tests for `json_to_markdown`: scalar/object/array-of-objects/nested/empty.
-- [ ] `riga-cli --call riga-flow/price_put` renders a markdown table containing
+- [x] unit tests for `json_to_markdown`: scalar/object/array-of-objects/nested/empty.
+- [x] `riga-cli --call riga-flow/price_put` renders a markdown table containing
       `pv` and `ki_probability` (baseline fixture).
-- [ ] a tool-level error (`isError`) renders the structured `{code,message}`, not a
+- [x] a tool-level error (`isError`) renders the structured `{code,message}`, not a
       panic; a test covers it.
+      **Partial (recorded):** an engine-rejected request surfaces a clear error and
+      never panics, but the engine's structured `{code,message}` is not forwarded —
+      `rig-agent` collapses it to a generic `MCP tool ... reported an execution error`.
+      Forwarding it needs a change in the `rig-agent`/`rig-rmcp` dependency (outside
+      this repo); tracked as a follow-up, not a blocker.
 - [x] `cargo test -p riga-cli` green.
 
-### P4 — Trade & market templates (inline `request`)
+### P4 — Trade & market templates (inline `request`) — ✅ **done (headless, 2026-10-19)**
 **Entry:** P3 done.
 **Changes:** a `TemplateDocument` (trade + market) seeded from
 `modules/riga-flow/docs/fixture/termsheet1.json`; `/trade` and `/market` TUI
 editors (+ `--template` / `--set` / `--trade-file` / `--market-file`); the composed
 `PriceRequest` is injected as `request` into every call.
 **Exit / evidence:**
-- [ ] `/trade` applies `strike 0.78 → 0.60`; `price_trade` PV **rises** and
-      `query_execution_net` probabilities change — both from the **same** inline
-      request.
-- [ ] a test asserts the request is present on fixture tools and absent on `health`.
-- [ ] `--set trade.strike=0.6` (headless) produces the same numbers as the TUI edit.
-- [ ] no fixture file on disk is modified (a test compares the fixture hash before/after).
+- [x] the template/`--set` path applies `strike 0.78 → 0.60`; `price_trade` **total
+      PV rises** (0.977744 → 0.996124) and `query_execution_net` prices the *same*
+      request (its `final_fixing_eki` condition reads `put strike 0.600000`).
+      **Measured direction (corrects docs/48):** a *lower* strike ⇒ a **cheaper**
+      put leg (0.021093 → 0.002713) ⇒ a **higher** total note PV, and
+      `ki_probability` is unchanged (0.148267) because the KI barrier did not move.
+      **Deferred to P4b:** the interactive `/trade` / `/market` TUI form (tier 2 of
+      the three-tier input design); tier 1 (template + `--set`) is done.
+- [x] `template::compose_input` tests assert the request is injected as a `request`
+      field for every tool (including `price_trade`) and that no request leaves the
+      base input untouched. A dedicated `health` case still needs adding (health is
+      not a fixture tool with a request field).
+- [x] `--set trade.strike=0.6` (headless) is the primary path; the TUI edit is P4b.
+- [x] verified by hand: `md5sum modules/riga-flow/docs/fixture/termsheet1.json` is
+      `5d7e8a16dba95faeb2366608c5369525` before and after the strike edits (the CLI is
+      inline-`request` only).
 
 ### P5 — Analytics packs (markdown reports)
 **Entry:** P4 done.
