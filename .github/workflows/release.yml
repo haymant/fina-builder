@@ -1,19 +1,32 @@
-# Release pipeline: tag a version, get Linux/Windows/macOS binaries and a GitHub Release.
+# Release pipeline: tag a version, get desktop + Android binaries and a GitHub Release.
 #
-#   git tag -a v0.1.1 -m "0.1.1" && git push origin v0.1.1
+#   git tag -a v0.2.0 -m "0.2.0" && git push origin v0.2.0
 #
 # Jobs, in order:
-#   1. release-create  — validates the tag, stamps the version into the manifests and
-#                       opens a DRAFT release, so a half-built release is never visible
-#                       as "latest".
-#   2. desktop         — Tauri bundles per platform: Linux (AppImage/deb/rpm),
-#                       macOS (dmg, Intel + Apple Silicon), Windows (msi + setup.exe).
-#   3. release-publish — flips the draft to published. It needs 2 to be green,
-#                       so a failed platform build can never ship a partial release.
+#   1. release-create  — validates the tag, opens a DRAFT release, so a half-built
+#                        release is never visible as "latest".
+#   2. desktop         — Tauri bundles, per platform:
+#                          linux-x86_64   .deb / .rpm / AppImage
+#                          linux-cuda     .deb (NVIDIA; needs libcuda + CUDA runtime)
+#                          windows-x86_64 .msi / -setup.exe
+#                          macos-aarch64  .dmg (Metal, CPU fallback)
+#                          macos-x86_64   .dmg
+#   3. android         — one APK per ABI, signed with a disposable CI key.
+#   4. release-publish — flips the draft to published once desktop + android are
+#                        green. linux-cuda is deliberately NOT a dependency: it is
+#                        the slowest job (installs the CUDA toolkit) and uploads
+#                        its own assets, so a CUDA failure cannot block the release.
 #
-# Signing: no secrets are required. If the APPLE_* / WINDOWS_* secrets below exist they
-# are picked up automatically by the Tauri CLI and the bundles are signed (and
-# notarised); otherwise the artifacts are unsigned and Gatekeeper/SmartScreen warn.
+# The bundled engines (`riga-mcp`, `tac-engine`) are NOT in this repo — they live
+# in the `modules/` submodules. Checkout therefore fetches submodules, and
+# `beforeBuildCommand` (`npm run mcp:sidecar:engines`) builds + stages them into
+# `src-tauri/binaries/<bin>-<host-triple>` for Tauri's `bundle.externalBin`.
+# Android has no host shell for stdio engines, so its build overrides
+# `externalBin` and the sidecar step (see the android job).
+#
+# Signing: no secrets are required. If the APPLE_* / WINDOWS_* secrets exist they
+# are picked up by the Tauri CLI and the bundles are signed; otherwise the
+# artifacts are unsigned and Gatekeeper/SmartScreen warn.
 
 name: release
 
@@ -23,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to build a release from, e.g. v0.1.0'
+        description: 'Existing tag to build a release from, e.g. v0.2.0'
         required: true
         type: string
 
@@ -80,40 +93,32 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PRERELEASE: ${{ steps.validate.outputs.prerelease }}
 
+  # ---------------------------------------------------------------------------
+  # Desktop, CPU + macOS Metal. `--bundles` is explicit per platform because
+  # `bundle.targets: "all"` on macOS also emits the bare `.app` directory, which
+  # cannot be uploaded as a release asset.
+  # ---------------------------------------------------------------------------
   desktop:
     name: Desktop ${{ matrix.label }}
     needs: release-create
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       VERSION: ${{ needs.release-create.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # `--bundles` is set explicitly per platform rather than taking
-          # `bundle.targets: "all"` from tauri.conf.json: "all" on macOS also
-          # produces the bare `.app` directory, which cannot be uploaded as a
-          # release asset (and the .dmg already contains it).
-          #   linux  -> .deb, .rpm, AppImage
-          #   macos  -> .dmg (universal app inside)
-          #   windows-> .msi and setup.exe (NSIS)
           - label: linux-x86_64
             os: ubuntu-24.04
             args: '--bundles deb,rpm,appimage'
             targets: ''
-          # macos-15/macos-14/macos-latest are Apple Silicon runners; the Intel
-          # image is `macos-15-intel` (macos-13 was retired by GitHub).
-          #
-          # `minimumSystemVersion` in tauri.conf.json (11.0) makes the Tauri CLI
-          # export `MACOSX_DEPLOYMENT_TARGET`. llama.cpp's ggml needs >= 10.15
-          # for std::filesystem; 11.0 also matches the Rust aarch64 target
-          # default so ggml and the final link agree (a lower ggml target links
-          # without `___isPlatformVersionAtLeast`). `deploymentTarget` below only
-          # keys the rust-cache so a stale CMake tree is never reused.
+          # macos-15 / macos-15-intel are the current Apple runners (macos-13
+          # retired). Every aarch64 Mac supports Metal, and it still falls back to
+          # CPU, so there is no separate CPU macOS build.
           - label: macos-aarch64
             os: macos-15
-            args: '--target aarch64-apple-darwin --bundles dmg'
+            args: '--target aarch64-apple-darwin --bundles dmg --features metal'
             targets: 'aarch64-apple-darwin'
             deploymentTarget: '11.0'
           - label: macos-x86_64
@@ -126,9 +131,12 @@ jobs:
             args: '--bundles msi,nsis'
             targets: ''
     steps:
+      # `submodules: true` brings in `modules/riga-flow` + `modules/tac-engine`,
+      # which `beforeBuildCommand` builds into Tauri sidecars.
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+          submodules: true
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -140,33 +148,36 @@ jobs:
           targets: ${{ matrix.targets }}
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: . -> target
-          # Include the macOS deployment target in the key: llama-cpp-sys
-          # configures CMake with `always_configure(false)` and reuses the
-          # cached build tree, so a cache restored from a different
-          # deployment target would keep the stale `-mmacosx-version-min`.
+          workspaces: |
+            . -> target
+            modules/riga-flow -> target
+            modules/tac-engine -> target
           key: desktop-${{ matrix.label }}-${{ matrix.deploymentTarget || 'default' }}
       - name: Install Tauri Linux prerequisites
         if: runner.os == 'Linux'
         run: ./scripts/ci/install-tauri-linux-deps.sh
-      - name: Clear any stale llama.cpp CMake build tree
-        if: runner.os == 'macOS'
+      # Metal (macOS aarch64): link the toolchain's compiler-rt archive, which
+      # provides `___isPlatformVersionAtLeast` — a symbol Rust's `-nodefaultlibs`
+      # link omits, so without it the Metal build fails to link. Mirrors the
+      # vendored `modules/riga` workflow.
+      - name: Set macOS Metal build environment
+        if: matrix.label == 'macos-aarch64'
+        shell: bash
         run: |
           set -euo pipefail
-          # llama-cpp-sys configures CMake with `always_configure(false)` and
-          # reuses its build tree. A tree restored by rust-cache from an earlier
-          # deployment target keeps the stale `-mmacosx-version-min`, so drop the
-          # cached llama.cpp build/install output before configuring.
-          find target -type d -name 'llama-cpp-sys-2-*' -prune -exec rm -rf {} + 2>/dev/null || true
+          echo "MACOSX_DEPLOYMENT_TARGET=10.15" >> "$GITHUB_ENV"
+          echo "CMAKE_OSX_DEPLOYMENT_TARGET=10.15" >> "$GITHUB_ENV"
+          echo "GGML_METAL=ON" >> "$GITHUB_ENV"
+          resource_dir="$(clang -print-resource-dir)"
+          echo "RUSTFLAGS=-C link-arg=${resource_dir}/lib/darwin/libclang_rt.osx.a" >> "$GITHUB_ENV"
+          xcodebuild -downloadComponent MetalToolchain || true
       - name: Stamp the release version into the manifests
         run: node scripts/set-version.mjs ${{ needs.release-create.outputs.version }}
       - name: Forward the signing secrets only when they are actually set
         shell: bash
         # An *unset* secret expands to an empty string, and tauri-action reads an
         # empty APPLE_CERTIFICATE/WINDOWS_CERTIFICATE as "sign with this
-        # certificate" — it then dies in `security import` with
-        # `SecKeychainItemImport: One or more parameters ... not valid`.
-        # Forwarding only non-empty values keeps unsigned builds unsigned.
+        # certificate" and then dies in `security import`.
         run: |
           set -euo pipefail
           forwarded=0
@@ -202,19 +213,189 @@ jobs:
           # Machine-readable asset names: <name>_<version>_<platform>_<arch>.<ext>
           releaseAssetNamePattern: '[name]_[version]_[platform]_[arch].[ext]'
           args: ${{ matrix.args }}
-          # Also keep the bundles as workflow artifacts, so a failed upload to
-          # the release does not mean the builds are lost.
           uploadWorkflowArtifacts: true
+
+  # ---------------------------------------------------------------------------
+  # Linux + CUDA — NVIDIA machines only. Built without a release upload, then
+  # published under a `-cuda` suffix so it never replaces the CPU installers.
+  # Not a dependency of release-publish (see the header comment).
+  # ---------------------------------------------------------------------------
+  linux-cuda:
+    name: Desktop linux-cuda
+    needs: release-create
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          submodules: true
+      - name: Install Tauri Linux prerequisites
+        run: ./scripts/ci/install-tauri-linux-deps.sh
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: '12.6.3'
+          method: network
+          # nvcc + cudart/cublas (what llama.cpp links) without the driver
+          # packages the `cuda` meta-package would pull onto a GPU-less runner.
+          sub-packages: '["toolkit"]'
+          log-file-suffix: 'linux-cuda.txt'
+      - name: Configure the CUDA build
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Turing → Hopper; the full llama.cpp arch list dominates the build.
+          echo "CMAKE_CUDA_ARCHITECTURES=75;80;86;89;90" >> "$GITHUB_ENV"
+          echo "CMAKE_POSITION_INDEPENDENT_CODE=ON" >> "$GITHUB_ENV"
+          echo "CMAKE_CUDA_FLAGS=-Xcompiler=-fPIC" >> "$GITHUB_ENV"
+          if [ -n "${CUDA_PATH:-}" ]; then
+            echo "CUDA_LIBRARY_PATH=${CUDA_PATH}" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            modules/riga-flow -> target
+            modules/tac-engine -> target
+          key: desktop-linux-cuda
+      - name: Stamp the release version into the manifests
+        run: node scripts/set-version.mjs ${{ needs.release-create.outputs.version }}
+      - name: Build the CUDA .deb (no release upload yet)
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Only a .deb: AppImage tooling downloads and rpm packaging is slow, and
+          # the CPU job already ships those.
+          args: '--features cuda --bundles deb'
+          uploadWorkflowArtifacts: true
+      - name: Publish the CUDA .deb under a -cuda name
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(src-tauri/target/release/bundle/*/*)
+          uploaded=0
+          for file in "${files[@]}"; do
+            [ -f "$file" ] || continue
+            renamed="$(dirname "$file")/$(basename "$file" | sed 's/^\([A-Za-z0-9._-]*\)/\1-cuda/')"
+            cp "$file" "$renamed"
+            gh release upload "$TAG" "$renamed" --clobber
+            uploaded=$((uploaded + 1))
+          done
+          echo "Published $uploaded CUDA asset(s) to $TAG"
+          if [ "$uploaded" -eq 0 ]; then
+            echo "::error::No bundle files found under src-tauri/target/release/bundle"
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Android — one APK per ABI. The desktop engines are host stdio binaries with
+  # no shell on Android, so this build drops `externalBin` and the sidecar step;
+  # the app then shows its engine-less empty state (see the release notes). A
+  # disposable CI key signs the APKs; they must not be treated as production.
+  # ---------------------------------------------------------------------------
+  android:
+    name: Android APKs
+    needs: release-create
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      VERSION: ${{ needs.release-create.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Set up the Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install the Android platform + NDK
+        run: |
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.13846066"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.13846066" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.13846066" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          key: android
+      - run: npm ci
+      - name: Initialize the generated Android project
+        run: npm run tauri -- android init --ci
+      - name: Stamp the release version into the manifests
+        run: node scripts/set-version.mjs ${{ env.VERSION }}
+      - name: Build the release APKs (no desktop sidecars)
+        shell: bash
+        run: |
+          set -euo pipefail
+          config='{"bundle":{"externalBin":[]},"build":{"beforeBuildCommand":"npm run build"}}'
+          npm run tauri -- android build --apk --split-per-abi --config "$config"
+      - name: Sign the APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          keystore="$RUNNER_TEMP/fina-android.jks"
+          password="fina-android-preview"
+          keytool -genkeypair -noprompt -v \
+            -keystore "$keystore" -storetype JKS \
+            -storepass "$password" -keypass "$password" \
+            -alias fina-android -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Fina Builder Preview"
+          apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          mkdir -p dist/android
+          mapfile -d '' apks < <(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' -print0)
+          if ((${#apks[@]} == 0)); then
+            echo "No release APKs were produced" >&2
+            exit 1
+          fi
+          for apk in "${apks[@]}"; do
+            abi="$(basename "$(dirname "$(dirname "$apk")")")"
+            case "$abi" in
+              arm64-v8a) abi=arm64 ;;
+              armeabi-v7a) abi=arm ;;
+              x86) abi=x86 ;;
+              x86_64) abi=x86_64 ;;
+            esac
+            output="dist/android/fina-builder_${VERSION}_${abi}.apk"
+            cp "$apk" "$output"
+            "$apksigner" sign --ks "$keystore" --ks-key-alias fina-android \
+              --ks-pass "pass:$password" --key-pass "pass:$password" "$output"
+            "$apksigner" verify --verbose "$output"
+            ls -lh "$output"
+          done
+      - name: Attach the APKs to the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" dist/android/*.apk --clobber
 
   release-publish:
     name: Publish release
-    needs: [release-create, desktop]
+    needs: [release-create, desktop, android]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       # `gh release` resolves the repository from the git remote, so it fails
-      # with "not a git repository" without a checkout. --repo is passed as well
-      # so the job cannot depend on the checkout's remote name.
+      # with "not a git repository" without a checkout.
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}

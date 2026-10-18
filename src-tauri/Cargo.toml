@@ -1,6 +1,6 @@
 [package]
 name = "payoff-explorer"
-version = "0.1.0"
+version = "0.2.0"
 description = "Fina Builder desktop shell with Tauri IPC and embedded local llama.cpp assistant"
 authors = ["fina"]
 license = "MIT"
