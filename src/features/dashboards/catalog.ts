@@ -76,6 +76,7 @@ export const TILE_CATALOG: TileMeta[] = [
   { id: 'riga-economics-impact-summary', type: 'RigaEconomicsImpactSummary', title: 'Economics Impact Summary (riga)', description: 'Base expected PV, coupon/put PV, KO/KI (trade_design).', group: 'riga-flow', icon: 'Δ' },
   { id: 'riga-sensitivity-tornado', type: 'RigaSensitivityTornado', title: 'Sensitivity Tornado (riga)', description: 'Trade parameters ranked by one-step PV impact (trade_design).', group: 'riga-flow', icon: '◀' },
   { id: 'riga-parameter-impact-matrix', type: 'RigaParameterImpactMatrix', title: 'Parameter Impact Matrix (riga)', description: 'ΔPV / ΔKI / ΔKO per trade parameter (trade_design).', group: 'riga-flow', icon: '▦' },
+  { id: 'riga-master-explain-waterfall', type: 'RigaMasterExplainWaterfall', title: 'Master Explain Waterfall (riga)', description: 'Base PV → market explain → residual → current PV (valuation_explain).', group: 'riga-flow', icon: '⇣' },
   { id: 'riga-token-detail', type: 'RigaTokenDetail', title: 'Token Detail', description: 'Bounded sample of the tokens in a place, with replay.', group: 'riga-flow', icon: '◦' },
   { id: 'riga-risk-net', type: 'RigaRiskNet', title: 'Risk Net', description: 'Layer 2 risk propagation over the same transitions.', group: 'riga-flow', icon: 'Σ' },
   { id: 'riga-explain-net', type: 'RigaExplainNet', title: 'Explain Net', description: 'Layer 3 ledger overlay: condition, populations, PV impact, evidence.', group: 'riga-flow', icon: '≡' },

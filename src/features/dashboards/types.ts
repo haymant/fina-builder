@@ -19,6 +19,7 @@ export type TileType =
   | 'RigaPayoffHistogram' | 'RigaDistributionExplorer'
   | 'RigaGreeksTable' | 'RigaGreeksWaterfall' | 'RigaBucketVega'
   | 'RigaEconomicsImpactSummary' | 'RigaSensitivityTornado' | 'RigaParameterImpactMatrix'
+  | 'RigaMasterExplainWaterfall'
   | 'RigaGovernanceEvidence' | 'RigaRootCause' | 'RigaRegressionTriage' | 'RigaGreeksSanity'
   | 'RigaStressBands' | 'RigaMarketSnapshot' | 'RigaHealthRun' | 'RigaTradeEconomics' | 'RigaMarketData'
   // tac-engine market-data tiles (additive; handoff §6.7)

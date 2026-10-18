@@ -770,3 +770,83 @@ export const RigaSelectedPathTile = memo(function RigaSelectedPathTile() {
     </RigaPanel>
   )
 })
+
+/** Base PV → market explain → residual → current PV (`valuation_explain`). */
+export const RigaMasterExplainWaterfallTile = memo(function RigaMasterExplainWaterfallTile() {
+  const state = useRigaValuationExplain()
+  const { tokens } = useTheme()
+  return (
+    <RigaPanel
+      title="Master Explain Waterfall"
+      subtitle="valuation_explain · base → current bridge"
+      tool="valuation_explain"
+      state={state}
+    >
+      {(data) => {
+        const steps = [
+          { name: 'Base PV', value: data.basePv, delta: false },
+          ...(data.contributions ?? []).map((c) => ({ name: c.factor, value: c.contribution, delta: true })),
+          { name: 'Residual', value: data.residual, delta: true },
+          { name: 'Current PV', value: data.currentPv, delta: false },
+        ]
+        const helpers: number[] = []
+        const positives: Array<number | string> = []
+        const negatives: Array<number | string> = []
+        const totals: Array<number | string> = []
+        let running = 0
+        for (const step of steps) {
+          if (!step.delta) {
+            helpers.push(0)
+            positives.push('-')
+            negatives.push('-')
+            totals.push(step.value)
+            running = step.value
+          } else {
+            const end = running + step.value
+            helpers.push(Math.min(running, end))
+            if (step.value >= 0) {
+              positives.push(step.value)
+              negatives.push('-')
+            } else {
+              positives.push('-')
+              negatives.push(-step.value)
+            }
+            totals.push('-')
+            running = end
+          }
+        }
+        const base = chartBase(tokens)
+        const option = {
+          ...base,
+          grid: { left: 48, right: 16, top: 28, bottom: 58 },
+          xAxis: {
+            ...(base.xAxis as object),
+            type: 'category',
+            data: steps.map((s) => s.name),
+            axisLabel: { color: tokens.muted, fontSize: 8, rotate: 25, interval: 0 },
+          },
+          yAxis: { ...(base.yAxis as object) },
+          series: [
+            { name: 'helper', type: 'bar', stack: 'total', silent: true, itemStyle: { color: 'transparent' }, data: helpers },
+            { name: 'increase', type: 'bar', stack: 'total', itemStyle: { color: tokens.success }, data: positives },
+            { name: 'decrease', type: 'bar', stack: 'total', itemStyle: { color: tokens.danger }, data: negatives },
+            { name: 'total', type: 'bar', stack: 'total', itemStyle: { color: tokens.primary }, data: totals },
+          ],
+        }
+        return (
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="grid shrink-0 grid-cols-2 gap-2 p-3 sm:grid-cols-4">
+              <Kpi label="Base PV" value={num(data.basePv)} />
+              <Kpi label="Market explain" value={num(data.predictedDpv)} />
+              <Kpi label="Residual" value={num(data.residual)} tone={Math.abs(data.residual) > 1e-6 ? 'warning' : 'success'} />
+              <Kpi label="Current PV" value={num(data.currentPv)} tone="primary" />
+            </div>
+            <div className="min-h-0 flex-1 p-2">
+              <ReactECharts option={option} style={{ height: '100%', width: '100%' }} notMerge />
+            </div>
+          </div>
+        )
+      }}
+    </RigaPanel>
+  )
+})

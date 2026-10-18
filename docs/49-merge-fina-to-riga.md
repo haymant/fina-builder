@@ -197,7 +197,11 @@ same commit, and **no hot-loop change** (G2).
   per-parameter PV/KI/KO + per-leg deltas; `TraceLevel::Off` ⇒ PV delta only;
   `fx` none) and **3 tiles ported** — Economics Impact Summary, Sensitivity
   Tornado, Parameter Impact Matrix.
-- **P3f `explain_bridge`** — previousPV→current bridge → Master Explain Waterfall.
+- **P3f `explain_bridge`** — **frontend-only (no engine work).** The demo "previous
+  PV → market explain → residual → current PV" bridge is exactly the
+  `valuation_explain` payload riga already returns, so the **Master Explain
+  Waterfall (riga)** tile is built directly from `useRigaValuationExplain` — no new
+  tool. **Ported (2026-10-18).**
 
 **Exit (per tool):**
 - [ ] new cargo test: CRN-consistent, **one call** powers every bump/series point
