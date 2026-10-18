@@ -6,26 +6,29 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-export const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30)
-export const MS_PER_DAY = 86_400_000
+import { EXCEL_EPOCH_MS, MS_PER_DAY, toIsoDate } from '../../../lib/dates.ts'
+
+export { EXCEL_EPOCH_MS, MS_PER_DAY }
 export const DAYS_PER_YEAR = 365
 export const AXIS_EPSILON = 1e-9
 
+/** Excel/Murex serial → `YYYY-MM-DD`; ISO and other shapes via the heuristic. */
 export const isoFromSerial = (serial: any): string =>
+  toIsoDate(serial) ??
   new Date(EXCEL_EPOCH_MS + Number(serial) * MS_PER_DAY).toISOString().slice(0, 10)
 export const serialFromIso = (iso: string): number =>
   Math.round((Date.parse(iso) - EXCEL_EPOCH_MS) / MS_PER_DAY)
 export const isDate = (value: unknown): value is string =>
-  typeof value === 'string' && !Number.isNaN(Date.parse(value))
+  typeof value === 'string' && toIsoDate(value) !== null
 export const stripMarket = (name: unknown): string =>
   String(name ?? '')
     .trim()
     .replace(/\s+[A-Z]{2}$/, '')
     .toUpperCase()
 export const yearsFrom = (maturity: number | string, asOf: string): number => {
-  const ms =
-    typeof maturity === 'number' ? EXCEL_EPOCH_MS + maturity * MS_PER_DAY : Date.parse(maturity)
-  return Number.isNaN(ms) ? NaN : (ms - Date.parse(asOf)) / (MS_PER_DAY * DAYS_PER_YEAR)
+  const iso = toIsoDate(maturity)
+  if (!iso) return NaN
+  return (Date.parse(iso) - Date.parse(asOf)) / (MS_PER_DAY * DAYS_PER_YEAR)
 }
 
 export function businessDays(fromIso: string, toIso: string): number {

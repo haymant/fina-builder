@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, type ReactNode } from 'react'
 import { useExplorerStore } from '../../store/explorerStore'
+import { toChartTokens } from './colors'
 
 export const themeTokens = {
   // Aligned to finap's neutral shadcn palette (oklch), so both the app chrome
@@ -33,12 +34,18 @@ export const themeTokens = {
 } as const
 
 type ThemeTokens = (typeof themeTokens)[keyof typeof themeTokens]
-const ThemeContext = createContext<{ tokens: ThemeTokens; mode: 'dark' | 'light' }>({ tokens: themeTokens.dark, mode: 'dark' })
+
+// Charts get sRGB tokens: zrender (ECharts' canvas engine) cannot parse `oklch()`
+// and silently falls back to black, which is why chart axes/heatmaps ignored the
+// theme. CSS variables keep the authored oklch values.
+const chartTokens = { light: toChartTokens(themeTokens.light), dark: toChartTokens(themeTokens.dark) }
+
+const ThemeContext = createContext<{ tokens: ThemeTokens; mode: 'dark' | 'light' }>({ tokens: chartTokens.dark, mode: 'dark' })
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const mode = useExplorerStore((s) => s.theme)
-  const tokens = themeTokens[mode]
-  useEffect(() => { const root = document.documentElement; root.dataset.theme = mode; root.classList.toggle('light', mode === 'light'); root.classList.toggle('dark', mode === 'dark'); for (const [key, value] of Object.entries(tokens)) root.style.setProperty(`--theme-${key}`, value) }, [mode, tokens])
+  const tokens = chartTokens[mode]
+  useEffect(() => { const root = document.documentElement; root.dataset.theme = mode; root.classList.toggle('light', mode === 'light'); root.classList.toggle('dark', mode === 'dark'); for (const [key, value] of Object.entries(themeTokens[mode])) root.style.setProperty(`--theme-${key}`, value) }, [mode])
   return <ThemeContext.Provider value={{ tokens, mode }}>{children}</ThemeContext.Provider>
 }
 export function useTheme() { return useContext(ThemeContext) }

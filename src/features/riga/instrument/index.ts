@@ -29,3 +29,4 @@ export {
   MS_PER_DAY,
   DAYS_PER_YEAR,
 } from './decoders'
+export { toIsoDate, looksLikeDate, type DateParseOptions } from '../../../lib/dates.ts'
