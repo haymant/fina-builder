@@ -116,18 +116,32 @@ tests · `cargo test -p fina-kernel` 273 passed (2 ignored) · `cargo build
 - [x] Engine guard unchanged: `riga-engine` 43 passed · `riga-mcp` 9 passed, **no
       riga-flow diff** (transport-only phase).
 
-### P2 — Port the demo charts as riga tiles (frontend only)
-Sub-phases, each its own commit, each **zero engine diff** (G2):
-- **P2a** Monte Carlo diagnostics (10 demo tiles) ← `get_mc_diagnostics` + `get_distributions`
-- **P2b** Distribution Analysis (3) ← `get_distributions`
-- **P2c** Cashflow & PnL (5) ← `build_cashflows`
-- **P2d** Path / cube / payoff-graph (Path Analysis 4) ← `query_path_cube`, `get_path`, `replay_path`
-- **P2e** Market & Risk (5) ← `risk_batch`, `get_market`, `scenario`
-- **P2f** Valuation Explainability (7) ← `valuation_explain`
-- **P2g** Payoff Analysis + execution timeline/events ← `explain_pv_attribution`, `get_ledger`, `execution_events`
+### P2 — Port the demo charts that are already backed by riga data (frontend only)
 
-Per sub-phase **entrance:** the riga tool it consumes exists and is in the
-recorded transcript.
+> **P2 entrance result (2026-10-18) — FAILED for the series charts; reclassified.**
+> The original P2a entrance gate ("the riga tool exists and is in the recorded
+> transcript") does **not** hold for most demo charts: the demo tools return
+> **series / richer shapes** than riga's single-run outputs.
+>
+> | demo | riga (recorded transcript) |
+> |---|---|
+> | `get_mc_diagnostics` → **10-point convergence series** `mcDiagnostics[]` `{paths,pv,se,lower,upper,ki,ko,p05,p50,p95}` + `mcEfficiency[]` | `get_mc_diagnostics` → **single snapshot** `{pv, mc_error, relative_se, stats}` |
+> | `simulationBundle.distributions` → per-metric histogram `values[]` + `{mean,median,stdDev,p05,p95}` | `get_distributions` → `{count, ki_rate, mean_put, worst_final_deciles[10]}` |
+> | `risk.base` → `theta, rho, fxDelta, bucketVegas[], crossGamma` | `risk_batch` → `{assets[{delta,gamma,vega}], dv01, correlation_sensitivity}` |
+> | `valuation` → `previousPV`→`currentPV` bridge | `valuation_explain` → `{base_pv,current_pv,delta_pv,predicted_dpv,residual,contributions}` (**compatible**) |
+> | `cashflow` → `rows[]` + summary | `build_cashflows` → `{mean, paths, sample_paths, timeline}` (**partial**) |
+>
+> So the convergence / histogram / detailed-greeks / PnL charts are **engine**
+> work (moved to **P3**), not tile work. The readiness audit is Appendix A.
+
+**Port-ready now** (the riga data exists; only a tile is needed):
+- **P2a** Cashflow Summary + Cashflow Timeline ← `build_cashflows` (`mean`, `paths`, `timeline`)
+- **P2b** Risk Summary ← `risk_batch` (`base_pv`, per-asset Δ/Γ/ν, `dv01`, correlation)
+- **P2c** Distribution deciles / KI ← `get_distributions` (`worst_final_deciles`, `ki_rate`, `mean_put`)
+- **P2d** Path Timeline ← `query_path_cube` sample + `get_path`
+
+Per sub-phase **entrance:** the named riga tool is in the recorded transcript
+**with the fields listed above**.
 Per sub-phase **exit:**
 - [ ] the new riga tile(s) are registered (`catalog.ts`, `TileRenderer.tsx`,
       `TileTypes`) and render without throwing (`TileRenderer.test.tsx` count
@@ -139,22 +153,31 @@ Per sub-phase **exit:**
 - [ ] the six gate commands pass.
 - [ ] Appendix A row(s) marked **ported**.
 
-### P3 — Trade Design on the real engine (`compute_trade_analytics` replacement)
-**Entrance:** P2 complete; the 3 demo tiles still have no riga source.
-**Changes:**
-- add a **batched** trade-parameter bump tool to `riga-risk` + `riga-mcp`
-  (CRN, one call, `TraceLevel::Off` ⇒ aggregate only) — mirroring
-  `price_risk_batch` (G3);
-- bump the frozen tool-schema SHA in the same commit; re-record the transcript;
-- add the 3 riga Trade-Design tiles (`EconomicsImpactSummary`, `SensitivityTornado`,
-  `ParameterImpactMatrix`) against it.
-**Exit:**
-- [ ] `cargo test -p riga-risk -p riga-mcp` incl. a new test: the batch is
-      CRN-consistent and **one call** powers all bumps (assert call count = 1).
-- [ ] trace-off path test: `TraceLevel::Off` returns the aggregate without
-      per-bump detail.
+### P3 — Engine-backed surfaces (new riga tools), additive and trace-gated
+**Entrance:** the corresponding Appendix A rows are marked **engine**; P2 complete.
+
+Each item is one **additive** riga tool: one **batched** call (G3), `TraceLevel::Off`
+⇒ aggregate only, frozen tool-schema SHA bumped + transcript re-recorded in the
+same commit, and **no hot-loop change** (G2).
+
+- **P3a `mc_convergence`** — PV / SE / CI / KI / KO / percentiles vs path count →
+  the 10 Monte Carlo Diagnostics tiles + `ConvergenceHealth` + `SimulationEfficiency`.
+- **P3b `distributions_histogram`** — per-metric histogram `values[]` + percentiles →
+  Distribution Analysis (Payoff Histogram, Distribution Explorer).
+- **P3c `risk_detailed`** — theta, rho, fxDelta, `bucketVegas[]`, crossGamma →
+  Greeks Table, Bucket Vega, Greeks Waterfall, Risk Summary.
+- **P3d `pnl_timeline`** — per-path PnL over time → P&L Summary / P&L Timeline.
+- **P3e `trade_design`** — trade-parameter bump batch (CRN) → the 3 Trade Design tiles.
+- **P3f `explain_bridge`** — previousPV→current bridge → Master Explain Waterfall.
+
+**Exit (per tool):**
+- [ ] new cargo test: CRN-consistent, **one call** powers every bump/series point
+      (assert the valuation count), and `TraceLevel::Off` returns the aggregate only.
+- [ ] frozen tool-schema SHA bumped; transcript re-recorded; `goldenTranscript.test.ts` SHA updated.
 - [ ] `git diff --stat` shows **no** change to `note.rs`/`simd.rs`/`gpu.rs`/`qmc.rs` (G2).
-- [ ] the 3 tiles render populated data; the six gate commands pass.
+- [ ] `cargo test -p riga-mcp -- --test-threads=1` + `-p riga-engine` pass.
+- [ ] the ported tiles render populated data; the six gate commands pass.
+- [ ] Appendix A rows marked **ported**.
 
 ### P4 — Retire the demo UI lane
 **Entrance:** every demo-group tile in Appendix A is **ported**.
@@ -197,23 +220,49 @@ dependency of any shipped binary.
 
 ---
 
-## 5. Appendix A — demo → riga coverage matrix
+## 5. Appendix A — demo → riga readiness audit (verified 2026-10-18)
 
-Status legend: **riga-ready** (data already exposed) · **ported** (P2 done) ·
-**engine** (needs P3) · **n/a**.
+Status: **covered** (an existing riga tile already shows it) · **port-ready**
+(riga data exists; only a tile is needed — P2) · **engine** (needs a new,
+additive riga tool — P3).
 
-| Demo group (tiles) | riga data source | Status |
+| Demo tile (group) | riga source | Status |
 |---|---|---|
-| Monte Carlo Diagnostics (10) | `get_mc_diagnostics` | riga-ready |
-| Distribution Analysis (3) | `get_distributions` | riga-ready |
-| Cashflow & PnL (5) | `build_cashflows` | riga-ready |
-| Path Analysis (4) | `query_path_cube`, `get_path`, `replay_path` | riga-ready |
-| Market & Risk (5) | `risk_batch`, `get_market`, `scenario` | riga-ready |
-| Valuation Explainability (7) | `valuation_explain` | riga-ready (Taylor; PLVA folded) |
-| Payoff Analysis (2) | `explain_pv_attribution`, `get_ledger` | riga-ready |
-| Execution Timeline / Events (2) | `execution_events` | riga-ready |
-| Settlement / Payoff Evaluation / Observation Events (3) | ledger + branch stats | riga-ready |
-| **Trade Design (4)** | **— none —** | **engine (P3)** |
+| **Monte Carlo Diagnostics** | | |
+| Simulation Summary | `riga-statistics-summary` | **covered** |
+| PV Convergence · CI Shrinkage · Error vs Path Count · Percentile Convergence · KI/KO Probability Convergence · Distribution Stability · Simulation Efficiency · Convergence Health | — (demo has a 10-point series; riga is a snapshot) | **engine P3a** |
+| **Distribution Analysis** | | |
+| Payoff Histogram · Selected Path | — (needs histogram `values[]`) | **engine P3b** |
+| Distribution Explorer · Metric Compare | — (needs histogram `values[]`) | **engine P3b** |
+| Selected Path in Population | `query_path_cube` sample + `get_path` | **port-ready P2d** |
+| **Path Analysis** | | |
+| Path Timeline | `query_path_cube` sample + `get_path` | **port-ready P2d** |
+| Node Details | — (`get_path` has no `nodeDetails`) | **engine** |
+| Quantile Fan · Worst-of Evolution | — (needs a time series) | **engine** |
+| **Market & Risk** | | |
+| Risk Summary | `risk_batch` (`base_pv`, per-asset Δ/Γ/ν, `dv01`, ρ) | **port-ready P2b** |
+| Greeks Table · Bucket Vega · Greeks Waterfall | — (need theta/rho/fxDelta/`bucketVegas[]`) | **engine P3c** |
+| Scenario Comparison | `riga-scenario-comparison` | **covered** |
+| **Valuation Explainability** | | |
+| Valuation Explain Summary · Taylor Explain · PLVA Explain | `riga-taylor-explain` (PLVA folded) | **covered** |
+| Explain Ledger Table · Explorer · Reconciliation | `riga-explain-net` | **covered** |
+| Master Explain Waterfall | — (needs the previousPV→current bridge) | **engine P3f** |
+| **Cashflow & PnL** | | |
+| Cashflow Summary · Timeline · Detail Explorer | `build_cashflows` (`mean`, `paths`, `timeline`, `sample_paths`) | **port-ready P2a** |
+| P&L Summary · P&L Timeline | — (needs per-path PnL over time) | **engine P3d** |
+| **Payoff Analysis** | | |
+| Attribution | `riga-attribution` | **covered** |
+| Payoff Graph | — | **engine** |
+| **Settlement / Payoff Evaluation / Execution Timeline** | `riga-transition-detail`, `riga-execution-tape`, ledger | mostly **covered** |
+| Observation Explorer | — (needs an observation series) | **engine** |
+| **Trade Design** | | |
+| Trade Summary | `riga-trade-economics` | **covered** |
+| Economics Impact Summary · Sensitivity Tornado · Parameter Impact Matrix | — | **engine P3e** |
+
+**Tally:** ~24 demo tiles are **covered** by existing riga tiles, ~7 are
+**port-ready** (P2), and ~20 need **new additive riga tools** (P3). The demo→riga
+"chart gap" is therefore mostly an **engine-capability** gap, not a UI gap — which
+is why the P4/P5 retirements are gated on P3, not on P2.
 
 ---
 
