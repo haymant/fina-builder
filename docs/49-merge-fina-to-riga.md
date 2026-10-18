@@ -179,6 +179,10 @@ same commit, and **no hot-loop change** (G2).
   need a *ladder-aware* percentile series — deferred.
 - **P3c `risk_detailed`** — theta, rho, fxDelta, `bucketVegas[]`, crossGamma →
   Greeks Table, Bucket Vega, Greeks Waterfall, Risk Summary.
+  **Status (2026-10-18):** tool landed and verified (per-asset Δ/Γ/ν, `dv01`/`rho`,
+  correlation, one-day `theta`, `cross_gamma[][]`, `bucket_vegas[]`; `fx_delta = 0`
+  — riga has no FX factor) and **3 tiles ported**. Vega buckets are **per factor**;
+  term buckets need local-vol term bumps (deferred).
 - **P3d `pnl_timeline`** — per-path PnL over time → P&L Summary / P&L Timeline.
 - **P3e `trade_design`** — trade-parameter bump batch (CRN) → the 3 Trade Design tiles.
 - **P3f `explain_bridge`** — previousPV→current bridge → Master Explain Waterfall.
@@ -258,7 +262,7 @@ additive riga tool — P3).
 | Quantile Fan · Worst-of Evolution | — (needs a time series) | **engine** |
 | **Market & Risk** | | |
 | Risk Summary | `risk_batch` (`base_pv`, per-asset Δ/Γ/ν, `dv01`, ρ) | **ported P2b** |
-| Greeks Table · Bucket Vega · Greeks Waterfall | — (need theta/rho/fxDelta/`bucketVegas[]`) | **engine P3c** |
+| Greeks Table · Greeks Waterfall · Bucket Vega | `risk_detailed` (per-asset Δ/Γ/ν, θ/ρ, cross-γ, vega by factor) | **ported P3c** |
 | Scenario Comparison | `riga-scenario-comparison` | **covered** |
 | **Valuation Explainability** | | |
 | Valuation Explain Summary · Taylor Explain · PLVA Explain | `riga-taylor-explain` (PLVA folded) | **covered** |

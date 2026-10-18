@@ -25,6 +25,7 @@ import type {
   RigaCashflows,
   RigaDistributionsHistogram,
   RigaMcConvergence,
+  RigaRiskDetailed,
   RigaMcDiagnostics,
   RigaPlExplain,
   RigaPricePut,
@@ -75,6 +76,7 @@ const TOOLS_WITH_REQUEST = new Set<string>([
   'get_mc_diagnostics',
   'mc_convergence',
   'distributions_histogram',
+  'risk_detailed',
   'build_cashflows',
   'execution_events',
   'compute_risk',
@@ -230,6 +232,11 @@ export function useRigaCashflows(): AsyncState<RigaCashflows> {
 /** Per-metric histograms + percentiles (`distributions_histogram`). */
 export function useRigaDistributionsHistogram(): AsyncState<RigaDistributionsHistogram> {
   return useRigaTool<RigaDistributionsHistogram>('distributions_histogram', () => ({}))
+}
+
+/** Detailed risk: θ/ρ/cross-gamma/vega buckets + per-asset Δ/Γ/ν (`risk_detailed`). */
+export function useRigaRiskDetailed(): AsyncState<RigaRiskDetailed> {
+  return useRigaTool<RigaRiskDetailed>('risk_detailed', () => ({}))
 }
 
 // --- Risk -------------------------------------------------------------------

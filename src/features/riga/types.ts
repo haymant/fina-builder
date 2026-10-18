@@ -347,6 +347,30 @@ export interface RigaDistributionsHistogram {
   metrics: RigaMetricDistribution[]
 }
 
+export interface RigaRiskAsset {
+  assetIndex: number
+  delta: number
+  gamma: number
+  vega: number
+}
+
+export interface RigaBucketVega {
+  bucket: string
+  vega: number
+}
+
+export interface RigaRiskDetailed {
+  basePv: number
+  assets: RigaRiskAsset[]
+  dv01: number
+  rho: number
+  correlationSensitivity: number
+  theta: number
+  fxDelta: number
+  crossGamma: number[][]
+  bucketVegas: RigaBucketVega[]
+}
+
 export interface RigaAssetGreeks {
   assetIndex: number
   delta: number

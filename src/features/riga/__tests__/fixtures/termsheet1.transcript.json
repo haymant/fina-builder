@@ -5,7 +5,7 @@
     "name": "riga-mcp",
     "version": "0.1.0"
   },
-  "recordedAt": "2026-10-18T01:03:16.347Z",
+  "recordedAt": "2026-10-18T01:10:13.111Z",
   "tools": {
     "generate_paths": {
       "checksum": 13424780670936460000,
@@ -783,7 +783,7 @@
         ],
         "correlation_sensitivity": 0.00634053512862387,
         "dv01": -0.24440917914314575,
-        "frozen_at_unix": 1792285328,
+        "frozen_at_unix": 1792285747,
         "pv": 1.000264636050433
       },
       "name": "default"
@@ -2069,7 +2069,7 @@
         "cpu_gbm": true,
         "gpu": false
       },
-      "git_sha": "aa36328",
+      "git_sha": "872cdfe",
       "status": "ok",
       "version": "0.1.0"
     },
@@ -2748,6 +2748,48 @@
       "scenario_count": 13,
       "seed": 1729
     },
+    "risk_detailed": {
+      "assets": [
+        {
+          "asset_index": 0,
+          "delta": 0.00010385086366310271,
+          "gamma": 0.0000020186312266331885,
+          "vega": -0.04737495625849464
+        },
+        {
+          "asset_index": 1,
+          "delta": 0.00007014197931118322,
+          "gamma": 0.00006185728926856178,
+          "vega": -0.08983777718485908
+        }
+      ],
+      "base_pv": 1.000264636050433,
+      "bucket_vegas": [
+        {
+          "bucket": "#0",
+          "vega": -0.04737495625849464
+        },
+        {
+          "bucket": "#1",
+          "vega": -0.08983777718485908
+        }
+      ],
+      "correlation_sensitivity": 0.00634053512862387,
+      "cross_gamma": [
+        [
+          0,
+          -0.0000020430381183736904
+        ],
+        [
+          -0.0000020430381183736904,
+          0
+        ]
+      ],
+      "dv01": -0.24440917914314575,
+      "fx_delta": 0,
+      "rho": -0.24440917914314575,
+      "theta": 0.0003265247027786078
+    },
     "scenario": {
       "assets": [
         {
@@ -2840,7 +2882,7 @@
             "transition_id": "memory_coupon"
           }
         ],
-        "frozen_at_unix": 1792285328
+        "frozen_at_unix": 1792285747
       },
       "engine_model": "dupire_local_vol_calibrated_cpu",
       "evidence_refs": [
