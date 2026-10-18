@@ -27,6 +27,7 @@ import type {
   RigaMcConvergence,
   RigaRiskDetailed,
   RigaPathSeries,
+  RigaPercentileConvergence,
   RigaTradeDesign,
   RigaMcDiagnostics,
   RigaPlExplain,
@@ -82,6 +83,7 @@ const TOOLS_WITH_REQUEST = new Set<string>([
   'trade_design',
   'path_series',
   'payoff_graph',
+  'percentile_convergence',
   'build_cashflows',
   'execution_events',
   'compute_risk',
@@ -252,6 +254,11 @@ export function useRigaTradeDesign(): AsyncState<RigaTradeDesign> {
 /** Bounded-path GBM diagnostics: path/quantile/state series (`path_series`). */
 export function useRigaPathSeries(pathId = 0): AsyncState<RigaPathSeries> {
   return useRigaTool<RigaPathSeries>('path_series', () => ({ path_id: pathId }), { deps: [pathId] })
+}
+
+/** Terminal worst-of percentile bands across a path ladder (`percentile_convergence`). */
+export function useRigaPercentileConvergence(): AsyncState<RigaPercentileConvergence> {
+  return useRigaTool<RigaPercentileConvergence>('percentile_convergence', () => ({}))
 }
 
 // --- Risk -------------------------------------------------------------------

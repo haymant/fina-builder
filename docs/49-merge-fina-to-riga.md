@@ -230,7 +230,7 @@ separate, read-only code path.
 | **P3g-iii schedule/observation** | **frontend-only** — derived from `path_series` (per-step crossings + states + barrier levels); no separate tool needed | Observation Schedule, Schedule Explorer — ✅ **ported (2026-10-18)** |
 | **P3g-iv branch Sankey** | **frontend-only** — `get_branch_stats` + `query_execution_net` (real transition populations) | Branch Statistics (Sankey) — ✅ **ported (2026-10-18)** |
 | **P3g-v market explorers** | **frontend-only** — `get_market` (spots / flat ATM vols / correlation); Vol Surface from the instrument document's Dupire grid | Spot · Correlation **ported (2026-10-18)**; Vol Surface from the document; FX Spot **n/a** |
-| **P3g-vi percentile convergence** | ladder-aware percentile series | Percentile Convergence, Distribution Stability |
+| **P3g-vi percentile convergence** | bounded-cube **ladder** → terminal worst-of P05/P25/P50/P75/P95 across path counts | Percentile Convergence, Distribution Stability — ✅ **ported (2026-10-18)** |
 | **n/a** | — | P&L Summary (no accounting), FX Spot (no FX factor), Simulation Efficiency (VR efficiency study) |
 
 Per sub-phase **exit:** the six gate commands pass; the tile(s) render populated
@@ -289,7 +289,7 @@ additive riga tool — P3).
 | **Monte Carlo Diagnostics** | | |
 | Simulation Summary | `riga-statistics-summary` | **covered** |
 | PV Convergence · CI Shrinkage · Error vs Path Count · KI/KO Probability Convergence · Convergence Health | `mc_convergence` (P3a) | **ported P3a** |
-| Percentile Convergence · Distribution Stability | — (need a ladder-aware percentile series) | **engine (deferred)** |
+| Percentile Convergence · Distribution Stability | `percentile_convergence` (bounded ladder) | **ported P3g-vi** |
 | Simulation Efficiency | — (needs an efficiency ladder) | **engine** |
 | **Distribution Analysis** | | |
 | Payoff Histogram | `distributions_histogram` (PV bins) | **ported P3b** |
@@ -324,7 +324,7 @@ additive riga tool — P3).
 | Attribution | `riga-attribution` | **covered** |
 | Payoff Graph | `payoff_graph` — the full 8-transition product pipeline; also carried by `query_execution_net` | **ported P3g-ii** |
 | **Settlement / Payoff Evaluation / Execution Timeline** | `riga-transition-detail`, `riga-execution-tape`, ledger | mostly **covered** |
-| Observation Explorer | — (needs an observation series) | **engine** |
+| Observation Schedule · Schedule Explorer | `path_series` (steps + barrier hits + states) | **ported P3g-iii** |
 | **Trade Design** | | |
 | Trade Summary | `riga-trade-economics` | **covered** |
 | Economics Impact Summary · Sensitivity Tornado · Parameter Impact Matrix | `trade_design` (CRN trade-parameter bumps) | **ported P3e** |

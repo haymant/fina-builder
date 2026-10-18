@@ -22,7 +22,7 @@ export type TileType =
   | 'RigaMasterExplainWaterfall'
   | 'RigaPathTimeline' | 'RigaQuantileFan' | 'RigaWorstOfEvolution' | 'RigaBarrierHeatmap' | 'RigaStateOccupancy'
   | 'RigaBranchFlow' | 'RigaMarketExplorer' | 'RigaVolSurface' | 'RigaPayoffGraph'
-  | 'RigaObservationSchedule' | 'RigaScheduleExplorer'
+  | 'RigaObservationSchedule' | 'RigaScheduleExplorer' | 'RigaPercentileConvergence' | 'RigaDistributionStability'
   | 'RigaGovernanceEvidence' | 'RigaRootCause' | 'RigaRegressionTriage' | 'RigaGreeksSanity'
   | 'RigaStressBands' | 'RigaMarketSnapshot' | 'RigaHealthRun' | 'RigaTradeEconomics' | 'RigaMarketData'
   // tac-engine market-data tiles (additive; handoff §6.7)

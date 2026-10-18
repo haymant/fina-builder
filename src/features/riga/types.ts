@@ -463,6 +463,20 @@ export interface RigaPathSeries {
   finalBand?: RigaPathBand | null
 }
 
+export interface RigaPercentilePoint {
+  paths: number
+  p05: number
+  p25: number
+  p50: number
+  p75: number
+  p95: number
+}
+
+export interface RigaPercentileConvergence {
+  detailed: boolean
+  points: RigaPercentilePoint[]
+}
+
 export interface RigaAssetGreeks {
   assetIndex: number
   delta: number
