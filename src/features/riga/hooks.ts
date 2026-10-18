@@ -22,6 +22,7 @@ import type {
   RigaGovernanceEvidence,
   RigaHealth,
   RigaMarketEntry,
+  RigaCashflows,
   RigaMcConvergence,
   RigaMcDiagnostics,
   RigaPlExplain,
@@ -217,6 +218,11 @@ export function useRigaMcDiagnostics(): AsyncState<RigaMcDiagnostics> {
 /** Monte-Carlo convergence series (PV / SE / CI / KI / KO vs path count). */
 export function useRigaMcConvergence(): AsyncState<RigaMcConvergence> {
   return useRigaTool<RigaMcConvergence>('mc_convergence', () => ({}))
+}
+
+/** Per-leg cashflow mean, sampled paths and coupon timeline (`build_cashflows`). */
+export function useRigaCashflows(): AsyncState<RigaCashflows> {
+  return useRigaTool<RigaCashflows>('build_cashflows', () => ({}))
 }
 
 // --- Risk -------------------------------------------------------------------

@@ -14,7 +14,7 @@ export type TileType =
   // riga-flow tiles (additive; handoff §5.1b)
   | 'RigaPayoffPetriNet' | 'RigaTransitionDetail' | 'RigaTokenDetail' | 'RigaRiskNet' | 'RigaExplainNet'
   | 'RigaDataLineage' | 'RigaPathCubeQuery' | 'RigaExecutionTape' | 'RigaBookRisk' | 'RigaScenarioComparison'
-  | 'RigaTaylorExplain' | 'RigaStatisticsSummary' | 'RigaAttribution'
+  | 'RigaTaylorExplain' | 'RigaStatisticsSummary' | 'RigaAttribution' | 'RigaCashflowSummary' | 'RigaCashflowTimeline'
   | 'RigaGovernanceEvidence' | 'RigaRootCause' | 'RigaRegressionTriage' | 'RigaGreeksSanity'
   | 'RigaStressBands' | 'RigaMarketSnapshot' | 'RigaHealthRun' | 'RigaTradeEconomics' | 'RigaMarketData'
   // tac-engine market-data tiles (additive; handoff §6.7)

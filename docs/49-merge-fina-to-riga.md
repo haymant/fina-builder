@@ -135,7 +135,7 @@ tests · `cargo test -p fina-kernel` 273 passed (2 ignored) · `cargo build
 > work (moved to **P3**), not tile work. The readiness audit is Appendix A.
 
 **Port-ready now** (the riga data exists; only a tile is needed):
-- **P2a** Cashflow Summary + Cashflow Timeline ← `build_cashflows` (`mean`, `paths`, `timeline`)
+- **P2a** Cashflow Summary + Cashflow Timeline ← `build_cashflows` (`mean`, `paths`, `timeline`) — ✅ **ported (2026-10-18)**
 - **P2b** Risk Summary ← `risk_batch` (`base_pv`, per-asset Δ/Γ/ν, `dv01`, correlation)
 - **P2c** Distribution deciles / KI ← `get_distributions` (`worst_final_deciles`, `ki_rate`, `mean_put`)
 - **P2d** Path Timeline ← `query_path_cube` sample + `get_path`

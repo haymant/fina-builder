@@ -57,6 +57,8 @@ export const TILE_CATALOG: TileMeta[] = [
   { id: 'riga-payoff-petri-net', type: 'RigaPayoffPetriNet', title: 'Payoff Petri Net', description: 'Layer 1 execution net: places, transitions, token counts, firing probability.', group: 'riga-flow', icon: '◍' },
   { id: 'riga-transition-detail', type: 'RigaTransitionDetail', title: 'Transition Detail', description: 'Logic, populations, PV/Δ/ν impact and evidence for one transition.', group: 'riga-flow', icon: '◈' },
   { id: 'riga-attribution', type: 'RigaAttribution', title: 'Leg Attribution', description: 'PV by leg and PV/Δ/ν by transition (explain_pv_attribution).', group: 'riga-flow', icon: '▦' },
+  { id: 'riga-cashflow-summary', type: 'RigaCashflowSummary', title: 'Cashflow Summary (riga)', description: 'Mean per-leg PV and sampled paths (build_cashflows).', group: 'riga-flow', icon: '$' },
+  { id: 'riga-cashflow-timeline', type: 'RigaCashflowTimeline', title: 'Cashflow Timeline (riga)', description: 'Expected coupon PV and paid probability by period.', group: 'riga-flow', icon: '▤' },
   { id: 'riga-token-detail', type: 'RigaTokenDetail', title: 'Token Detail', description: 'Bounded sample of the tokens in a place, with replay.', group: 'riga-flow', icon: '◦' },
   { id: 'riga-risk-net', type: 'RigaRiskNet', title: 'Risk Net', description: 'Layer 2 risk propagation over the same transitions.', group: 'riga-flow', icon: 'Σ' },
   { id: 'riga-explain-net', type: 'RigaExplainNet', title: 'Explain Net', description: 'Layer 3 ledger overlay: condition, populations, PV impact, evidence.', group: 'riga-flow', icon: '≡' },

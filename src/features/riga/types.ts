@@ -287,6 +287,34 @@ export interface RigaMcConvergence {
   traceLevel: string
 }
 
+/** `build_cashflows`: mean leg PV, sampled paths, and the coupon timeline. */
+export interface RigaCashflowMean {
+  couponPv: number
+  funding: number
+  putPayoff: number
+}
+
+export interface RigaCashflowTimelinePoint {
+  period: number
+  expectedCouponPv: number
+  paidProbability: number
+}
+
+export interface RigaCashflowSamplePath {
+  pathId: number
+  pv: number
+  couponPv: number
+  funding: number
+  putPayoff: number
+}
+
+export interface RigaCashflows {
+  mean: RigaCashflowMean
+  paths: number
+  samplePaths: RigaCashflowSamplePath[]
+  timeline: RigaCashflowTimelinePoint[]
+}
+
 export interface RigaAssetGreeks {
   assetIndex: number
   delta: number
