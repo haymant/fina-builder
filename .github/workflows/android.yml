@@ -1,0 +1,128 @@
+# Standalone Android build. Dispatch it to (re)build and attach the APKs to an
+# existing release without rebuilding the desktops — the same steps also run
+# inline in `release.yml` on a tag push.
+#
+#   gh workflow run android.yml -f tag=v0.2.0
+#   gh workflow run android.yml -f tag=v0.2.0 -f publish=true
+#
+# `setup-android@v4` is required: v3 tries to install the retired `tools`
+# package and dies in `sdkmanager`.
+#
+# The desktop engines are host stdio binaries with no shell on Android, so this
+# build drops `externalBin` and the sidecar step; the app shows its engine-less
+# empty state. APKs are signed with a disposable CI key — not production.
+
+name: android
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach the APKs to (e.g. v0.2.0)'
+        required: true
+        type: string
+      publish:
+        description: 'Also publish the release if it is still a draft'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.event.inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  android:
+    name: Android APKs
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      TAG: ${{ github.event.inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Set up the Android SDK
+        uses: android-actions/setup-android@v4
+      - name: Install the Android platform + NDK
+        run: |
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.13846066"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.13846066" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.13846066" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+          key: android
+      - run: npm ci
+      - name: Initialize the generated Android project
+        run: npm run tauri -- android init --ci
+      - name: Stamp the release version into the manifests
+        run: node scripts/set-version.mjs "${TAG#v}"
+      - name: Build the release APKs (no desktop sidecars)
+        shell: bash
+        run: |
+          set -euo pipefail
+          config='{"bundle":{"externalBin":[]},"build":{"beforeBuildCommand":"npm run build"}}'
+          npm run tauri -- android build --apk --split-per-abi --config "$config"
+      - name: Sign the APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          keystore="$RUNNER_TEMP/fina-android.jks"
+          password="fina-android-preview"
+          keytool -genkeypair -noprompt -v \
+            -keystore "$keystore" -storetype JKS \
+            -storepass "$password" -keypass "$password" \
+            -alias fina-android -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Fina Builder Preview"
+          apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          version="${TAG#v}"
+          mkdir -p dist/android
+          mapfile -d '' apks < <(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' -print0)
+          if ((${#apks[@]} == 0)); then
+            echo "No release APKs were produced" >&2
+            exit 1
+          fi
+          for apk in "${apks[@]}"; do
+            abi="$(basename "$(dirname "$(dirname "$apk")")")"
+            case "$abi" in
+              arm64-v8a) abi=arm64 ;;
+              armeabi-v7a) abi=arm ;;
+              x86) abi=x86 ;;
+              x86_64) abi=x86_64 ;;
+            esac
+            output="dist/android/fina-builder_${version}_${abi}.apk"
+            cp "$apk" "$output"
+            "$apksigner" sign --ks "$keystore" --ks-key-alias fina-android \
+              --ks-pass "pass:$password" --key-pass "pass:$password" "$output"
+            "$apksigner" verify --verbose "$output"
+            ls -lh "$output"
+          done
+      - name: Attach the APKs to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" dist/android/*.apk --clobber
+      - name: Publish the release (optional)
+        if: ${{ github.event.inputs.publish == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$TAG" --draft=false --latest
