@@ -69,6 +69,21 @@ function jsonPointerOfUnsupportedRails(rails: PhoenixRails): InstrumentIssue[] {
   nonDefault('floorKI2', rails.floorKI2, false)
   nonDefault('PRNOKI1', rails.PRNOKI1, 0)
   nonDefault('PRNOKI2', rails.PRNOKI2, 0)
+  // `PRKI2` is the KI participation. In the captured Murex product the *active*
+  // leg encodes it as `-1` (unit magnitude; the investor-side sign is applied by
+  // the engine's `funding + coupon − put` aggregate) and `0` marks it inactive.
+  // riga-engine models a unit (100%) participation only, so any other magnitude
+  // (e.g. a real 50% participation) must surface rather than be silently priced
+  // at 100%. See docs/46 §14.1 (payoff normalisation — resolved 2026-10-18).
+  const prki2 = rails.PRKI2
+  if (prki2 !== null && Math.abs(prki2) !== 0 && Math.abs(prki2) !== 1) {
+    issues.push({
+      severity: 'warn',
+      code: 'engine.unsupported_rail',
+      path: '/legs/*/put/rails/PRKI2',
+      message: `PRKI2=${prki2} is a non-unit KI participation; riga-engine models a unit (100%) participation only`,
+    })
+  }
   return issues
 }
 

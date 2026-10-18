@@ -60,6 +60,36 @@ describe('murex-chunk adapter', () => {
     expect(put?.rails.raw).toHaveProperty('strikeKI2')
   })
 
+  it('accepts the captured unit KI participation (PRKI2 = -1)', () => {
+    expect(doc.issues.some((issue) => issue.path.endsWith('/PRKI2'))).toBe(false)
+  })
+
+  it('flags a non-unit KI participation (PRKI2)', () => {
+    const mutated = structuredClone(MUREX) as Record<string, unknown>
+    let mutatedCount = 0
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        node.forEach(walk)
+        return
+      }
+      if (node && typeof node === 'object') {
+        const obj = node as Record<string, unknown>
+        if ('PRKI2' in obj) {
+          obj.PRKI2 = -0.5
+          mutatedCount += 1
+        }
+        Object.values(obj).forEach(walk)
+      }
+    }
+    walk(mutated)
+    expect(mutatedCount).toBeGreaterThan(0)
+    const issue = decodeMurexChunk(mutated, 'mutated.json').issues.find((i) =>
+      i.path.endsWith('/PRKI2'),
+    )
+    expect(issue?.code).toBe('engine.unsupported_rail')
+    expect(issue?.message).toContain('PRKI2=-0.5')
+  })
+
   it('decodes the market, as-of and simulation', () => {
     expect(doc.market.symbols).toEqual(['ADBE', 'AMZN'])
     expect(doc.market.asOf).toBe('2026-09-07')

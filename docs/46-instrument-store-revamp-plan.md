@@ -12,8 +12,9 @@ edited with the `src/components/deep-form` editor.
 
 **Explicit non-goal:** the PUT payoff arithmetic in
 `modules/riga-flow/crates/riga-engine/src/note.rs` is **not** touched. The
-normalisation question (`PRKI2 × (WPS/StrikeKI2 − 1)`) is parked pending
-decisive legacy evidence. Nothing in this plan changes a priced number.
+normalisation question (`PRKI2 × (WPS/StrikeKI2 − 1)`) was **resolved on
+2026-10-18** in favour of the un-normalised convention the engine already
+implements (see §14.1). Nothing in this plan changes a priced number.
 
 ---
 
@@ -913,12 +914,28 @@ Murex dialects plus the riga fixture with one schema.
 
 ## 14. Open items (tracked, not blocking this plan)
 
-1. **Payoff normalisation** — `termsheet1.md.json` PV 0.020329 → 0.026063
-   (+23.4% on the normalised basis); pinned anchor 0.02112 and
-   `termsheet1-put-reconciliation.md:135` (~0.02113) sit on the un-normalised
-   basis. Parked pending decisive legacy evidence (`1.json` with one input
-   bumped + legacy PV; a later reval; the vol snapshot behind the 0.069+ quote;
-   a case with nonzero `PRKI2`/`capKI2`/`floorKI2`).
+1. ~~**Payoff normalisation**~~ — **resolved 2026-10-18: the engine's
+   arithmetic is correct; no priced number changes.**
+   - **The engine** (`note.rs:237`) computes `put = DF · max(strike − worst, 0)`
+     with `worst = spots/initial` (a *ratio*) — the **un-normalised** form.
+   - **The anchor** (`termsheet1.json` `expected.put`) pins the *same* convention
+     verbatim: `put_formula: "DF * E[ max(Exercise − WorstFinal, 0) * 1{WorstFinal ≤ KI} ]"`,
+     `units: per_unit_of_notional`, `value: 0.02112`, `tol_rel: 0.05`,
+     `provenance: pinned`. The alternative normalised form — `PRKI2 × (WPS/StrikeKI2 − 1)`,
+     i.e. ÷ `strikeKI2 = 0.78` — gives `0.020329 / 0.78 = 0.026063` → **+23.4 % off the
+     anchor**, so the anchor is **not** on that basis.
+   - **Evidence that the un-normalised read is right:** the captured rails are
+     `strikeKI2 = 0.78`, `capKI2 = false`, `floorKI2 = false`, and **`PRKI2 = -1`** — a
+     *unit-magnitude*, investor-side participation (`|PRKI2| = 1`; the sign is applied by
+     the engine's `pv = funding + coupon − put` aggregate). The inactive rails are `0`.
+   - **Reconciliation:** the current 30k/seed-1729 run gives PUT PV **0.020329** vs
+     0.02112 → **−3.75 %** (inside ±5 %); the fixture's `lane_spread` brackets it
+     (`put_daily_eki_lane 0.02022`, `put_eki_gated_dupire_lv 0.02198`).
+   - **Guardrail added** (the specific evidence the item wanted): `murexChunk.ts` now
+     warns (`engine.unsupported_rail`) when `|PRKI2| ∉ {0, 1}`, so a real non-100 %
+     participation surfaces instead of being silently priced at 100 %. Tests:
+     `adapters.test.ts` (`accepts the captured unit KI participation`, `flags a non-unit
+     KI participation`).
 2. **KO branch** — `1.json` `GKOLocked=[false,false]` ⇒ P03 global KO;
    `termsheet1` `GKOLocked=[true,false]` ⇒ P01 global memory KO. Carried in
    `put.koLocked`/`koDates`; no engine branch change.
