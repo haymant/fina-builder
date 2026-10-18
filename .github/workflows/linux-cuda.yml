@@ -1,0 +1,103 @@
+# Standalone Linux + CUDA build. Dispatch it to (re)build and attach the CUDA
+# `.deb` to an existing release without rebuilding the desktops — the same steps
+# also run inline in `release.yml` on a tag push.
+#
+#   gh workflow run linux-cuda.yml -f tag=v0.2.0
+#
+# A CUDA binary needs the NVIDIA driver (`libcuda`) plus the CUDA runtime
+# libraries at run time, so it is published under a `-cuda` name and never
+# replaces the CPU installer.
+
+name: linux-cuda
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach the CUDA .deb to (e.g. v0.2.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-cuda-${{ github.event.inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux-cuda:
+    name: linux-cuda
+    runs-on: ubuntu-22.04
+    timeout-minutes: 150
+    env:
+      TAG: ${{ github.event.inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag }}
+          submodules: true
+      - name: Install Tauri Linux prerequisites
+        run: ./scripts/ci/install-tauri-linux-deps.sh
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: '12.6.3'
+          method: network
+          # nvcc + cudart/cublas (what llama.cpp links), without the driver
+          # packages the `cuda` meta-package would pull onto a GPU-less runner.
+          sub-packages: '["toolkit"]'
+          log-file-suffix: 'linux-cuda.txt'
+      - name: Configure the CUDA build
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CMAKE_CUDA_ARCHITECTURES=75;80;86;89;90" >> "$GITHUB_ENV"
+          echo "CMAKE_POSITION_INDEPENDENT_CODE=ON" >> "$GITHUB_ENV"
+          echo "CMAKE_CUDA_FLAGS=-Xcompiler=-fPIC" >> "$GITHUB_ENV"
+          if [ -n "${CUDA_PATH:-}" ]; then
+            echo "CUDA_LIBRARY_PATH=${CUDA_PATH}" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            modules/riga-flow -> target
+            modules/tac-engine -> target
+          key: desktop-linux-cuda
+      - name: Stamp the release version into the manifests
+        run: node scripts/set-version.mjs "${TAG#v}"
+      - name: Build the CUDA .deb
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: '--features cuda --bundles deb'
+          uploadWorkflowArtifacts: true
+      - name: Attach the CUDA .deb to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # `src-tauri` is a root-workspace member → `<root>/target`.
+          shopt -s nullglob
+          debs=(target/release/bundle/deb/*.deb)
+          if ((${#debs[@]} == 0)); then
+            echo "::error::No .deb found under target/release/bundle/deb"
+            exit 1
+          fi
+          mkdir -p dist/cuda
+          out="dist/cuda/fina-builder_${TAG#v}_linux-cuda_amd64.deb"
+          cp "${debs[0]}" "$out"
+          gh release upload "$TAG" "$out" --clobber
+          echo "Attached $out to $TAG"

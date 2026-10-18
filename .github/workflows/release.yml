@@ -282,21 +282,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # `src-tauri` is a member of the root workspace, so its target dir is
+          # `<root>/target`, not `src-tauri/target` (unlike the vendored riga demo,
+          # which is a separate dir).
           shopt -s nullglob
-          files=(src-tauri/target/release/bundle/*/*)
-          uploaded=0
-          for file in "${files[@]}"; do
-            [ -f "$file" ] || continue
-            renamed="$(dirname "$file")/$(basename "$file" | sed 's/^\([A-Za-z0-9._-]*\)/\1-cuda/')"
-            cp "$file" "$renamed"
-            gh release upload "$TAG" "$renamed" --clobber
-            uploaded=$((uploaded + 1))
-          done
-          echo "Published $uploaded CUDA asset(s) to $TAG"
-          if [ "$uploaded" -eq 0 ]; then
-            echo "::error::No bundle files found under src-tauri/target/release/bundle"
+          debs=(target/release/bundle/deb/*.deb)
+          if ((${#debs[@]} == 0)); then
+            echo "::error::No .deb found under target/release/bundle/deb"
             exit 1
           fi
+          mkdir -p dist/cuda
+          out="dist/cuda/fina-builder_${VERSION}_linux-cuda_amd64.deb"
+          cp "${debs[0]}" "$out"
+          gh release upload "$TAG" "$out" --clobber
+          echo "Published $out to $TAG"
 
   # ---------------------------------------------------------------------------
   # Android — one APK per ABI. The desktop engines are host stdio binaries with
