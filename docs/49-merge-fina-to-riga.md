@@ -172,6 +172,11 @@ same commit, and **no hot-loop change** (G2).
   `Simulation Summary` is already covered by `riga-statistics-summary`.
 - **P3b `distributions_histogram`** — per-metric histogram `values[]` + percentiles →
   Distribution Analysis (Payoff Histogram, Distribution Explorer).
+  **Status (2026-10-18):** tool landed and verified (per metric `pv / put_payoff /
+  coupon_pv / funding / worst_final`: mean/median/std/P05/P50/P95/min/max + 20
+  equal-width bins; `TraceLevel::Off` ⇒ stats only), SHA bumped, transcript 37
+  tools, and **2 tiles ported**. Percentile Convergence / Distribution Stability
+  need a *ladder-aware* percentile series — deferred.
 - **P3c `risk_detailed`** — theta, rho, fxDelta, `bucketVegas[]`, crossGamma →
   Greeks Table, Bucket Vega, Greeks Waterfall, Risk Summary.
 - **P3d `pnl_timeline`** — per-path PnL over time → P&L Summary / P&L Timeline.
@@ -238,10 +243,13 @@ additive riga tool — P3).
 |---|---|---|
 | **Monte Carlo Diagnostics** | | |
 | Simulation Summary | `riga-statistics-summary` | **covered** |
-| PV Convergence · CI Shrinkage · Error vs Path Count · Percentile Convergence · KI/KO Probability Convergence · Distribution Stability · Simulation Efficiency · Convergence Health | `mc_convergence` (P3a) | **tool ready · tiles pending (P3a)** |
+| PV Convergence · CI Shrinkage · Error vs Path Count · KI/KO Probability Convergence · Convergence Health | `mc_convergence` (P3a) | **ported P3a** |
+| Percentile Convergence · Distribution Stability | — (need a ladder-aware percentile series) | **engine (deferred)** |
+| Simulation Efficiency | — (needs an efficiency ladder) | **engine** |
 | **Distribution Analysis** | | |
-| Payoff Histogram · Selected Path | — (needs histogram `values[]`) | **engine P3b** |
-| Distribution Explorer · Metric Compare | — (needs histogram `values[]`) | **engine P3b** |
+| Payoff Histogram | `distributions_histogram` (PV bins) | **ported P3b** |
+| Selected Path | `query_path_cube` sample | **ported P2d** |
+| Distribution Explorer · Metric Compare | `distributions_histogram` (per-metric stats) | **ported P3b** |
 | Worst-of deciles / KI (new) | `get_distributions` (`worst_final_deciles`, `ki_rate`, `mean_put`) | **ported P2c** |
 | Selected Path in Population | `query_path_cube` sample | **ported P2d** (Selected Path) |
 | **Path Analysis** | | |

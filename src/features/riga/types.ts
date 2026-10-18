@@ -320,6 +320,33 @@ export interface RigaCashflows {
   timeline: RigaCashflowTimelinePoint[]
 }
 
+/** One equal-width histogram bin (`distributions_histogram`). */
+export interface RigaDistributionBin {
+  lo: number
+  hi: number
+  count: number
+}
+
+export interface RigaMetricDistribution {
+  metric: string
+  count: number
+  mean: number
+  median: number
+  stdDev: number
+  p05: number
+  p50: number
+  p95: number
+  min: number
+  max: number
+  bins: RigaDistributionBin[]
+}
+
+export interface RigaDistributionsHistogram {
+  count: number
+  binCount: number
+  metrics: RigaMetricDistribution[]
+}
+
 export interface RigaAssetGreeks {
   assetIndex: number
   delta: number

@@ -68,6 +68,8 @@ export const TILE_CATALOG: TileMeta[] = [
   { id: 'riga-ki-convergence', type: 'RigaKiConvergence', title: 'KI Convergence (riga)', description: 'KI probability vs path count (mc_convergence).', group: 'riga-flow', icon: 'KI' },
   { id: 'riga-ko-convergence', type: 'RigaKoConvergence', title: 'KO Convergence (riga)', description: 'KO probability vs path count (mc_convergence).', group: 'riga-flow', icon: 'KO' },
   { id: 'riga-convergence-health', type: 'RigaConvergenceHealth', title: 'Convergence Health (riga)', description: 'Final estimator quality + the path ladder (mc_convergence).', group: 'riga-flow', icon: '●' },
+  { id: 'riga-payoff-histogram', type: 'RigaPayoffHistogram', title: 'Payoff Histogram (riga)', description: 'PV distribution histogram + percentiles (distributions_histogram).', group: 'riga-flow', icon: '▥' },
+  { id: 'riga-distribution-explorer', type: 'RigaDistributionExplorer', title: 'Distribution Explorer (riga)', description: 'Metric-comparison stats: mean/median/std/P05/P95 (distributions_histogram).', group: 'riga-flow', icon: '◒' },
   { id: 'riga-token-detail', type: 'RigaTokenDetail', title: 'Token Detail', description: 'Bounded sample of the tokens in a place, with replay.', group: 'riga-flow', icon: '◦' },
   { id: 'riga-risk-net', type: 'RigaRiskNet', title: 'Risk Net', description: 'Layer 2 risk propagation over the same transitions.', group: 'riga-flow', icon: 'Σ' },
   { id: 'riga-explain-net', type: 'RigaExplainNet', title: 'Explain Net', description: 'Layer 3 ledger overlay: condition, populations, PV impact, evidence.', group: 'riga-flow', icon: '≡' },

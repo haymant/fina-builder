@@ -23,6 +23,7 @@ import type {
   RigaHealth,
   RigaMarketEntry,
   RigaCashflows,
+  RigaDistributionsHistogram,
   RigaMcConvergence,
   RigaMcDiagnostics,
   RigaPlExplain,
@@ -73,6 +74,7 @@ const TOOLS_WITH_REQUEST = new Set<string>([
   'get_distributions',
   'get_mc_diagnostics',
   'mc_convergence',
+  'distributions_histogram',
   'build_cashflows',
   'execution_events',
   'compute_risk',
@@ -223,6 +225,11 @@ export function useRigaMcConvergence(): AsyncState<RigaMcConvergence> {
 /** Per-leg cashflow mean, sampled paths and coupon timeline (`build_cashflows`). */
 export function useRigaCashflows(): AsyncState<RigaCashflows> {
   return useRigaTool<RigaCashflows>('build_cashflows', () => ({}))
+}
+
+/** Per-metric histograms + percentiles (`distributions_histogram`). */
+export function useRigaDistributionsHistogram(): AsyncState<RigaDistributionsHistogram> {
+  return useRigaTool<RigaDistributionsHistogram>('distributions_histogram', () => ({}))
 }
 
 // --- Risk -------------------------------------------------------------------
