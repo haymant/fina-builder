@@ -26,6 +26,7 @@ import type {
   RigaDistributionsHistogram,
   RigaMcConvergence,
   RigaRiskDetailed,
+  RigaPathSeries,
   RigaTradeDesign,
   RigaMcDiagnostics,
   RigaPlExplain,
@@ -79,6 +80,7 @@ const TOOLS_WITH_REQUEST = new Set<string>([
   'distributions_histogram',
   'risk_detailed',
   'trade_design',
+  'path_series',
   'build_cashflows',
   'execution_events',
   'compute_risk',
@@ -244,6 +246,11 @@ export function useRigaRiskDetailed(): AsyncState<RigaRiskDetailed> {
 /** Trade-parameter bump batch: per-parameter PV/KI/KO deltas (`trade_design`). */
 export function useRigaTradeDesign(): AsyncState<RigaTradeDesign> {
   return useRigaTool<RigaTradeDesign>('trade_design', () => ({}))
+}
+
+/** Bounded-path GBM diagnostics: path/quantile/state series (`path_series`). */
+export function useRigaPathSeries(pathId = 0): AsyncState<RigaPathSeries> {
+  return useRigaTool<RigaPathSeries>('path_series', () => ({ path_id: pathId }), { deps: [pathId] })
 }
 
 // --- Risk -------------------------------------------------------------------

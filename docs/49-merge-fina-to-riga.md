@@ -139,7 +139,9 @@ tests · `cargo test -p fina-kernel` 273 passed (2 ignored) · `cargo build
 - **P2b** Risk Summary ← `risk_batch` (`base_pv`, per-asset Δ/Γ/ν, `dv01`, correlation) — ✅ **ported (2026-10-18)**
 - **P2c** Distribution deciles / KI ← `get_distributions` (`worst_final_deciles`, `ki_rate`, `mean_put`) — ✅ **ported (2026-10-18)**
 - **P2d** Selected Path ← `query_path_cube` sample (identity / worstFinal / KO / KI / put / PV + coupon-by-period) — ✅ **ported (2026-10-18)**
-  *(The demo "Path Timeline" — price over dates — is **not** portable: `get_path` has no price time series. Reclassified to **engine**.)*
+  *(The demo "Path Timeline" — price over dates — is served by the P3g-i `path_series`
+  tile (worst-of over steps), which builds a bounded cube rather than reusing
+  `get_path`.)*
 
 Per sub-phase **entrance:** the named riga tool is in the recorded transcript
 **with the fields listed above**.
@@ -223,7 +225,7 @@ separate, read-only code path.
 
 | Sub-phase | Tool | Tiles unlocked |
 |---|---|---|
-| **P3g-i `path_series`** | bounded GBM `PathCube` → selected-path worst-of series + population quantiles (P05/P25/P50/P75/P95) per step + barrier-crossing counts + state occupancy | Path Timeline, Quantile Fan, Worst-of Evolution, Barrier Heatmap, State Occupancy |
+| **P3g-i `path_series`** | bounded GBM `PathCube` → selected-path worst-of series + population quantiles (P05/P25/P50/P75/P95) per step + barrier-crossing counts + state occupancy | Path Timeline, Quantile Fan, Worst-of Evolution, Barrier Heatmap, State Occupancy — ✅ **ported (2026-10-18)** |
 | **P3g-ii `payoff_graph`** | `payoff::build_put_graph(spec)` → nodes/edges (additive graph accessor) | Payoff Graph |
 | **P3g-iii `observation_series`** | per-observation schedule + triggered counts from the cube | Observation Explorer, Schedule Explorer |
 | **P3g-iv branch Sankey** | **frontend-only** — `get_branch_stats` + `query_execution_net` (real 3-transition flow) | Branch Statistics (Sankey) |
@@ -296,9 +298,9 @@ additive riga tool — P3).
 | Worst-of deciles / KI (new) | `get_distributions` (`worst_final_deciles`, `ki_rate`, `mean_put`) | **ported P2c** |
 | Selected Path in Population | `query_path_cube` sample | **ported P2d** (Selected Path) |
 | **Path Analysis** | | |
-| Path Timeline | — (`get_path` has no price time series) | **engine** |
+| Path Timeline | `path_series` (selected-path worst-of series) | **ported P3g-i** |
 | Node Details | — (`get_path` has no `nodeDetails`) | **engine** |
-| Quantile Fan · Worst-of Evolution | — (needs a time series) | **engine** |
+| Quantile Fan · Worst-of Evolution | `path_series` (population P05–P95 bands) | **ported P3g-i** |
 | **Market & Risk** | | |
 | Risk Summary | `risk_batch` (`base_pv`, per-asset Δ/Γ/ν, `dv01`, ρ) | **ported P2b** |
 | Greeks Table · Greeks Waterfall · Bucket Vega | `risk_detailed` (per-asset Δ/Γ/ν, θ/ρ, cross-γ, vega by factor) | **ported P3c** |

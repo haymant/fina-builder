@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { RIGA_TRANSCRIPT, TAC_TRANSCRIPT } from '../../../tests/mocks/transcripts'
 
-const RIGA_TOOLS_SHA256 = '54dde9d4e7290730a9d1c51c889d824369e2ae9fe902ae8d1d67763080f68813'
+const RIGA_TOOLS_SHA256 = '0b52e0a4eb1685b52f5a111422134d4378363301382da2b08d4dee23000a69de'
 const TAC_TOOLS_SHA256 = '6813ee7e366f554ad1ce09f69cb2614889573cf77522952749bf4ae0eefe7945'
 
 function sha256(value: unknown): string {
@@ -15,10 +15,9 @@ function sha256(value: unknown): string {
 
 /** Every riga tool the UI calls must be present in the transcript. */
 const REQUIRED_RIGA_TOOLS = [
-  'health', 'price_put', 'price_trade', 'explain_pv_attribution', 'list_markets', 'get_market', 'get_ledger',
-  'query_execution_net', 'query_risk_net', 'get_branch_stats', 'get_distributions', 'get_mc_diagnostics',
+  'health', 'price_put', 'price_trade', 'explain_pv_attribution', 'list_markets', 'get_market', 'get_ledger',  'query_execution_net', 'query_risk_net', 'get_branch_stats', 'get_distributions', 'get_mc_diagnostics',
   'mc_convergence', 'distributions_histogram', 'risk_batch', 'compute_book_risk', 'price_book_async', 'scenario', 'validate_greeks', 'recommend_scenarios',
-  'recommend_scenarios', 'risk_detailed', 'trade_design',
+  'recommend_scenarios', 'risk_detailed', 'trade_design', 'path_series',
   'query_path_cube', 'execution_events', 'get_path', 'replay_path', 'pl_explain', 'valuation_explain',
   'root_cause', 'export_governance_evidence', 'freeze_baseline', 'compare_corpus', 'triage_regression',
 ]

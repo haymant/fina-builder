@@ -403,6 +403,46 @@ export interface RigaTradeDesign {
   parameters: RigaDesignParameter[]
 }
 
+export interface RigaPathSeriesPoint {
+  time: number
+  years: number
+  worstOf: number
+}
+export interface RigaPathBand {
+  time: number
+  years: number
+  p05: number
+  p25: number
+  p50: number
+  p75: number
+  p95: number
+}
+export interface RigaPathCrossing {
+  time: number
+  years: number
+  knockIn: number
+  knockOut: number | null
+}
+export interface RigaPathState {
+  time: number
+  years: number
+  belowKi: number
+  aboveKi: number
+  couponPaid: number
+}
+export interface RigaPathSeries {
+  paths: number
+  steps: number
+  detailed: boolean
+  selectedPath?: number
+  barriers?: { knockIn: number; knockOut: number | null; coupon: number | null }
+  series?: RigaPathSeriesPoint[]
+  bands?: RigaPathBand[]
+  crossings?: RigaPathCrossing[]
+  states?: RigaPathState[]
+  finalBand?: RigaPathBand | null
+}
+
 export interface RigaAssetGreeks {
   assetIndex: number
   delta: number
