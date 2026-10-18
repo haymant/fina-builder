@@ -31,12 +31,13 @@ describe('riga tiles resolve out of loading', () => {
     expect(screen.getByTestId('riga-net-canvas')).toBeInTheDocument()
   })
 
-  it('RiskNetTile renders the net canvas and per-asset table', async () => {
+  it('RiskNetTile is a watcher: KPIs + per-asset table, no second canvas', async () => {
     render(<RiskNetTile />)
     await settle()
     expect(screen.queryByText('Loading…')).toBeNull()
-    expect(screen.getByTestId('riga-net-canvas')).toBeInTheDocument()
     expect(screen.getByText('DV01')).toBeInTheDocument()
+    expect(screen.getByText('Per-asset Greeks')).toBeInTheDocument()
+    expect(screen.queryByTestId('riga-net-canvas')).toBeNull()
   })
 
   it('RigaStatisticsSummaryTile leaves the loader', async () => {

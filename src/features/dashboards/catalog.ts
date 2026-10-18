@@ -3,7 +3,7 @@ import type { Tile, TileType } from './types'
 export type TileMeta = Tile & { description: string; group: string; icon: string }
 export const TILE_CATALOG: TileMeta[] = [
   // --- riga-flow ---------------------------------------------------------
-  { id: 'riga-payoff-petri-net', type: 'RigaPayoffPetriNet', title: 'Payoff Petri Net', description: 'Layer 1 execution net: places, transitions, token counts, firing probability.', group: 'riga-flow', icon: '◍' },
+  { id: 'riga-payoff-petri-net', type: 'RigaPayoffPetriNet', title: 'Payoff Petri Net', description: 'Source of truth: the net diagram with an Execution / Risk / Explain layer switch.', group: 'riga-flow', icon: '◍' },
   { id: 'riga-transition-detail', type: 'RigaTransitionDetail', title: 'Transition Detail', description: 'Logic, populations, PV/Δ/ν impact and evidence for one transition.', group: 'riga-flow', icon: '◈' },
   { id: 'riga-attribution', type: 'RigaAttribution', title: 'Leg Attribution', description: 'PV by leg and PV/Δ/ν by transition (explain_pv_attribution).', group: 'riga-flow', icon: '▦' },
   { id: 'riga-cashflow-summary', type: 'RigaCashflowSummary', title: 'Cashflow Summary (riga)', description: 'Mean per-leg PV and sampled paths (build_cashflows).', group: 'riga-flow', icon: '$' },
@@ -40,8 +40,8 @@ export const TILE_CATALOG: TileMeta[] = [
   { id: 'riga-percentile-convergence', type: 'RigaPercentileConvergence', title: 'Percentile Convergence (riga)', description: 'Terminal worst-of P05/P50/P95 vs path count (percentile_convergence).', group: 'riga-flow', icon: '≋' },
   { id: 'riga-distribution-stability', type: 'RigaDistributionStability', title: 'Distribution Stability (riga)', description: 'P05–P95 worst-of bands across path counts (percentile_convergence).', group: 'riga-flow', icon: '◒' },
   { id: 'riga-token-detail', type: 'RigaTokenDetail', title: 'Token Detail', description: 'Bounded sample of the tokens in a place, with replay.', group: 'riga-flow', icon: '◦' },
-  { id: 'riga-risk-net', type: 'RigaRiskNet', title: 'Risk Net', description: 'Layer 2 risk propagation over the same transitions.', group: 'riga-flow', icon: 'Σ' },
-  { id: 'riga-explain-net', type: 'RigaExplainNet', title: 'Explain Net', description: 'Layer 3 ledger overlay: condition, populations, PV impact, evidence.', group: 'riga-flow', icon: '≡' },
+  { id: 'riga-risk-net', type: 'RigaRiskNet', title: 'Risk Net', description: 'Watcher: Δ/ν per transition for the node selected in the Payoff Petri Net.', group: 'riga-flow', icon: 'Σ' },
+  { id: 'riga-explain-net', type: 'RigaExplainNet', title: 'Explain Net', description: 'Watcher: ledger condition/populations/PV/evidence for the selected transition.', group: 'riga-flow', icon: '≡' },
   { id: 'riga-data-lineage', type: 'RigaDataLineage', title: 'Data Lineage', description: 'Determinism envelope, evidence refs and sampled paths.', group: 'riga-flow', icon: '⇢' },
   { id: 'riga-path-cube-query', type: 'RigaPathCubeQuery', title: 'PathCube Query', description: 'Worst-percentile path sample from query_path_cube.', group: 'riga-flow', icon: '▧' },
   { id: 'riga-execution-tape', type: 'RigaExecutionTape', title: 'Execution Tape', description: 'Bounded per-path event tape from execution_events.', group: 'riga-flow', icon: '▤' },

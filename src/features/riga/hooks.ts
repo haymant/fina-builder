@@ -164,8 +164,8 @@ export function useRigaMarket(): AsyncState<RigaMarketEntry> {
   return useRigaTool<RigaMarketEntry>('get_market', () => ({}))
 }
 
-export function useRigaLedger(): AsyncState<LedgerPayload> {
-  return useRigaTool<LedgerPayload>('get_ledger', () => ({}))
+export function useRigaLedger(options: { enabled?: boolean } = {}): AsyncState<LedgerPayload> {
+  return useRigaTool<LedgerPayload>('get_ledger', () => ({}), { enabled: options.enabled })
 }
 
 // --- Nets -------------------------------------------------------------------
@@ -174,8 +174,8 @@ export function useRigaExecutionNet(): AsyncState<ExecutionNet> {
   return useRigaTool<ExecutionNet>('query_execution_net', () => ({}))
 }
 
-export function useRigaRiskNet(): AsyncState<RiskNet> {
-  return useRigaTool<RiskNet>('query_risk_net', () => ({}))
+export function useRigaRiskNet(options: { enabled?: boolean } = {}): AsyncState<RiskNet> {
+  return useRigaTool<RiskNet>('query_risk_net', () => ({}), { enabled: options.enabled })
 }
 
 // --- Paths / events ---------------------------------------------------------

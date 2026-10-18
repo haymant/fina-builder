@@ -51,6 +51,11 @@ function engineIdFor(workflowId: string): string | undefined {
   return Object.entries(ENGINE_TO_WORKFLOW).find(([, workflow]) => workflow === workflowId)?.[0]
 }
 
+/** Human label for either a workflow node id or an engine transition id. */
+function displayTransition(id: string): string {
+  return transitionLabel(ENGINE_TO_WORKFLOW[id] ?? id)
+}
+
 function liveTransition(net: ExecutionNet, workflowId: string) {
   return (
     net.transitions.find((t) => t.id === workflowId) ??
@@ -214,8 +219,9 @@ function RigaNetNode({ data, selected }: NodeProps) {
 const nodeTypes = { rigaNet: RigaNetNode }
 
 function NetCanvas({ net, mode, risk, ledger }: { net: ExecutionNet; mode: NetMode; risk?: RiskNet; ledger?: LedgerEntry[] }) {
-  const selectTransition = useRigaSelectionStore((s) => s.selectTransition)
-  const selectPlace = useRigaSelectionStore((s) => s.selectPlace)
+  const selectNode = useRigaSelectionStore((s) => s.selectNode)
+  const selectedTransitionId = useRigaSelectionStore((s) => s.selectedTransitionId)
+  const selectedPlaceId = useRigaSelectionStore((s) => s.selectedPlaceId)
   // Structure only — selection is handled by ReactFlow's own node state, so
   // dragging a node keeps its position (a selection change must not rebuild the
   // graph and snap the nodes back to the layout).
@@ -225,10 +231,22 @@ function NetCanvas({ net, mode, risk, ledger }: { net: ExecutionNet; mode: NetMo
   )
   const [nodes, setNodes, onNodesChange] = useNodesState(structural.nodes)
 
-  // Reset positions only when the data/topology changes (new run, mode switch).
+  // Reset positions only when the data/topology changes (new run, layer switch).
   useEffect(() => {
     setNodes(structural.nodes)
   }, [structural, setNodes])
+
+  // Reflect the shared selection (set here OR by a watcher tile) without
+  // rebuilding the graph, so dragged positions survive a selection change.
+  useEffect(() => {
+    setNodes((current) =>
+      current.map((node) => {
+        const [kind, id] = node.id.split(':')
+        const selected = kind === 'place' ? id === selectedPlaceId : id === selectedTransitionId
+        return node.data.selected === selected ? node : { ...node, data: { ...node.data, selected } }
+      }),
+    )
+  }, [selectedTransitionId, selectedPlaceId, setNodes])
 
   return (
     <div className="relative h-full min-h-[260px] w-full" data-testid="riga-net-canvas">
@@ -246,13 +264,7 @@ function NetCanvas({ net, mode, risk, ledger }: { net: ExecutionNet; mode: NetMo
         proOptions={{ hideAttribution: true }}
         onNodeClick={(_event, node) => {
           const [kind, id] = node.id.split(':') as ['place' | 'transition', string]
-          if (kind === 'place') {
-            selectPlace(id)
-            selectTransition(null)
-          } else {
-            selectTransition(id)
-            selectPlace(null)
-          }
+          selectNode(kind, id)
         }}
       >
         <Background />
@@ -270,13 +282,53 @@ function NetCanvas({ net, mode, risk, ledger }: { net: ExecutionNet; mode: NetMo
   )
 }
 
+const NET_LAYERS: Array<{ id: NetMode; label: string; hint: string }> = [
+  { id: 'execution', label: 'Execution', hint: 'Layer 1 — structure, token counts, firing probability' },
+  { id: 'risk', label: 'Risk', hint: 'Layer 2 — node tint by signed Δ / ν impact' },
+  { id: 'explain', label: 'Explain', hint: 'Layer 3 — node tint by signed ledger pv_impact' },
+]
+
+/** Overlay selector for the single source-of-truth net. */
+function NetLayerSwitch() {
+  const layer = useRigaSelectionStore((s) => s.layer)
+  const setLayer = useRigaSelectionStore((s) => s.setLayer)
+  return (
+    <div className="flex items-center gap-1" data-testid="riga-net-layer-switch">
+      <span className="mr-1 text-[9px] text-muted">layer</span>
+      {NET_LAYERS.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          title={item.hint}
+          className={item.id === layer ? 'shock-button bg-primary/20' : 'shock-button'}
+          onClick={() => setLayer(item.id)}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 export const PayoffPetriNetTile = memo(function PayoffPetriNetTile() {
   const state = useRigaExecutionNet()
+  const layer = useRigaSelectionStore((s) => s.layer)
+  // The overlay data is fetched only for the layer that needs it.
+  const risk = useRigaRiskNet({ enabled: layer === 'risk' })
+  const ledger = useRigaLedger({ enabled: layer === 'explain' })
+  const subtitle = NET_LAYERS.find((item) => item.id === layer)?.hint ?? NET_LAYERS[0]!.hint
   return (
-    <RigaPanel title="Payoff Petri Net" subtitle="Layer 1 — execution workflow" tool="query_execution_net" runId={state.data?.runId} state={state}>
+    <RigaPanel
+      title="Payoff Petri Net"
+      subtitle={subtitle}
+      tool="query_execution_net"
+      runId={state.data?.runId}
+      state={state}
+      actions={<NetLayerSwitch />}
+    >
       {(net) => (
         <ReactFlowProvider>
-          <NetCanvas net={net} mode="execution" />
+          <NetCanvas net={net} mode={layer} risk={risk.data ?? undefined} ledger={ledger.data?.ledger} />
         </ReactFlowProvider>
       )}
     </RigaPanel>
@@ -285,23 +337,52 @@ export const PayoffPetriNetTile = memo(function PayoffPetriNetTile() {
 
 export const RiskNetTile = memo(function RiskNetTile() {
   const state = useRigaRiskNet()
-  const net = useRigaExecutionNet()
+  const selectedTransitionId = useRigaSelectionStore((s) => s.selectedTransitionId)
+  const selectNode = useRigaSelectionStore((s) => s.selectNode)
   return (
-    <RigaPanel title="Risk Net" subtitle="Layer 2 — risk propagation (Δ/ν heat)" tool="query_risk_net" state={state}>
-      {(risk) =>
-        net.data ? (
-          <div className="flex h-full min-h-0 flex-col">
-            <div className="min-h-0 flex-1">
-              <ReactFlowProvider>
-                <NetCanvas net={net.data} mode="risk" risk={risk} />
-              </ReactFlowProvider>
+    <RigaPanel title="Risk Net" subtitle="watcher — Δ/ν per transition" tool="query_risk_net" state={state}>
+      {(risk) => {
+        const engineId = selectedTransitionId ? engineIdFor(selectedTransitionId) : undefined
+        const selected =
+          risk.transitions.find((t) => t.id === selectedTransitionId) ??
+          (engineId ? risk.transitions.find((t) => t.id === engineId) : undefined)
+        return (
+          <div className="flex h-full min-h-0 flex-col gap-2 p-2">
+            <div className="flex flex-wrap gap-2">
+              <Kpi label="DV01" value={num(risk.dv01)} />
+              <Kpi label="Correlation ρ" value={num(risk.correlationSensitivity)} tone="warning" />
+              <Kpi label="Transitions" value={risk.transitions.length} />
             </div>
-            <div className="shrink-0 border-t border-line p-2">
-              <div className="mb-2 flex flex-wrap gap-2">
-                <Kpi label="DV01" value={num(risk.dv01)} />
-                <Kpi label="Correlation ρ" value={num(risk.correlationSensitivity)} tone="warning" />
-                <span className="ml-auto self-center text-[9px] text-muted">node tint = signed Δ / ν impact</span>
+            {selected ? (
+              <div className="rounded border border-primary/40 bg-surface p-2" data-testid="riga-risk-selected">
+                <p className="eyebrow mb-1">selected · {displayTransition(selected.id)}</p>
+                <div className="grid grid-cols-3 gap-2">
+                  <Kpi label="Δ impact" value={num(selected.deltaImpact)} tone={selected.deltaImpact < 0 ? 'danger' : 'success'} />
+                  <Kpi label="ν impact" value={num(selected.vegaImpact)} />
+                  <Kpi label="PV impact" value={num(selected.pvImpact)} />
+                </div>
               </div>
+            ) : (
+              <p className="text-[10px] text-muted">
+                Select a transition in the Petri Net — or click a row below — to pin its risk. Switch the net to the
+                Risk layer to tint nodes by Δ / ν.
+              </p>
+            )}
+            <div className="min-h-0 flex-1 overflow-auto">
+              <DataTable
+                columns={[
+                  { key: 'id', label: 'Transition', render: (row) => displayTransition(row.id) },
+                  { key: 'deltaImpact', label: 'Δ', render: (row) => num(row.deltaImpact) },
+                  { key: 'vegaImpact', label: 'ν', render: (row) => num(row.vegaImpact) },
+                  { key: 'pvImpact', label: 'PV', render: (row) => num(row.pvImpact) },
+                ]}
+                rows={risk.transitions}
+                empty="No transition risk"
+                onRowClick={(row) => selectNode('transition', row.id)}
+              />
+            </div>
+            <div className="shrink-0 border-t border-line pt-2">
+              <p className="eyebrow mb-1">Per-asset Greeks</p>
               <DataTable
                 columns={[
                   { key: 'assetIndex', label: 'Asset', render: (row) => `#${row.assetIndex}` },
@@ -314,35 +395,70 @@ export const RiskNetTile = memo(function RiskNetTile() {
               />
             </div>
           </div>
-        ) : (
-          <div className="p-3 text-xs text-muted">Execution net unavailable</div>
         )
-      }
+      }}
     </RigaPanel>
   )
 })
 
 export const ExplainNetTile = memo(function ExplainNetTile() {
   const state = useRigaLedger()
-  const net = useRigaExecutionNet()
+  const selectedTransitionId = useRigaSelectionStore((s) => s.selectedTransitionId)
+  const selectNode = useRigaSelectionStore((s) => s.selectNode)
   return (
-    <RigaPanel title="Explain Net" subtitle="Layer 3 — ledger overlay" tool="get_ledger" state={state}>
-      {(ledger) =>
-        net.data ? (
-          <div className="flex h-full min-h-0 flex-col">
-            <div className="min-h-0 flex-1">
-              <ReactFlowProvider>
-                <NetCanvas net={net.data} mode="explain" ledger={ledger.ledger} />
-              </ReactFlowProvider>
-            </div>
-            <div className="shrink-0 border-t border-line p-2">
-              <span className="text-[9px] text-muted">node tint = signed ledger pv_impact</span>
+    <RigaPanel title="Explain Net" subtitle="watcher — ledger by transition" tool="get_ledger" state={state}>
+      {(payload) => {
+        const entries = payload.ledger
+        const engineId = selectedTransitionId ? engineIdFor(selectedTransitionId) : undefined
+        const selected =
+          entries.find((entry) => entry.transitionId === selectedTransitionId) ??
+          (engineId ? entries.find((entry) => entry.transitionId === engineId) : undefined)
+        return (
+          <div className="flex h-full min-h-0 flex-col gap-2 p-2">
+            {selected ? (
+              <div className="rounded border border-primary/40 bg-surface p-2" data-testid="riga-explain-selected">
+                <p className="eyebrow mb-1">selected · {displayTransition(selected.transitionId)}</p>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <Kpi label="Before" value={selected.populationBefore} />
+                  <Kpi label="After" value={selected.populationAfter} />
+                  <Kpi label="PV impact" value={num(selected.pvImpact)} tone={selected.pvImpact < 0 ? 'danger' : 'success'} />
+                  <Kpi label="Δ impact" value={num(selected.deltaImpact)} />
+                </div>
+                <p className="mt-2 text-[10px] text-main">{selected.condition}</p>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {selected.evidenceRefs.length === 0 ? (
+                    <span className="text-[10px] text-muted">No evidence refs</span>
+                  ) : (
+                    selected.evidenceRefs.map((ref) => (
+                      <span key={ref} className="rounded border border-primary/40 bg-primary/10 px-1.5 py-0.5 font-mono text-[9px] text-primary">
+                        {ref}
+                      </span>
+                    ))
+                  )}
+                </div>
+              </div>
+            ) : (
+              <p className="text-[10px] text-muted">
+                Select a transition in the Petri Net — or click a row below — to pin its ledger entry. Switch the net
+                to the Explain layer to tint nodes by pv_impact.
+              </p>
+            )}
+            <div className="min-h-0 flex-1 overflow-auto">
+              <DataTable
+                columns={[
+                  { key: 'transitionId', label: 'Transition', render: (row) => displayTransition(row.transitionId) },
+                  { key: 'populationBefore', label: 'Before', render: (row) => row.populationBefore },
+                  { key: 'populationAfter', label: 'After', render: (row) => row.populationAfter },
+                  { key: 'pvImpact', label: 'PV', render: (row) => num(row.pvImpact) },
+                ]}
+                rows={entries}
+                empty="No ledger entries"
+                onRowClick={(row) => selectNode('transition', row.transitionId)}
+              />
             </div>
           </div>
-        ) : (
-          <div className="p-3 text-xs text-muted">Execution net unavailable</div>
         )
-      }
+      }}
     </RigaPanel>
   )
 })
@@ -359,7 +475,7 @@ export const TransitionDetailTile = memo(function TransitionDetailTile() {
       <EmptyTile
         title="Transition Detail"
         subtitle="Select a transition in the net"
-        message="Click a transition (the blue boxes) in the Payoff Petri Net, Risk Net or Explain Net to inspect its logic, populations, PV impact and evidence."
+        message="Click a transition (the blue boxes) in the Payoff Petri Net — or a row in the Risk Net / Explain Net watchers — to inspect its logic, populations, PV impact and evidence."
       />
     )
   }
