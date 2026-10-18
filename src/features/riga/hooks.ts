@@ -26,6 +26,7 @@ import type {
   RigaDistributionsHistogram,
   RigaMcConvergence,
   RigaRiskDetailed,
+  RigaTradeDesign,
   RigaMcDiagnostics,
   RigaPlExplain,
   RigaPricePut,
@@ -77,6 +78,7 @@ const TOOLS_WITH_REQUEST = new Set<string>([
   'mc_convergence',
   'distributions_histogram',
   'risk_detailed',
+  'trade_design',
   'build_cashflows',
   'execution_events',
   'compute_risk',
@@ -237,6 +239,11 @@ export function useRigaDistributionsHistogram(): AsyncState<RigaDistributionsHis
 /** Detailed risk: θ/ρ/cross-gamma/vega buckets + per-asset Δ/Γ/ν (`risk_detailed`). */
 export function useRigaRiskDetailed(): AsyncState<RigaRiskDetailed> {
   return useRigaTool<RigaRiskDetailed>('risk_detailed', () => ({}))
+}
+
+/** Trade-parameter bump batch: per-parameter PV/KI/KO deltas (`trade_design`). */
+export function useRigaTradeDesign(): AsyncState<RigaTradeDesign> {
+  return useRigaTool<RigaTradeDesign>('trade_design', () => ({}))
 }
 
 // --- Risk -------------------------------------------------------------------

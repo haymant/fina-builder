@@ -18,6 +18,7 @@ export type TileType =
   | 'RigaPvConvergence' | 'RigaCiShrinkage' | 'RigaErrorVsPaths' | 'RigaKiConvergence' | 'RigaKoConvergence' | 'RigaConvergenceHealth'
   | 'RigaPayoffHistogram' | 'RigaDistributionExplorer'
   | 'RigaGreeksTable' | 'RigaGreeksWaterfall' | 'RigaBucketVega'
+  | 'RigaEconomicsImpactSummary' | 'RigaSensitivityTornado' | 'RigaParameterImpactMatrix'
   | 'RigaGovernanceEvidence' | 'RigaRootCause' | 'RigaRegressionTriage' | 'RigaGreeksSanity'
   | 'RigaStressBands' | 'RigaMarketSnapshot' | 'RigaHealthRun' | 'RigaTradeEconomics' | 'RigaMarketData'
   // tac-engine market-data tiles (additive; handoff §6.7)

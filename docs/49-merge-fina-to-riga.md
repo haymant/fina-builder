@@ -192,6 +192,11 @@ same commit, and **no hot-loop change** (G2).
   - **P&L Timeline** → **covered** by the Cashflow Timeline (riga) tile (P2a):
     `build_cashflows.timeline` is per-coupon-period expected PV + paid probability.
 - **P3e `trade_design`** — trade-parameter bump batch (CRN) → the 3 Trade Design tiles.
+  **Status (2026-10-18):** tool landed and verified (bumps strike / KI barrier / KO
+  barrier / coupon barrier / coupon rate by +0.01 under CRN in one call; returns
+  per-parameter PV/KI/KO + per-leg deltas; `TraceLevel::Off` ⇒ PV delta only;
+  `fx` none) and **3 tiles ported** — Economics Impact Summary, Sensitivity
+  Tornado, Parameter Impact Matrix.
 - **P3f `explain_bridge`** — previousPV→current bridge → Master Explain Waterfall.
 
 **Exit (per tool):**
@@ -286,7 +291,7 @@ additive riga tool — P3).
 | Observation Explorer | — (needs an observation series) | **engine** |
 | **Trade Design** | | |
 | Trade Summary | `riga-trade-economics` | **covered** |
-| Economics Impact Summary · Sensitivity Tornado · Parameter Impact Matrix | — | **engine P3e** |
+| Economics Impact Summary · Sensitivity Tornado · Parameter Impact Matrix | `trade_design` (CRN trade-parameter bumps) | **ported P3e** |
 
 **Tally:** ~24 demo tiles are **covered** by existing riga tiles, ~7 are
 **port-ready** (P2), and ~20 need **new additive riga tools** (P3). The demo→riga

@@ -5,7 +5,7 @@
     "name": "riga-mcp",
     "version": "0.1.0"
   },
-  "recordedAt": "2026-10-18T01:10:13.111Z",
+  "recordedAt": "2026-10-18T01:21:01.115Z",
   "tools": {
     "generate_paths": {
       "checksum": 13424780670936460000,
@@ -783,7 +783,7 @@
         ],
         "correlation_sensitivity": 0.00634053512862387,
         "dv01": -0.24440917914314575,
-        "frozen_at_unix": 1792285747,
+        "frozen_at_unix": 1792286394,
         "pv": 1.000264636050433
       },
       "name": "default"
@@ -2069,7 +2069,7 @@
         "cpu_gbm": true,
         "gpu": false
       },
-      "git_sha": "872cdfe",
+      "git_sha": "79b299c",
       "status": "ok",
       "version": "0.1.0"
     },
@@ -2812,6 +2812,87 @@
       "rate_up_pv": 1.000247433764635,
       "scenario_count": 13
     },
+    "trade_design": {
+      "base": {
+        "coupon_pv": 0.30501203236377816,
+        "funding": 0.9900923681961576,
+        "ki": 0.1127,
+        "ko": 0.5311333333333333,
+        "memory_pv": 0,
+        "put_pv": 0.0203289353821023,
+        "pv": 1.000264636050433
+      },
+      "detailed": true,
+      "parameters": [
+        {
+          "coupon_pv": 0.30501203236377816,
+          "delta_ki": 0,
+          "delta_ko": 0,
+          "delta_pv": -0.0009877670440605613,
+          "funding": 0.9900923681961576,
+          "ki": 0.1127,
+          "ko": 0.5311333333333333,
+          "parameter": "strike",
+          "put_pv": 0.021316702426162903,
+          "pv": 0.9992768690063725,
+          "step": 0.01
+        },
+        {
+          "coupon_pv": 0.30501203236377816,
+          "delta_ki": 0.00910000000000001,
+          "delta_ko": 0,
+          "delta_pv": -0.0005331934326910925,
+          "funding": 0.9900923681961576,
+          "ki": 0.1218,
+          "ko": 0.5311333333333333,
+          "parameter": "knock_in_barrier",
+          "put_pv": 0.020862128814793404,
+          "pv": 0.9997314426177419,
+          "step": 0.01
+        },
+        {
+          "coupon_pv": 0.3198806059830743,
+          "delta_ki": 0,
+          "delta_ko": -0.03150000000000003,
+          "delta_pv": 0.0006173638236406376,
+          "funding": 0.9896093431731653,
+          "ki": 0.1127,
+          "ko": 0.4996333333333333,
+          "parameter": "knock_out_barrier",
+          "put_pv": 0.020715403897399207,
+          "pv": 1.0008819998740737,
+          "step": 0.01
+        },
+        {
+          "coupon_pv": 0.30501203236377816,
+          "delta_ki": 0,
+          "delta_ko": 0,
+          "delta_pv": 0,
+          "funding": 0.9900923681961576,
+          "ki": 0.1127,
+          "ko": 0.5311333333333333,
+          "parameter": "coupon_barrier",
+          "put_pv": 0.0203289353821023,
+          "pv": 1.000264636050433,
+          "step": 0.01
+        },
+        {
+          "coupon_pv": 0.6213489255020533,
+          "delta_ki": 0,
+          "delta_ko": 0,
+          "delta_pv": 0.031633689313827595,
+          "funding": 0.9900923681961576,
+          "ki": 0.1127,
+          "ko": 0.5311333333333333,
+          "parameter": "coupon_rate",
+          "put_pv": 0.0203289353821023,
+          "pv": 1.0318983253642606,
+          "step": 0.01
+        }
+      ],
+      "scenario_count": 6,
+      "step": 0.01
+    },
     "validate_greeks": {
       "flags": [
         {
@@ -2882,7 +2963,7 @@
             "transition_id": "memory_coupon"
           }
         ],
-        "frozen_at_unix": 1792285747
+        "frozen_at_unix": 1792286394
       },
       "engine_model": "dupire_local_vol_calibrated_cpu",
       "evidence_refs": [

@@ -371,6 +371,38 @@ export interface RigaRiskDetailed {
   bucketVegas: RigaBucketVega[]
 }
 
+export interface RigaDesignBase {
+  pv: number
+  ki: number
+  ko: number
+  couponPv: number
+  memoryPv: number
+  putPv: number
+  funding: number
+}
+
+export interface RigaDesignParameter {
+  parameter: string
+  step: number
+  deltaPv: number
+  pv?: number
+  ki?: number
+  deltaKi?: number
+  ko?: number
+  deltaKo?: number
+  couponPv?: number
+  putPv?: number
+  funding?: number
+}
+
+export interface RigaTradeDesign {
+  base: RigaDesignBase
+  step: number
+  detailed: boolean
+  scenarioCount: number
+  parameters: RigaDesignParameter[]
+}
+
 export interface RigaAssetGreeks {
   assetIndex: number
   delta: number
