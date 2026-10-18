@@ -227,7 +227,7 @@ separate, read-only code path.
 |---|---|---|
 | **P3g-i `path_series`** | bounded GBM `PathCube` → selected-path worst-of series + population quantiles (P05/P25/P50/P75/P95) per step + barrier-crossing counts + state occupancy | Path Timeline, Quantile Fan, Worst-of Evolution, Barrier Heatmap, State Occupancy — ✅ **ported (2026-10-18)** |
 | **P3g-ii `payoff_graph`** | `payoff::build_put_graph(spec)` → 8-transition product graph (nodes/edges) via an additive `graph.rs` accessor; **also folded into `query_execution_net`** so the Petri-net tool is the superset | Payoff Graph — ✅ **ported (2026-10-18)** |
-| **P3g-iii `observation_series`** | per-observation schedule + triggered counts from the cube | Observation Explorer, Schedule Explorer |
+| **P3g-iii schedule/observation** | **frontend-only** — derived from `path_series` (per-step crossings + states + barrier levels); no separate tool needed | Observation Schedule, Schedule Explorer — ✅ **ported (2026-10-18)** |
 | **P3g-iv branch Sankey** | **frontend-only** — `get_branch_stats` + `query_execution_net` (real transition populations) | Branch Statistics (Sankey) — ✅ **ported (2026-10-18)** |
 | **P3g-v market explorers** | **frontend-only** — `get_market` (spots / flat ATM vols / correlation); Vol Surface from the instrument document's Dupire grid | Spot · Correlation **ported (2026-10-18)**; Vol Surface from the document; FX Spot **n/a** |
 | **P3g-vi percentile convergence** | ladder-aware percentile series | Percentile Convergence, Distribution Stability |
