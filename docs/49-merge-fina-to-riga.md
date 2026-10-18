@@ -212,6 +212,29 @@ same commit, and **no hot-loop change** (G2).
 - [ ] the ported tiles render populated data; the six gate commands pass.
 - [ ] Appendix A rows marked **ported**.
 
+### P3g — the remaining engine-backed surfaces (no demo capability lost)
+**Entrance:** P4 is blocked because ~18 demo tiles have no riga counterpart.
+**Guardrails:** every tool is **additive in `riga-mcp`** (or an additive *accessor*
+in a non-hot-path engine file), batched in one call, trace-gated, and **must not
+modify `note.rs` / `simd.rs` / `gpu.rs` / `qmc.rs` / `pathcube.rs` / `riga-scheduler`**.
+The path-cube diagnostics run on a **bounded path budget** (`min(config.paths, 1024)`)
+so they never approach the pricing hot path's tensor/SIMD/GPU throughput — they are a
+separate, read-only code path.
+
+| Sub-phase | Tool | Tiles unlocked |
+|---|---|---|
+| **P3g-i `path_series`** | bounded GBM `PathCube` → selected-path worst-of series + population quantiles (P05/P25/P50/P75/P95) per step + barrier-crossing counts + state occupancy | Path Timeline, Quantile Fan, Worst-of Evolution, Barrier Heatmap, State Occupancy |
+| **P3g-ii `payoff_graph`** | `payoff::build_put_graph(spec)` → nodes/edges (additive graph accessor) | Payoff Graph |
+| **P3g-iii `observation_series`** | per-observation schedule + triggered counts from the cube | Observation Explorer, Schedule Explorer |
+| **P3g-iv branch Sankey** | **frontend-only** — `get_branch_stats` + `query_execution_net` (real 3-transition flow) | Branch Statistics (Sankey) |
+| **P3g-v market explorers** | **frontend-only** — `get_market` (spots / vols / correlation / localVol) | Spot · Vol Surface · Correlation explorers |
+| **P3g-vi percentile convergence** | ladder-aware percentile series | Percentile Convergence, Distribution Stability |
+| **n/a** | — | P&L Summary (no accounting), FX Spot (no FX factor), Simulation Efficiency (VR efficiency study) |
+
+Per sub-phase **exit:** the six gate commands pass; the tile(s) render populated
+transcript data with a behaviour test; `git diff --stat` shows **no** hot-path file
+(G2); Appendix A rows marked **ported**.
+
 ### P4 — Retire the demo UI lane
 **Entrance:** every demo-group tile in Appendix A is **ported**.
 **Changes:** remove the demo bundle from the tile path — no tile imports
@@ -283,7 +306,7 @@ additive riga tool — P3).
 | **Valuation Explainability** | | |
 | Valuation Explain Summary · Taylor Explain · PLVA Explain | `riga-taylor-explain` (PLVA folded) | **covered** |
 | Explain Ledger Table · Explorer · Reconciliation | `riga-explain-net` | **covered** |
-| Master Explain Waterfall | — (needs the previousPV→current bridge) | **engine P3f** |
+| Master Explain Waterfall | `valuation_explain` (base → contributions → residual → current) | **ported P3f** |
 | **Cashflow & PnL** | | |
 | Cashflow Summary · Timeline · Detail Explorer | `build_cashflows` (`mean`, `paths`, `timeline`, `sample_paths`) | **ported P2a** (Summary + Timeline); Detail Explorer pending |
 | P&L Summary | — (no P&L accounting in riga-engine) | **n/a** (G5: no fake numbers) |
