@@ -183,7 +183,14 @@ same commit, and **no hot-loop change** (G2).
   correlation, one-day `theta`, `cross_gamma[][]`, `bucket_vegas[]`; `fx_delta = 0`
   — riga has no FX factor) and **3 tiles ported**. Vega buckets are **per factor**;
   term buckets need local-vol term bumps (deferred).
-- **P3d `pnl_timeline`** — per-path PnL over time → P&L Summary / P&L Timeline.
+- **P3d `pnl_timeline`** — **resolved: no new engine work (evidence-based).**
+  The demo P&L tiles read `cashflow.analytics` (realized / unrealized / MTM) and
+  per-date cashflow rows. riga prices a *single* trade and keeps **no P&L
+  accounting**, so:
+  - **P&L Summary** → **n/a** — realized/unrealized/MTM/carry do not exist in
+    riga-engine; inventing them would be fake numbers (G5).
+  - **P&L Timeline** → **covered** by the Cashflow Timeline (riga) tile (P2a):
+    `build_cashflows.timeline` is per-coupon-period expected PV + paid probability.
 - **P3e `trade_design`** — trade-parameter bump batch (CRN) → the 3 Trade Design tiles.
 - **P3f `explain_bridge`** — previousPV→current bridge → Master Explain Waterfall.
 
@@ -270,7 +277,8 @@ additive riga tool — P3).
 | Master Explain Waterfall | — (needs the previousPV→current bridge) | **engine P3f** |
 | **Cashflow & PnL** | | |
 | Cashflow Summary · Timeline · Detail Explorer | `build_cashflows` (`mean`, `paths`, `timeline`, `sample_paths`) | **ported P2a** (Summary + Timeline); Detail Explorer pending |
-| P&L Summary · P&L Timeline | — (needs per-path PnL over time) | **engine P3d** |
+| P&L Summary | — (no P&L accounting in riga-engine) | **n/a** (G5: no fake numbers) |
+| P&L Timeline | `build_cashflows.timeline` | **covered** (Cashflow Timeline, P2a) |
 | **Payoff Analysis** | | |
 | Attribution | `riga-attribution` | **covered** |
 | Payoff Graph | — | **engine** |
