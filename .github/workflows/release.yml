@@ -315,6 +315,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+          # `@rigai/assistant-ui` resolves into `modules/riga/packages/assistant-ui`.
+          submodules: true
       - uses: actions/setup-node@v4
         with:
           node-version: 22
