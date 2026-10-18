@@ -4,7 +4,7 @@
 // the pure selector and the effective market feeds the riga-flow request.
 
 import ReactECharts from '../../shared/components/Chart'
-import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { memo, useMemo, useState, type ReactNode } from 'react'
 import { PanelCard } from '../../shared/components/PanelCard'
 import { useTheme } from '../../themes/ThemeProvider'
 import { useTacMarketStore } from '../../../store/tacMarketStore'
@@ -12,6 +12,7 @@ import { useTacActions, useTacAutoFetch } from '../hooks'
 import { tacBaseUrl, tacTransportMode } from '../../../api/tacTransport'
 import { chartBase, DataTable, Kpi, num, pct, Provenance } from '../../riga/components/primitives'
 import { toIsoDate } from '../../riga/instrument'
+import { VolSurface3D } from './VolSurface3D'
 import { applyManipulations, volSurfaceWarnings } from '../manipulations'
 import type {
   ManipulationOperation,
@@ -19,17 +20,6 @@ import type {
   MarketManipulation,
   TacCoverageRow,
 } from '../types'
-
-// `echarts-gl` (the 3D surface renderer) is ~1 MB, so it is imported lazily the
-// first time a 3D view is opened instead of shipping in the main bundle.
-let glPromise: Promise<unknown> | null = null
-function loadEchartsGl(): Promise<unknown> {
-  glPromise ??= import('echarts-gl').catch((error) => {
-    glPromise = null
-    throw error
-  })
-  return glPromise
-}
 
 function TacTile({
   title,
@@ -283,55 +273,14 @@ export const TacVolSurface = memo(function TacVolSurface() {
   const actions = useTacActions()
   const [underlying, setUnderlying] = useState(SYMBOLS[0]!)
   const [view, setView] = useState<'heat' | '3d'>('heat')
-  const [glReady, setGlReady] = useState(false)
-  const [glError, setGlError] = useState<string | null>(null)
   const surface = raw.volSurfaces[underlying]
   const warnings = surface ? volSurfaceWarnings(surface) : []
-
-  // Lazily pull in echarts-gl the first time 3D is opened.
-  useEffect(() => {
-    if (view !== '3d' || glReady) return
-    let cancelled = false
-    loadEchartsGl()
-      .then(() => { if (!cancelled) setGlReady(true) })
-      .catch((error: unknown) => { if (!cancelled) setGlError(error instanceof Error ? error.message : String(error)) })
-    return () => { cancelled = true }
-  }, [view, glReady])
-
-  const use3d = view === '3d' && glReady
+  // Sequential ramp: calm (green) → elevated (amber) → stressed (red).
+  const ramp = useMemo(() => [tokens.success, tokens.warning, tokens.danger], [tokens])
   const option = useMemo(() => {
     if (!surface) return {}
     const min = Math.min(...surface.volatility.flat()) * 100
     const max = Math.max(...surface.volatility.flat()) * 100
-    // Sequential ramp: calm (green) → elevated (amber) → stressed (red).
-    const ramp = [tokens.success, tokens.warning, tokens.danger]
-    if (use3d) {
-      const data = surface.maturities.flatMap((maturity, r) =>
-        surface.strikes.map((strike, c) => [strike, maturity, +((surface.volatility[r]?.[c] ?? 0) * 100).toFixed(2)]),
-      )
-      const axis = {
-        type: 'value' as const,
-        nameTextStyle: { color: tokens.muted, fontSize: 9 },
-        axisLabel: { color: tokens.muted, fontSize: 8 },
-        axisLine: { lineStyle: { color: tokens.border } },
-        splitLine: { lineStyle: { color: tokens.grid } },
-      }
-      return {
-        backgroundColor: 'transparent',
-        tooltip: { confine: true, backgroundColor: tokens.panel, borderColor: tokens.border, textStyle: { color: tokens.text, fontSize: 11 } },
-        visualMap: { min, max, dimension: 2, calculable: false, left: 0, bottom: 0, textStyle: { color: tokens.muted, fontSize: 8 }, inRange: { color: ramp } },
-        xAxis3D: { ...axis, name: 'strike' },
-        yAxis3D: { ...axis, name: 'maturity' },
-        zAxis3D: { ...axis, name: 'vol %' },
-        grid3D: {
-          boxWidth: 100, boxDepth: 80, boxHeight: 60,
-          viewControl: { distance: 190, alpha: 22, beta: 35 },
-          axisPointer: { show: false },
-          light: { main: { intensity: 1.1, shadow: false }, ambient: { intensity: 0.45 } },
-        },
-        series: [{ type: 'surface', data, shading: 'color', wireframe: { show: true, lineStyle: { color: tokens.border, width: 0.4 } } }],
-      }
-    }
     const data = surface.volatility.flatMap((row, r) => row.map((value, c) => [c, r, +(value * 100).toFixed(2)]))
     return {
       ...chartBase(tokens),
@@ -341,7 +290,7 @@ export const TacVolSurface = memo(function TacVolSurface() {
       visualMap: { min, max, orient: 'horizontal', left: 'center', bottom: 0, calculable: false, textStyle: { color: tokens.muted, fontSize: 8 }, inRange: { color: ramp } },
       series: [{ type: 'heatmap', data, itemStyle: { borderColor: tokens.border, borderWidth: 1 }, label: { show: false } }],
     }
-  }, [surface, tokens, use3d])
+  }, [surface, tokens, ramp])
 
   return (
     <TacTile
@@ -367,11 +316,22 @@ export const TacVolSurface = memo(function TacVolSurface() {
             </button>
           ))}
         </div>
-        {view === '3d' && glError ? <p className="px-2 text-[10px] text-danger">3D renderer unavailable: {glError}</p> : null}
-        {view === '3d' && !glReady && !glError ? <p className="px-2 text-[10px] text-muted">loading 3D renderer…</p> : null}
         {warnings.length ? <p className="px-2 text-[10px] text-warning">{warnings[0]}</p> : null}
         <div className="min-h-0 flex-1">
-          <ReactECharts key={view} option={option} style={{ height: '100%', width: '100%' }} notMerge />
+          {view === '3d' && surface ? (
+            <VolSurface3D
+              strikes={surface.strikes}
+              maturities={surface.maturities}
+              volatility={surface.volatility}
+              ramp={ramp}
+              text={tokens.text}
+              muted={tokens.muted}
+              border={tokens.border}
+              format={(value) => `${(value * 100).toFixed(1)}%`}
+            />
+          ) : (
+            <ReactECharts key={view} option={option} style={{ height: '100%', width: '100%' }} notMerge />
+          )}
         </div>
         <div className="px-3 pb-2 text-[10px] text-muted">
           reference={num(surface?.reference, 2)} · {surface?.strikes.length ?? 0} strikes × {surface?.maturities.length ?? 0} maturities

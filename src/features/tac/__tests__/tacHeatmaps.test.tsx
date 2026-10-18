@@ -16,6 +16,7 @@ vi.mock('../../shared/components/Chart', () => ({
 }))
 
 const { TacCorrelationMatrix, TacVolSurface } = await import('../components/TacTiles')
+const { rampColor } = await import('../components/VolSurface3D')
 const { installTacTranscript, preloadTacMarket, resetTranscripts } = await import(
   '../../../tests/mocks/transcripts'
 )
@@ -34,6 +35,15 @@ const lastOption = () => captured.at(-1) as {
 }
 
 describe('tac heatmap theming', () => {
+  it('interpolates the colour ramp', () => {
+    const ramp = ['rgb(0, 0, 0)', 'rgb(100, 100, 100)', 'rgb(200, 200, 200)']
+    expect(rampColor(ramp, 0)).toBe('rgb(0, 0, 0)')
+    expect(rampColor(ramp, 1)).toBe('rgb(200, 200, 200)')
+    expect(rampColor(ramp, 0.25)).toBe('rgb(50, 50, 50)')
+    expect(rampColor(ramp, 0.5)).toBe('rgb(100, 100, 100)')
+    expect(rampColor(ramp, -1)).toBe('rgb(0, 0, 0)')
+    expect(rampColor(ramp, 2)).toBe('rgb(200, 200, 200)')
+  })
   it('sources the correlation heatmap colours from the theme (sRGB, not oklch)', () => {
     render(<TacCorrelationMatrix />)
     const option = lastOption()
@@ -55,13 +65,14 @@ describe('tac heatmap theming', () => {
     }
   })
 
-  it('offers a 3D view toggle without crashing', () => {
+  it('renders the 3D surface as an SVG projection', () => {
     render(<TacVolSurface />)
-    const toggle = screen.getByText('3D')
-    fireEvent.click(toggle)
-    // The lazy echarts-gl import may not resolve under jsdom; the tile must
-    // degrade gracefully (loading / unavailable message) and keep rendering.
-    expect(screen.getByText('2D')).toBeTruthy()
-    expect(screen.getByText('3D')).toBeTruthy()
+    fireEvent.click(screen.getByText('3D'))
+    const svg = screen.getByTestId('vol-surface-3d')
+    expect(svg).toBeInTheDocument()
+    // The surface is a mesh of coloured quads.
+    expect(svg.querySelectorAll('path').length).toBeGreaterThan(4)
+    const fills = [...svg.querySelectorAll('path')].map((p) => p.getAttribute('fill'))
+    for (const fill of fills) expect(fill).toMatch(/^rgba?\(/)
   })
 })
