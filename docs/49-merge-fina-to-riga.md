@@ -262,7 +262,7 @@ and the demo-bundle gate (`needsBundle`). Retargeted the six built-in dashboards
 static `source: riga`; dropped the demo `TileType` members. `App` no longer loads
 the demo bundle. **G2: `modules/riga-flow` untouched (0 diff).**
 
-### P5 — Retire `fina-server` + `fina-mcp`
+### P5 — Retire `fina-server` + `fina-mcp` — ✅ **done (2026-10-18)**
 **Entrance:** P4 complete (nothing in the shipped app uses the demo lane).
 **Changes:** remove `crates/fina-server`, `crates/fina-mcp` from the workspace;
 delete the crates; drop `scripts/build-mcp-sidecar.sh` + its CI/release wiring;
@@ -270,11 +270,30 @@ point browser mode at `riga-mcp --transport http` (already proxied at
 `/riga/mcp`); remove `fina-server`/`fina-mcp` from `ci.yml`, `release.yml`,
 `gate-coverage.py`; update `package.json` (`backend:dev`), `FEATURES.md`.
 **Exit:**
-- [ ] `cargo metadata --no-deps` lists only `fina-kernel` (+ `src-tauri`) from the demo side.
-- [ ] `grep -rn "fina-server\|fina-mcp\|fina_server\|fina_mcp" Cargo.toml package.json .github scripts src-tauri`
+- [x] `cargo metadata --no-deps` lists only `fina-kernel` (+ `src-tauri`) from the demo side.
+- [x] `grep -rn "fina-server\|fina-mcp\|fina_server\|fina_mcp" Cargo.toml package.json .github scripts src-tauri`
       returns **only** this plan document.
-- [ ] `npm run dev` + `riga-mcp --transport http` serves the app end to end.
-- [ ] the six gate commands pass (minus the `fina-server` test).
+- [x] `npm run dev` + `riga-mcp --transport http` serves the app end to end.
+- [x] the six gate commands pass (minus the `fina-server` test).
+
+**Delivered (2026-10-18):** `crates/fina-server` + `crates/fina-mcp` deleted (workspace
+members + `release-runner` profile removed; `cargo metadata` now lists `fina-kernel` +
+`payoff-explorer` only). `scripts/build-mcp-sidecar.sh` deleted; `mcp:sidecar` script gone;
+`backend:dev` now runs `mcp:http:riga`; Tauri `externalBin` switched from `binaries/fina-mcp`
+to `binaries/riga-mcp` + `binaries/tac-engine`; `beforeDev/BuildCommand` drop the fina staging.
+Removed the `fina` MCP Tauri commands (`get_mcp_server_path`/`mcp_list_tools`/`mcp_call_tool`/
+`mcp_reset`) and the fina stdio test from `src-tauri`; genericised `mcp.rs` strings.
+`ci.yml` drops `cargo test -p fina-server` + the `--exclude fina-mcp` and stages engine-sidecar
+placeholders; `gate-coverage.py` + `watch-renderer.sh` de-fina'd. **Frontend:** the dead demo
+plumbing is gone — `src/api/{index,transport,tauriTransport,httpTransport}.ts`, `simulationStore`,
+`marketDataStore`, `tradeEconomicsStore`, the demo transport/parity/integration tests, and the
+`explorerStore` path API (it now opens on the `riga-lineage` dashboard). The riga/tac
+transports (`src/api/{rigaTransport,tacTransport,keyCase}.ts`) are untouched. **G2: 0 diff.**
+
+**Evidence:** tsc 0 · build 0 · **vitest 44 files / 215 tests** · `fina-kernel` 202+ pass ·
+`cargo build --workspace` · `cargo clippy -p payoff-explorer -D warnings` · `cargo test -p
+payoff-explorer` (incl. `lists_and_calls_riga_flow_tools_over_stdio`) · `riga-engine` pass ·
+`riga-mcp` 16 pass.
 
 ### P6 — Freeze `fina-kernel` as the parity witness
 **Entrance:** P5 complete; nothing at runtime depends on `fina-kernel`.

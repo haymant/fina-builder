@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "npm run mcp:sidecar && npm run mcp:sidecar:engines && npm run dev",
-    "beforeBuildCommand": "npm run build && npm run mcp:sidecar && npm run mcp:sidecar:engines"
+    "beforeDevCommand": "npm run mcp:sidecar:engines && npm run dev",
+    "beforeBuildCommand": "npm run build && npm run mcp:sidecar:engines"
   },
   "app": {
     "windows": [
@@ -32,7 +32,8 @@
       "minimumSystemVersion": "11.0"
     },
     "externalBin": [
-      "binaries/fina-mcp"
+      "binaries/riga-mcp",
+      "binaries/tac-engine"
     ],
     "icon": [
       "icons/32x32.png",

@@ -25,7 +25,7 @@ while true; do
   # Match the app and any WebKit helper it spawned. Exclude this watcher and its
   # own shell, whose command line contains the search pattern.
   ps -eo pid,pcpu,rss,etimes,args --sort=-pcpu \
-    | grep -iE 'payoff-explorer|WebKitWebProcess|WebKitNetworkProcess|fina-mcp' \
+    | grep -iE 'payoff-explorer|WebKitWebProcess|WebKitNetworkProcess|riga-mcp' \
     | grep -v grep \
     | grep -v watch-renderer.sh \
     | awk -v now="$(date +%s)" '

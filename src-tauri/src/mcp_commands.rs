@@ -1,5 +1,5 @@
-//! MCP server commands: the bundled `fina-mcp` plus the vendored `riga-mcp` and
-//! `tac-engine` servers the visual atlas calls.
+//! MCP server commands: the vendored `riga-mcp` and `tac-engine` servers the
+//! visual atlas calls.
 //!
 //! The child processes are owned here (never by the webview). One `McpRuntime`
 //! holds a named connection per server; the engine binaries resolve from the
@@ -16,83 +16,6 @@ use crate::mcp::McpRuntime;
 #[derive(Default)]
 pub struct McpState {
     pub runtime: Arc<McpRuntime>,
-}
-
-/// Resolve the `fina-mcp` stdio server binary.
-///
-/// Precedence: explicit `FINA_MCP_BIN` override, the packaged sidecar next to the
-/// app executable, then a workspace `target/` build for `npm run tauri:dev`.
-#[tauri::command]
-pub fn get_mcp_server_path(app: AppHandle) -> Result<String, String> {
-    if let Ok(explicit) = std::env::var("FINA_MCP_BIN") {
-        if std::path::Path::new(&explicit).is_file() {
-            return Ok(explicit);
-        }
-    }
-    let exe_name = if cfg!(windows) { "fina-mcp.exe" } else { "fina-mcp" };
-    if let Ok(resources) = app.path().resource_dir() {
-        for candidate in [resources.join(exe_name), resources.join("binaries").join(exe_name)] {
-            if candidate.is_file() {
-                return Ok(candidate.to_string_lossy().into_owned());
-            }
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sidecar = dir.join(exe_name);
-            if sidecar.is_file() {
-                return Ok(sidecar.to_string_lossy().into_owned());
-            }
-        }
-    }
-    let manifest = env!("CARGO_MANIFEST_DIR");
-    for profile in ["debug", "release"] {
-        let candidate = std::path::Path::new(manifest)
-            .join("..")
-            .join("target")
-            .join(profile)
-            .join(exe_name);
-        if candidate.is_file() {
-            return Ok(candidate.to_string_lossy().into_owned());
-        }
-    }
-    Err("fina-mcp binary not found. Build it with `cargo build -p fina-mcp`, or set FINA_MCP_BIN.".into())
-}
-
-#[tauri::command]
-pub async fn mcp_list_tools(
-    app: AppHandle,
-    state: State<'_, McpState>,
-) -> Result<Value, String> {
-    let binary = get_mcp_server_path(app)?;
-    let mcp = state.runtime.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let (server, version, tools) = mcp.list_tools("fina", &binary)?;
-        Ok::<Value, String>(json!({ "server": server, "version": version, "tools": tools }))
-    })
-    .await
-    .map_err(|e| format!("MCP worker failed: {e}"))?
-}
-
-#[tauri::command]
-pub async fn mcp_call_tool(
-    app: AppHandle,
-    state: State<'_, McpState>,
-    name: String,
-    arguments: Option<Value>,
-) -> Result<crate::mcp::McpCallResult, String> {
-    let binary = get_mcp_server_path(app)?;
-    let mcp = state.runtime.clone();
-    let arguments = arguments.unwrap_or_else(|| json!({}));
-    tauri::async_runtime::spawn_blocking(move || mcp.call_tool("fina", &binary, &name, arguments))
-        .await
-        .map_err(|e| format!("MCP worker failed: {e}"))?
-}
-
-#[tauri::command]
-pub fn mcp_reset(state: State<'_, McpState>) -> Result<(), String> {
-    state.runtime.try_reset("fina");
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

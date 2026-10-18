@@ -76,11 +76,7 @@ pub fn run() {
             commands::valuation::build_cashflows,
             commands::valuation::valuation_explain,
             commands::valuation::explain_ledger,
-            // MCP registry (visual atlas + bundled fina-mcp).
-            mcp_commands::get_mcp_server_path,
-            mcp_commands::mcp_list_tools,
-            mcp_commands::mcp_call_tool,
-            mcp_commands::mcp_reset,
+            // MCP registry (visual atlas + vendored engines).
             mcp_commands::get_riga_mcp_path,
             mcp_commands::get_tac_engine_path,
             mcp_commands::riga_mcp_list_tools,

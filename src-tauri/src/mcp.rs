@@ -1,11 +1,11 @@
 //! Rust-managed MCP stdio client for the local agent.
 //!
-//! The chat needs the tools the bundled `fina-mcp` server advertises. Driving
+//! The chat needs the tools the vendored `riga-mcp` server advertises. Driving
 //! the child process through the webview shell plugin is fragile (it depends on
 //! the sidecar permission scope and the exact `externalBin` name), so the
-//! process is owned here instead: the desktop shell spawns `fina-mcp`, performs
-//! the MCP `initialize` handshake, and exposes `mcp_list_tools` / `mcp_call_tool`
-//! to the frontend. The webview never spawns a process.
+//! process is owned here instead: the desktop shell spawns the engine server,
+//! performs the MCP `initialize` handshake, and exposes `riga_mcp_list_tools` /
+//! `riga_mcp_call_tool` to the frontend. The webview never spawns a process.
 
 use std::{
     collections::HashMap,
@@ -112,7 +112,7 @@ impl McpProcess {
         self.stdin
             .write_all(line.as_bytes())
             .and_then(|_| self.stdin.flush())
-            .map_err(|e| format!("Could not write to fina-mcp: {e}"))
+            .map_err(|e| format!("Could not write to the MCP server: {e}"))
     }
 
     fn wait_for(&mut self, id: i64, timeout: Duration) -> Result<Value, String> {
@@ -125,12 +125,12 @@ impl McpProcess {
             }
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
-                return Err(format!("fina-mcp did not respond to request {id} in time"));
+                return Err(format!("the MCP server did not respond to request {id} in time"));
             }
             match self.wake.recv_timeout(remaining) {
                 Ok(()) | Err(RecvTimeoutError::Timeout) => continue,
                 Err(RecvTimeoutError::Disconnected) => {
-                    return Err("fina-mcp connection closed".into())
+                    return Err("MCP connection closed".into())
                 }
             }
         }
@@ -145,7 +145,7 @@ impl McpProcess {
         self.write_message(&message)?;
         let response = self.wait_for(id, timeout)?;
         if let Some(error) = response.get("error") {
-            return Err(format!("fina-mcp error: {error}"));
+            return Err(format!("MCP error: {error}"));
         }
         Ok(response.get("result").cloned().unwrap_or(Value::Null))
     }
@@ -163,7 +163,7 @@ impl McpProcess {
         self.server_name = result
             .pointer("/serverInfo/name")
             .and_then(Value::as_str)
-            .unwrap_or("fina-mcp")
+            .unwrap_or("mcp")
             .to_string();
         self.server_version = result
             .pointer("/serverInfo/version")
@@ -184,8 +184,8 @@ impl Drop for McpProcess {
 
 /// Registry of named MCP stdio connections owned by the Tauri runtime.
 ///
-/// `fina` is the bundled demo server; `riga` is `riga-mcp`; `tac` is
-/// `tac-engine`. Each server is spawned lazily on first use and kept alive.
+/// `riga` is `riga-mcp`; `tac` is `tac-engine`. Each server is spawned lazily
+/// on first use and kept alive.
 #[derive(Default)]
 pub struct McpRuntime {
     processes: Mutex<HashMap<String, McpProcess>>,
@@ -340,74 +340,6 @@ impl McpRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Resolve the workspace `fina-mcp` binary for an integration-style test.
-    fn test_binary() -> Option<String> {
-        if let Ok(path) = std::env::var("FINA_MCP_BIN") {
-            if std::path::Path::new(&path).is_file() {
-                return Some(path);
-            }
-        }
-        let manifest = env!("CARGO_MANIFEST_DIR");
-        for profile in ["debug", "release"] {
-            let candidate = std::path::Path::new(manifest)
-                .join("..")
-                .join("target")
-                .join(profile)
-                .join("fina-mcp");
-            if candidate.is_file() {
-                return Some(candidate.to_string_lossy().into_owned());
-            }
-        }
-        None
-    }
-
-    #[test]
-    fn lists_and_calls_tools_over_stdio() {
-        let Some(binary) = test_binary() else {
-            // The mcp binary is built by `cargo build -p fina-mcp`; skip when absent.
-            eprintln!("skipping: fina-mcp binary not built");
-            return;
-        };
-        let runtime = McpRuntime::default();
-        let (server, _version, tools) = runtime.list_tools("fina", &binary).expect("tools/list");
-        assert_eq!(server, "fina-mcp");
-        assert!(tools.iter().any(|tool| tool.name == "health"));
-
-        let result = runtime
-            .call_tool("fina", &binary, "health", json!({}))
-            .expect("tools/call");
-        assert!(!result.is_error);
-        assert_eq!(
-            result
-                .structured_content
-                .as_ref()
-                .and_then(|value| value.get("version"))
-                .and_then(Value::as_str),
-            Some(fina_kernel::VERSION)
-        );
-        // Reuse: a second call should not respawn and should still work.
-        let again = runtime
-            .call_tool("fina", &binary, "health", json!({}))
-            .expect("second call");
-        assert!(!again.is_error);
-
-        // A larger, argument-less demo tool (the shape the chat calls).
-        let distributions = runtime
-            .call_tool("fina", &binary, "get_distributions", json!({}))
-            .expect("get_distributions");
-        assert!(!distributions.is_error);
-
-        // The resource/prompt/task surfaces route through the same connection.
-        // fina-mcp answers `Method not found`; the point is that the client
-        // frames the request, reads the reply and returns without hanging.
-        let _ = runtime.list_resources("fina", &binary);
-        let _ = runtime.list_prompts("fina", &binary);
-        let _ = runtime.read_resource("fina", &binary, "riga://fixtures/termsheet1");
-        let _ = runtime.get_prompt("fina", &binary, "explain_pv_change", json!({}));
-        let _ = runtime.get_task("fina", &binary, "task-1");
-        runtime.try_reset("fina");
-    }
 
     /// Resolve the vendored `riga-mcp` binary (submodule default relative path).
     fn riga_binary() -> Option<String> {

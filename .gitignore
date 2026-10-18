@@ -33,7 +33,7 @@ target/
 # Tauri
 src-tauri/target
 
-# Staged Tauri sidecar binaries (built by scripts/build-mcp-sidecar.sh)
+# Staged Tauri sidecar binaries (built by scripts/build-engine-sidecar.sh)
 src-tauri/binaries/
 
 # Frontend test coverage output

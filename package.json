@@ -18,7 +18,6 @@
     "tauri:build": "tauri build",
     "tauri:build:cpu": "tauri build",
     "tauri:build:cuda": "node scripts/tauri-cuda.mjs build",
-    "mcp:sidecar": "bash scripts/build-mcp-sidecar.sh",
     "mcp:sidecar:riga": "bash scripts/build-engine-sidecar.sh riga-flow riga-mcp RIGA_MCP_BIN",
     "mcp:sidecar:tac": "bash scripts/build-engine-sidecar.sh tac-engine tac-engine TAC_ENGINE_BIN",
     "mcp:sidecar:engines": "npm run mcp:sidecar:riga && npm run mcp:sidecar:tac",
@@ -33,7 +32,7 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
     "price:instrument": "node scripts/price-instrument.mjs",
-    "backend:dev": "cargo run -p fina-server",
+    "backend:dev": "npm run mcp:http:riga",
     "backend:test": "cargo test --workspace",
     "version:set": "node scripts/set-version.mjs"
   },

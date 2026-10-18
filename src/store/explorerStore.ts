@@ -1,6 +1,5 @@
 import { create } from 'zustand'
-import { simulationStorePaths, useSimulationStore } from './simulationStore'
-import type { PayoffNodeId, ThemeMode } from '../features/shared/types'
+import type { ThemeMode } from '../features/shared/types'
 import type { Dashboard, TileLayout } from '../features/dashboards/types'
 
 const initialDashboards: Dashboard[] = [
@@ -88,10 +87,9 @@ const initialDashboards: Dashboard[] = [
 ]
 
 type ExplorerState = {
-  selectedPathId: string; selectedNodeId: PayoffNodeId; selectedDateIndex: number; theme: ThemeMode
+  theme: ThemeMode
   dashboards: Dashboard[]; selectedDashboardId: string
-  setSelectedPathId: (id: string) => void; setSelectedNodeId: (id: PayoffNodeId) => void; setSelectedDateIndex: (index: number) => void
-  toggleTheme: () => void; selectRandomPath: () => void; nextPath: (direction: 1 | -1) => void
+  toggleTheme: () => void
   selectDashboard: (id: string) => void; createDashboard: () => void; createDashboardFromTemplate: (name: string, layout: TileLayout[]) => string; renameDashboard: (id: string, name: string) => void; deleteDashboard: (id: string) => void; duplicateDashboard: (id: string) => void; updateLayout: (layout: TileLayout[]) => void
 }
 
@@ -104,14 +102,8 @@ const restoredDashboards = saved.dashboards?.length
 function persist(state: Partial<ExplorerState>) { try { localStorage.setItem('fina-workspace', JSON.stringify({ dashboards: state.dashboards, selectedDashboardId: state.selectedDashboardId, theme: state.theme })) } catch { /* storage is optional */ } }
 
 export const useExplorerStore = create<ExplorerState>((set, get) => ({
-  // selectedPathId starts empty: the bundle arrives asynchronously from the
-  // backend (simulationStore). The exposed selector below resolves it.
-  selectedPathId: '', selectedNodeId: 'PathCube', selectedDateIndex: 0, theme: saved.theme ?? 'dark', dashboards: restoredDashboards, selectedDashboardId: saved.selectedDashboardId ?? 'payoff-explorer',
-  setSelectedPathId: (id) => { const path = simulationStorePaths().find((p) => p.id === id); if (path) set({ selectedPathId: id, selectedDateIndex: 0, selectedNodeId: path.traversal[0] ?? 'PathCube' }) },
-  setSelectedNodeId: (id) => set({ selectedNodeId: id }), setSelectedDateIndex: (index) => set({ selectedDateIndex: index }),
+  theme: saved.theme ?? 'dark', dashboards: restoredDashboards, selectedDashboardId: saved.selectedDashboardId ?? 'riga-lineage',
   toggleTheme: () => { const theme = get().theme === 'dark' ? 'light' : 'dark'; set({ theme }); persist({ ...get(), theme }) },
-  selectRandomPath: () => { const paths = simulationStorePaths().filter((p) => p.id !== get().selectedPathId); const pick = paths[Math.floor(Math.random() * paths.length)]; if (pick) get().setSelectedPathId(pick.id) },
-  nextPath: (direction) => { const paths = simulationStorePaths(); const idx = paths.findIndex((p) => p.id === get().selectedPathId); const next = paths[(idx + direction + paths.length) % paths.length]; if (next) get().setSelectedPathId(next.id) },
   selectDashboard: (id) => { set({ selectedDashboardId: id }); persist({ ...get(), selectedDashboardId: id }) },
   createDashboard: () => { const id = `dashboard-${Date.now()}`; const dashboard = { id, name: 'Untitled Dashboard', layout: [] }; set((s) => ({ dashboards: [...s.dashboards, dashboard], selectedDashboardId: id })); persist({ ...get(), dashboards: [...get().dashboards, dashboard], selectedDashboardId: id }) },
   createDashboardFromTemplate: (name, layout) => { const id = `dashboard-${Date.now()}`; const dashboard = { id, name, layout }; const dashboards = [...get().dashboards, dashboard]; set({ dashboards, selectedDashboardId: id }); persist({ ...get(), dashboards, selectedDashboardId: id }); return id },
@@ -120,10 +112,3 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   duplicateDashboard: (id) => { const source = get().dashboards.find((d) => d.id === id); if (!source) return; const copy = { ...source, id: `dashboard-${Date.now()}`, name: `${source.name} Copy`, layout: source.layout.map((l) => ({ ...l, i: `${l.i}-copy-${Date.now()}` })) }; const dashboards = [...get().dashboards, copy]; set({ dashboards, selectedDashboardId: copy.id }); persist({ ...get(), dashboards, selectedDashboardId: copy.id }) },
   updateLayout: (layout) => { const dashboards = get().dashboards.map((d) => d.id === get().selectedDashboardId ? { ...d, layout } : d); set({ dashboards }); persist({ ...get(), dashboards }) },
 }))
-
-export function useSelectedPath() {
-  const bundle = useSimulationStore((s) => s.bundle)
-  const id = useExplorerStore((s) => s.selectedPathId)
-  if (!bundle) return null
-  return bundle.paths.find((p) => p.id === id) ?? bundle.paths[0] ?? null
-}

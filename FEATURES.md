@@ -19,7 +19,10 @@
 
 Part II is prescriptive ("must", "do not"); Part I is descriptive ("is", "does not").
 Where they disagree about **behaviour**, Part II §5 (invariants) wins and the discrepancy
-is a bug.
+is a bug. Where they disagree about **packaging**, this note wins: the demo transport stack
+(`fina-cli` §P1, `fina-server` + `fina-mcp` §P5) is **retired** per `docs/49-merge-fina-to-riga.md`,
+and the product surface is `riga-flow` (`riga-mcp`) + `tac-engine`. Part II's transport/adapter
+sections are kept as the decision record.
 
 ---
 
@@ -68,36 +71,34 @@ The layering rule, stated once:
 └───────────────┬──────────────────────────────┬───────────────┘
                 │                              │
       ┌─────────▼─────────┐          ┌─────────▼─────────┐
-      │  Desktop          │          │  Web              │
-      │  Tauri IPC +      │          │  HTTP POST + SSE  │
-      │  Channel stream   │          │                   │
+      │  Desktop          │          │  Web (dev)        │
+      │  Tauri IPC +      │          │  Vite proxy       │
+      │  Channel stream   │          │  path /riga/mcp   │
       └─────────┬─────────┘          └─────────┬─────────┘
                 │                              │
       ┌─────────▼─────────┐          ┌─────────▼─────────┐
-      │ src-tauri         │          │ crates/fina-server│
-      │ #[tauri::command] │          │ actix-web routes  │
+      │ src-tauri         │          │ riga-mcp          │
+      │ spawns the engines│          │ --transport http  │
+      │ over stdio        │          │ 127.0.0.1:8788    │
       └─────────┬─────────┘          └─────────┬─────────┘
-                │            ┌─────────────────┘
-                │            │
-      ┌─────────▼────────────▼───────────────────────────────┐
-      │  crates/fina-kernel — ALL business logic              │
-      │  api · path_generator · economics · risk_engine ·    │
-      │  valuation · diagnostics · execution · jsnum · rng   │
-      │  ZERO transport / UI / framework dependencies        │
-      └─────────┬───────────────────────────┬───────────────┘
-                │                           │
-      ┌─────────▼─────────┐       ┌─────────▼─────────┐
-      │ crates/fina-cli   │       │ crates/fina-mcp   │  JSON-RPC 2.0
-      │ clap → dispatch   │       │ stdio tools       │
-      │                   │       │ list + call       │
-      └───────────────────┘       └───────────────────┘
+                └───────────────┬──────────────┘
+                                │
+      ┌─────────────────────────▼────────────────────────────┐
+      │  riga-flow (product surface) + tac-engine (market)    │
+      │  vendored under modules/ — the live pricing engines   │
+      └──────────────────────────────────────────────────────┘
+
+      ┌──────────────────────────────────────────────────────┐
+      │  crates/fina-kernel — FROZEN parity witness (P6)      │
+      │  no transport; not a dependency of any shipped binary │
+      └──────────────────────────────────────────────────────┘
 ```
 
-> **Transport status (docs/49).** The `crates/fina-cli` clap adapter was **retired** in
-> docs/49 §P1 — the headless CLI is no longer shipped, built or released. The twelve
-> commands remain available through Tauri IPC and `fina-server`, and via `fina-mcp` for
-> external MCP clients. `fina-server` and `fina-mcp` are scheduled for retirement in
-> docs/49 §P5, once every demo tile has a riga-flow counterpart.
+> **Transport status (docs/49).** `crates/fina-cli` (§P1), `crates/fina-server` and
+> `crates/fina-mcp` (§P5) are **retired** — no longer built or shipped. The product surface
+> is now `riga-flow` (`riga-mcp`) plus `tac-engine` for market data. Browser/dev mode reaches
+> `riga-mcp --transport http` through the Vite proxy path `/riga/mcp`. `crates/fina-kernel`
+> stays frozen as the migration/parity witness (§P6).
 
 `fina-kernel` may depend on `serde`, `serde_json` and `thiserror` — nothing else. This is
 machine-enforced by `crates/fina-kernel/tests/dependency_hygiene.rs`, which also fails if the
@@ -116,21 +117,22 @@ Two processes:
 
 ```bash
 npm ci
-npm run dev:all          # backend (127.0.0.1:8787) + Vite (127.0.0.1:5173)
+npm run dev:all          # riga-mcp HTTP (127.0.0.1:8788) + Vite (127.0.0.1:5173)
 ```
 
 | Piece | What it is |
 | --- | --- |
-| `crates/fina-server` (`fina-server`) | actix-web adapter. `GET /health`, `GET /api/version`, `POST /api/cmd/{command}` (single JSON result), `POST /api/stream/{command}` (SSE progress frames then the result frame). CORS is permissive; bind address is `--host`/`--port`, default `127.0.0.1:8787`. |
-| `src/` via Vite | The same frontend the desktop build uses. Detects the HTTP transport and points at `http://127.0.0.1:8787` (override with `VITE_FINA_BASE_URL`). |
+| `riga-mcp --transport http` (`npm run mcp:http:riga`) | The live pricing engine, speaking MCP over HTTP on `127.0.0.1:8788`. `tac-engine` serves market data on `127.0.0.1:8790` (`npm run mcp:http:tac`). |
+| `src/` via Vite | The same frontend the desktop build uses. The webview calls the same-origin paths `/riga/mcp` and `/tac/mcp`, which Vite proxies to the two engines (see `vite.config.ts`). |
 
-Running only `npm run dev` gives you Vite without a backend, and every command fails with
-`ERR_CONNECTION_REFUSED` — start the backend too (`npm run backend:dev`, or use
+Running only `npm run dev` gives you Vite without an engine; the tiles then show their
+unavailable/error state. Start the engines too (`npm run mcp:http:engines`, or use
 `npm run dev:all`).
 
-Transport selection is explicit and overridable: `VITE_FINA_TRANSPORT=tauri|http` forces a
-mode; otherwise `'__TAURI_INTERNALS__' in window` picks Tauri and everything else picks
-HTTP (`src/api/index.ts`).
+Transport selection is explicit and overridable: `VITE_RIGA_TRANSPORT` / `VITE_TAC_TRANSPORT`
+force `tauri` or `http`; otherwise `'__TAURI_INTERNALS__' in window` picks Tauri (the shell
+spawns the engine over stdio) and everything else picks HTTP (`src/api/rigaTransport.ts`,
+`src/api/tacTransport.ts`).
 
 ### Desktop mode (Tauri IPC)
 
@@ -156,9 +158,8 @@ path. `simulationStore.load()` does exactly that.
 
 ### CLI mode (retired — docs/49 §P1)
 
-> **Retired.** The `fina-cli` binary is no longer built or shipped. The commands remain
-> available via Tauri IPC, `fina-server` and `fina-mcp`. The examples below are kept for
-> historical reference only.
+> **Retired.** The `fina-cli` binary is no longer built or shipped. The product commands are
+> the `riga-mcp`/`tac-engine` tools; the examples below are kept for historical reference only.
 
 ```bash
 cargo run -p fina-cli -- generate-paths --seed 42 --paths 100 --out bundle.json
@@ -189,13 +190,11 @@ persisted as JSONL under app-data `sessions/`; list/load IPC commands exist, tho
 does not yet expose session browsing/restoration. The preferred model path is saved as a hint;
 models are not auto-loaded at startup to avoid surprising memory use.
 
-### MCP mode (implemented stdio transport)
+### MCP mode (retired — docs/49 §P5)
 
-`crates/fina-mcp` speaks JSON-RPC 2.0 over newline-delimited stdio, handles MCP initialization
-and tool discovery/calls, and advertises all twelve `fina-kernel` commands as tools. Tool calls
-route through `fina_kernel::api::dispatch_sync`, so this adapter adds no formulas or duplicate
-command implementations. The desktop chat panel currently registers its three read-only tools
-directly against Tauri IPC; it does not launch or connect to the standalone `fina-mcp` process.
+> **Retired.** The standalone `crates/fina-mcp` stdio server is no longer built or shipped.
+> The desktop chat panel drives the vendored `riga-mcp` over stdio through the Rust-managed
+> `McpRuntime` (`src-tauri/src/mcp.rs`); the webview never spawns a process.
 
 ## Command surface
 
@@ -428,7 +427,7 @@ Appendix F):
 - Production Greeks, risk aggregation, model-governance evidence, or certified P&L/PLVA
   reconciliation.
 - Shared/collaborative dashboards or notebook synchronisation, nor notebook import/export.
-- Embedded MCP client in the desktop chat (the standalone `fina-mcp` stdio server is implemented).
+- Embedded MCP client in the desktop chat (the desktop shell drives `riga-mcp` over stdio).
 - Signed/notarised desktop builds (the release pipeline is unsigned; see the README for the
   secrets that enable signing).
 
@@ -439,13 +438,13 @@ Appendix F):
 | Domain kernel | `crates/fina-kernel/src/{api,path_generator,economics,risk_engine,diagnostics,valuation,execution,jsnum,rng,dates,progress,error,types}.rs` |
 | Kernel tests | `crates/fina-kernel/tests/{golden_parity,path_generator_semantics,tofixed_conformance,dependency_hygiene}.rs` |
 | Parity fixture | `crates/fina-kernel/tests/fixtures/golden.json`, generator `scripts/generate-golden-fixture.ts` + snapshot `scripts/golden-src/` |
-| Desktop adapter | `src-tauri/src/lib.rs`, `src-tauri/src/commands/` |
-| HTTP adapter | `crates/fina-server/src/{lib,main}.rs`, `crates/fina-server/tests/parity.rs` |
+| Desktop adapter | `src-tauri/src/lib.rs`, `src-tauri/src/commands/`, `src-tauri/src/mcp_commands.rs` |
+| HTTP adapter | **retired** (docs/49 §P5) — was `crates/fina-server/src/{lib,main}.rs` |
 | CLI adapter | **retired** (docs/49 §P1) — was `crates/fina-cli/src/main.rs`, `crates/fina-cli/tests/cli.rs` |
-| MCP stdio server | `crates/fina-mcp/src/main.rs` |
-| Frontend transport | `src/api/{index,transport,tauriTransport,httpTransport,types}.ts` |
-| Frontend hooks | `src/hooks/index.ts` |
-| State | `src/store/{explorerStore,simulationStore,tradeEconomicsStore,marketDataStore,cashflowStore,valuationExplainStore,explainLedgerStore,dashboardDocsStore}.ts` |
+| MCP stdio server | **retired** (docs/49 §P5) — was `crates/fina-mcp/src/main.rs`; the engines are `riga-mcp` + `tac-engine` |
+| Frontend transport | `src/api/{rigaTransport,tacTransport,keyCase}.ts` |
+| Frontend hooks | `src/features/riga/hooks.ts`, `src/features/tac/hooks.ts` |
+| State | `src/store/{explorerStore,instrumentStore,rigaSelectionStore,observabilityStore,dashboardDocsStore}.ts` |
 | Tile catalog / dispatch | `src/features/dashboards/{types,catalog}.ts`, `src/features/tiles/components/TileRenderer.tsx` |
 | Workspace shell | `src/features/workspace/components/{Workspace,TemplateGallery,NotebookDrawer}.tsx` |
 | Tile implementations | `src/features/{payoff-graph,path-inspector,pathcube,attribution,branch-statistics,distribution,shared}/` |

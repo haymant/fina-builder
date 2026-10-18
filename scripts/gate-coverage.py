@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """Enforces the FEATURES.md §6.1/§6.3 coverage gates on an
-`lcov.info` produced by `cargo llvm-cov --workspace --exclude fina-mcp --lcov`.
+`lcov.info` produced by `cargo llvm-cov --workspace --lcov`.
 
 Gates (line coverage):
   - fina-kernel:  >= 70%   (spec §6.1)
-  - fina-server:  >= 85%   on non-main.rs sources (the lib is the adapter)
   - payoff-explorer (src-tauri): >= 75% on non-main sources (commands)
 
-Binary mains (`src/main.rs`) are excluded for server/tauri because they are a
-few lines of glue; excluding them keeps the gate meaningful rather than a
-vote to delete the mains. `src-tauri/src/local_agent.rs` (the embedded
-llama.cpp runtime) is excluded for the same reason, at a larger scale: see
-the `EXCLUDE` comment below for the full justification.
+Binary mains (`src/main.rs`) are excluded for tauri because it is a few lines
+of glue; excluding them keeps the gate meaningful rather than a vote to delete
+the main. `src-tauri/src/local_agent.rs` (the embedded llama.cpp runtime) is
+excluded for the same reason, at a larger scale: see the `EXCLUDE` comment
+below for the full justification.
 
 Usage: scripts/gate-coverage.py <lcov.info>
 Exit 1 with a summary on any gate miss.
@@ -21,7 +20,6 @@ from collections import defaultdict
 
 MIN = {
     "fina-kernel": 70.0,
-    "fina-server": 85.0,
     # `run()`/window glue in lib.rs is not unit-testable without a webview;
     # `src/commands/` (the adapters this crate is actually responsible for)
     # are at 100%.
@@ -30,14 +28,12 @@ MIN = {
 # Crate directory prefixes (the tauri package lives in `src-tauri/`).
 DIRS = {
     "fina-kernel": "crates/fina-kernel/",
-    "fina-server": "crates/fina-server/",
     "payoff-explorer": "src-tauri/",
 }
 # Files excluded from a crate's denominator, with the reason each one is out:
 #
-# - `crates/fina-server/src/main.rs` and `src-tauri/src/main.rs`: binary mains
-#   are glue for server/tauri (their logic is in the lib/commands), but the
-#   CLI's main.rs IS the adapter and therefore counts.
+# - `src-tauri/src/main.rs`: the binary main is glue (its logic is in the
+#   lib/commands) and is not unit-testable without a webview.
 # - `src-tauri/src/local_agent.rs`: the embedded llama.cpp assistant runtime.
 #   It is a subsystem, not an adapter, and none of its instrumented bodies can
 #   run in a unit-test process: they need a live `AppHandle`, a loaded llama
@@ -47,7 +43,6 @@ DIRS = {
 #   `default_max_tokens`, `safe_session_id`) and by the `mcp` stdio test; only
 #   the IPC/IO wrappers are out of reach. See FEATURES.md A-27.
 EXCLUDE = {
-    "crates/fina-server/src/main.rs",
     "src-tauri/src/main.rs",
     "src-tauri/src/local_agent.rs",
 }
