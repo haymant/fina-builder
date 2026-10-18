@@ -70,7 +70,7 @@ npx tsc -b                                  # 0 errors
 npm run build                               # exit 0
 npm run lint                                # 0 errors
 npx vitest run                              # all pass
-cargo fmt --all --check
+cargo fmt -p payoff-explorer --check
 cargo build --workspace                     # compiles (the Tauri shell)
 cargo clippy -p payoff-explorer --all-targets -- -D warnings
 cargo test -p payoff-explorer
@@ -322,16 +322,16 @@ The migration numbers stay in git history + Appendix A; the parked PUT-payoff an
 gone. `src-tauri`'s demo surface removed (`src/commands/`, the `health` command, the 11 demo IPC
 registrations, `tests/commands.rs`) and its `fina-kernel` dependency dropped; the workspace is now
 just `src-tauri`. CI loses the `core` + `dependency-hygiene` jobs (their subject is gone);
-`adapters` absorbs the toolchain-verify + `cargo fmt --all --check`. `gate-coverage.py`,
+`adapters` absorbs the toolchain-verify + `cargo fmt -p payoff-explorer --check`. `gate-coverage.py`,
 `set-version.mjs` and `rust-toolchain.toml` de-kernelised. (`msw` is left in
 `package.json` — unused now, but removing it would require regenerating
 `package-lock.json`, which the offline environment cannot do.)
 **G2: `modules/riga-flow` 0 diff.**
 
-**Evidence:** tsc 0 · build 0 · **vitest 43 files / 211 tests** · `cargo fmt --all --check` ·
+**Evidence:** tsc 0 · build 0 · **vitest 43 files / 211 tests** · `cargo fmt -p payoff-explorer --check` ·
 `cargo build --workspace` · `clippy -p payoff-explorer -D warnings` · `cargo test -p
 payoff-explorer` 5 · `riga-engine` pass · `riga-mcp` 16 · oxlint 0 errors. (Note: `src-tauri`
-was **not** rustfmt-clean before P6, so this commit includes a mechanical `cargo fmt --all` on it.)
+was **not** rustfmt-clean before P6, so this commit includes a mechanical `cargo fmt -p payoff-explorer` on it; `cargo fmt --all` also reformats the vendored `modules/riga` path deps, so it is avoided.)
 
 ---
 

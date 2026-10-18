@@ -61,7 +61,9 @@ jobs:
             exit 1
           fi
           echo "toolchain $have matches rust-toolchain.toml"
-      - run: cargo fmt --all --check
+      # Scoped to the workspace member: `cargo fmt --all` also formats *path*
+      # dependencies, which would reformat the vendored `modules/riga` sources.
+      - run: cargo fmt -p payoff-explorer --check
       # `payoff-explorer`'s build script (tauri-build) validates every
       # `bundle.externalBin` resource at compile time and fails the build if one
       # is missing: "resource path `binaries/riga-mcp-<triple>` doesn't exist".
