@@ -96,7 +96,7 @@ and the dashboard read the same:
 
 ## 3. Phases (entry / exit / evidence)
 
-### P1 — Refresh the dashboard skill
+### P1 — Refresh the dashboard skill — ✅ **done (2026-10-19)**
 **Entry:** §1 recon above complete.
 **Changes:** rewrite `skills/riga-flow-dashboard/SKILL.md` for the **current**
 surface: 67 tiles (55 riga-flow + 12 tac), the Petri-net refactor (one source of
@@ -105,14 +105,14 @@ added since the doc was written (percentile convergence, distribution stability,
 observation/schedule, branch flow, market/vol explorers, payoff graph, tac
 market-data), and the folded `P&L Attribution`.
 **Exit / evidence:**
-- [ ] every `TILE_CATALOG` type appears in the skill (a script diff of the 67
+- [x] every `TILE_CATALOG` type appears in the skill (a script diff of the 67
       catalog titles against the skill's tile rows returns none missing).
-- [ ] no stale rows: no "P&L Attribution" tile row; Risk Net/Explain Net described
+- [x] no stale rows: no "P&L Attribution" tile row; Risk Net/Explain Net described
       as watchers (no canvas); the net section names the layer switch.
-- [ ] `load_skills` parses it (headless `riga-cli --catalog` shows the skill with
+- [x] `load_skills` parses it (headless `riga-cli --catalog` shows the skill with
       its `description:`).
 
-### P2 — CLI starts with every MCP tool reachable
+### P2 — CLI starts with every MCP tool reachable — ✅ **done (2026-10-19)**
 **Entry:** P1 done.
 **Changes:** `riga-cli` headless `--tools` (merged server→tool markdown listing,
 with a `--json` variant); a startup **preflight** that reports each configured
@@ -120,11 +120,11 @@ server as `connected | unreachable` with the failing binary path; `/mcp` gains a
 `status` argument. (`.mcp.json` already registers both engines — no change needed
 unless the preflight finds otherwise.)
 **Exit / evidence:**
-- [ ] `cargo test -p riga-cli` green.
-- [ ] `riga-cli --tools` prints `riga-flow` (42) **and** `tac-engine` (75) with
+- [x] `cargo test -p riga-cli` green.
+- [x] `riga-cli --tools` prints `riga-flow` (42) **and** `tac-engine` (75) with
       their tool names, and exits 0.
-- [ ] `riga-cli --tools --json` emits the same as JSON; a test pins the shape.
-- [ ] preflight output names both servers `connected` when their binaries exist.
+- [x] `riga-cli --tools --json` emits the same as JSON; a test pins the shape.
+- [x] preflight output names both servers `connected` when their binaries exist.
 
 ### P3 — Model-free tool runner + JSON→markdown
 **Entry:** P2 done.
@@ -137,7 +137,7 @@ results appended to the transcript as markdown (reusing `markdown.rs`).
       `pv` and `ki_probability` (baseline fixture).
 - [ ] a tool-level error (`isError`) renders the structured `{code,message}`, not a
       panic; a test covers it.
-- [ ] `cargo test -p riga-cli` green.
+- [x] `cargo test -p riga-cli` green.
 
 ### P4 — Trade & market templates (inline `request`)
 **Entry:** P3 done.
