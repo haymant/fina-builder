@@ -137,8 +137,10 @@ vols (and disables the surface grid).
 ```bash
 npm run build          # type-check + production frontend bundle
 npm run lint           # oxlint
-npm run test:run       # Vitest (43 files, 211 tests)
+npm run test:run       # Vitest (43 files, 213 tests)
 npm run test:coverage  # Vitest coverage
+npm run smoke          # live e2e: MCP handshake + a tool call against the running engines
+                       #   (--web goes through the Vite proxy and checks the page HTML)
 npm run backend:test   # cargo test --workspace (the Tauri shell)
 npm run version:set -- 0.1.1   # stamp one version into src-tauri/Cargo.toml + tauri.conf.json
 ```
@@ -200,6 +202,7 @@ Notes:
 | `npm run test:run` | Vitest (43 files, 211 tests): riga/tac tile rendering, the instrument store, the golden transcript, stores |
 | `cargo test --workspace` | The Tauri shell (MCP client + engine resolution) |
 | `cargo test --manifest-path modules/riga-flow/Cargo.toml -p riga-engine -p riga-mcp` | The engine's own unit + tool-surface tests (the submodule's CI covers these too) |
+| `npm run smoke [-- --web]` | Live end-to-end: handshakes `riga-mcp` + `tac-engine` (directly or through the Vite proxy) and calls `price_put` |
 | `npm run build` / `npm run lint` | TypeScript + Vite build, Oxlint |
 | CI (`.github/workflows/ci.yml`) | frontend, desktop shell (fmt/clippy/tauri), coverage gates, and a guard that test mocks never reach a production bundle |
 

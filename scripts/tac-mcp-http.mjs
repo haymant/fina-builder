@@ -76,12 +76,18 @@ const server = createServer(async (req, res) => {
     const reply = await client.call(message)
     res.setHeader('Mcp-Session-Id', 'tac-bridge')
     if (reply === null) {
+      // A JSON-RPC notification (no id) has no response body.
       res.writeHead(202, CORS)
       res.end()
       return
     }
+    // Wrap the engine result in a JSON-RPC 2.0 envelope. `client.call` resolves
+    // with `message.result`, but every MCP client on this endpoint
+    // (`createHttpMcpTransport` in src/api/rigaTransport.ts, used by
+    // tacTransport) reads `parsed.result` — returning the bare result left the
+    // browser tac lane with zero tools.
     res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' })
-    res.end(JSON.stringify(reply))
+    res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id ?? null, result: reply }))
   } catch (error) {
     res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id ?? null, error: { code: -32603, message: String(error.message ?? error) } }))

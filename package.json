@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:all": "concurrently -k -n backend,web -c blue,green \"npm:backend:dev\" \"npm:dev\"",
+    "dev:all": "concurrently -k -n riga,tac,web -c blue,magenta,green \"npm:backend:dev\" \"npm:mcp:http:tac\" \"npm:dev\"",
     "dev:web": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
@@ -25,7 +25,7 @@
     "mcp:http:riga": "modules/riga-flow/target/release/riga-mcp --transport http --bind 127.0.0.1:8788 --allowed-host localhost --allowed-host 127.0.0.1",
     "mcp:http:engines": "concurrently -k -n riga,tac -c blue,magenta \"npm:mcp:http:riga\" \"npm:mcp:http:tac\"",
     "riga:fixture": "node scripts/record-transcripts.mjs riga",
-    "tac:fixture": "node scripts/record-transcripts.mjs tac",
+    "smoke": "node scripts/smoke.mjs",    "tac:fixture": "node scripts/record-transcripts.mjs tac",
     "lint": "oxlint",
     "test": "vitest",
     "test:run": "vitest run",
