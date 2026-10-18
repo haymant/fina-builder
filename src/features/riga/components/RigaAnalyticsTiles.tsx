@@ -17,6 +17,7 @@ import {
   useRigaGovernanceEvidence,
   useRigaMcDiagnostics,
   useRigaPathCube,
+  useRigaRiskBatch,
   useRigaRiskNet,
   useRigaRootCause,
   useRigaScenario,
@@ -638,6 +639,44 @@ export const RigaAttributionTile = memo(function RigaAttributionTile() {
           </div>
         )
       }}
+    </RigaPanel>
+  )
+})
+
+/** Per-asset risk summary (`risk_batch`): PV, DV01, correlation and Δ/Γ/ν. */
+export const RigaRiskSummaryTile = memo(function RigaRiskSummaryTile() {
+  const state = useRigaRiskBatch()
+  return (
+    <RigaPanel
+      title="Risk Summary"
+      subtitle="risk_batch · per-asset Δ/Γ/ν"
+      tool="risk_batch"
+      state={state}
+    >
+      {(data) => (
+        <div className="space-y-3 p-3">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+            <Kpi label="Base PV" value={num(data.basePv)} tone="primary" />
+            <Kpi label="MC error" value={num(data.pvMcError)} />
+            <Kpi label="DV01" value={num(data.dv01)} />
+            <Kpi label="Correlation ρ" value={num(data.correlationSensitivity)} tone="warning" />
+            <Kpi label="Scenarios" value={data.scenarioCount} />
+          </div>
+          <div>
+            <p className="eyebrow mb-1">Per-asset Greeks</p>
+            <DataTable
+              columns={[
+                { key: 'assetIndex', label: 'Asset', render: (row) => `#${row.assetIndex}` },
+                { key: 'delta', label: 'Delta', render: (row) => num(row.delta) },
+                { key: 'gamma', label: 'Gamma', render: (row) => num(row.gamma) },
+                { key: 'vega', label: 'Vega', render: (row) => num(row.vega, 4) },
+              ]}
+              rows={data.assets ?? []}
+              empty="No per-asset Greeks"
+            />
+          </div>
+        </div>
+      )}
     </RigaPanel>
   )
 })

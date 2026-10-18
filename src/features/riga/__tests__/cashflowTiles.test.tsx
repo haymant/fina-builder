@@ -3,6 +3,7 @@
 import { render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { RigaCashflowSummaryTile, RigaCashflowTimelineTile } from '../components/RigaCashflowTiles'
+import { RigaRiskSummaryTile } from '../components/RigaAnalyticsTiles'
 import { installRigaTranscript, resetTranscripts } from '../../../tests/mocks/transcripts'
 
 beforeEach(() => {
@@ -27,5 +28,15 @@ describe('riga cashflow tiles', () => {
     // legend + table header both carry the series name
     expect((await screen.findAllByText('Expected coupon PV')).length).toBeGreaterThan(0)
     expect(screen.getByText('Paid prob')).toBeTruthy()
+  })
+})
+
+describe('riga risk summary tile', () => {
+  it('renders base PV, DV01 and per-asset Greeks', async () => {
+    render(<RigaRiskSummaryTile />)
+    expect(await screen.findByText('DV01')).toBeTruthy()
+    expect(screen.getByText('Base PV')).toBeTruthy()
+    expect(screen.getByText('Per-asset Greeks')).toBeTruthy()
+    expect(screen.getByText('#0')).toBeTruthy()
   })
 })

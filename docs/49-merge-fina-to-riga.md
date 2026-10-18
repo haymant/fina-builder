@@ -136,7 +136,7 @@ tests · `cargo test -p fina-kernel` 273 passed (2 ignored) · `cargo build
 
 **Port-ready now** (the riga data exists; only a tile is needed):
 - **P2a** Cashflow Summary + Cashflow Timeline ← `build_cashflows` (`mean`, `paths`, `timeline`) — ✅ **ported (2026-10-18)**
-- **P2b** Risk Summary ← `risk_batch` (`base_pv`, per-asset Δ/Γ/ν, `dv01`, correlation)
+- **P2b** Risk Summary ← `risk_batch` (`base_pv`, per-asset Δ/Γ/ν, `dv01`, correlation) — ✅ **ported (2026-10-18)**
 - **P2c** Distribution deciles / KI ← `get_distributions` (`worst_final_deciles`, `ki_rate`, `mean_put`)
 - **P2d** Path Timeline ← `query_path_cube` sample + `get_path`
 
@@ -244,7 +244,7 @@ additive riga tool — P3).
 | Node Details | — (`get_path` has no `nodeDetails`) | **engine** |
 | Quantile Fan · Worst-of Evolution | — (needs a time series) | **engine** |
 | **Market & Risk** | | |
-| Risk Summary | `risk_batch` (`base_pv`, per-asset Δ/Γ/ν, `dv01`, ρ) | **port-ready P2b** |
+| Risk Summary | `risk_batch` (`base_pv`, per-asset Δ/Γ/ν, `dv01`, ρ) | **ported P2b** |
 | Greeks Table · Bucket Vega · Greeks Waterfall | — (need theta/rho/fxDelta/`bucketVegas[]`) | **engine P3c** |
 | Scenario Comparison | `riga-scenario-comparison` | **covered** |
 | **Valuation Explainability** | | |
@@ -252,7 +252,7 @@ additive riga tool — P3).
 | Explain Ledger Table · Explorer · Reconciliation | `riga-explain-net` | **covered** |
 | Master Explain Waterfall | — (needs the previousPV→current bridge) | **engine P3f** |
 | **Cashflow & PnL** | | |
-| Cashflow Summary · Timeline · Detail Explorer | `build_cashflows` (`mean`, `paths`, `timeline`, `sample_paths`) | **port-ready P2a** |
+| Cashflow Summary · Timeline · Detail Explorer | `build_cashflows` (`mean`, `paths`, `timeline`, `sample_paths`) | **ported P2a** (Summary + Timeline); Detail Explorer pending |
 | P&L Summary · P&L Timeline | — (needs per-path PnL over time) | **engine P3d** |
 | **Payoff Analysis** | | |
 | Attribution | `riga-attribution` | **covered** |
