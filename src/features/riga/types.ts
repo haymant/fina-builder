@@ -146,6 +146,11 @@ export interface RigaMarketEntry {
   vols: number[]
   correlation: number[][]
   riskFreeRate: number
+  dividendYields?: number[]
+  engineModel?: string
+  snapshotId?: string
+  sourceModel?: string
+  localVol?: boolean
 }
 
 export interface RigaPriceResult {

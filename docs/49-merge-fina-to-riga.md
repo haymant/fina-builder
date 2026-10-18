@@ -228,8 +228,8 @@ separate, read-only code path.
 | **P3g-i `path_series`** | bounded GBM `PathCube` → selected-path worst-of series + population quantiles (P05/P25/P50/P75/P95) per step + barrier-crossing counts + state occupancy | Path Timeline, Quantile Fan, Worst-of Evolution, Barrier Heatmap, State Occupancy — ✅ **ported (2026-10-18)** |
 | **P3g-ii `payoff_graph`** | `payoff::build_put_graph(spec)` → nodes/edges (additive graph accessor) | Payoff Graph |
 | **P3g-iii `observation_series`** | per-observation schedule + triggered counts from the cube | Observation Explorer, Schedule Explorer |
-| **P3g-iv branch Sankey** | **frontend-only** — `get_branch_stats` + `query_execution_net` (real 3-transition flow) | Branch Statistics (Sankey) |
-| **P3g-v market explorers** | **frontend-only** — `get_market` (spots / vols / correlation / localVol) | Spot · Vol Surface · Correlation explorers |
+| **P3g-iv branch Sankey** | **frontend-only** — `get_branch_stats` + `query_execution_net` (real transition populations) | Branch Statistics (Sankey) — ✅ **ported (2026-10-18)** |
+| **P3g-v market explorers** | **frontend-only** — `get_market` (spots / flat ATM vols / correlation); Vol Surface from the instrument document's Dupire grid | Spot · Correlation **ported (2026-10-18)**; Vol Surface from the document; FX Spot **n/a** |
 | **P3g-vi percentile convergence** | ladder-aware percentile series | Percentile Convergence, Distribution Stability |
 | **n/a** | — | P&L Summary (no accounting), FX Spot (no FX factor), Simulation Efficiency (VR efficiency study) |
 
@@ -305,6 +305,13 @@ additive riga tool — P3).
 | Risk Summary | `risk_batch` (`base_pv`, per-asset Δ/Γ/ν, `dv01`, ρ) | **ported P2b** |
 | Greeks Table · Greeks Waterfall · Bucket Vega | `risk_detailed` (per-asset Δ/Γ/ν, θ/ρ, cross-γ, vega by factor) | **ported P3c** |
 | Scenario Comparison | `riga-scenario-comparison` | **covered** |
+| **Market Data** | | |
+| Spot Explorer · Correlation Matrix | `get_market` (spots / correlation / flat ATM vols) | **ported P3g-v** |
+| Volatility Surface | instrument document Dupire local-vol grid | **ported P3g-v** |
+| FX Spot | — (riga has no FX factor) | **n/a** |
+| **Risk Analytics** | | |
+| Sankey (branch flow) | `query_execution_net` transition populations | **ported P3g-iv** |
+| State Occupancy · Barrier Crossings | `path_series` (states / crossings) | **ported P3g-i** |
 | **Valuation Explainability** | | |
 | Valuation Explain Summary · Taylor Explain · PLVA Explain | `riga-taylor-explain` (PLVA folded) | **covered** |
 | Explain Ledger Table · Explorer · Reconciliation | `riga-explain-net` | **covered** |
