@@ -65,14 +65,22 @@ describe('tac heatmap theming', () => {
     }
   })
 
-  it('renders the 3D surface as an SVG projection', () => {
+  it('renders the 3D surface as a bounded SVG mesh', () => {
     render(<TacVolSurface />)
     fireEvent.click(screen.getByText('3D'))
     const svg = screen.getByTestId('vol-surface-3d')
-    expect(svg).toBeInTheDocument()
-    // The surface is a mesh of coloured quads.
-    expect(svg.querySelectorAll('path').length).toBeGreaterThan(4)
-    const fills = [...svg.querySelectorAll('path')].map((p) => p.getAttribute('fill'))
-    for (const fill of fills) expect(fill).toMatch(/^rgba?\(/)
+    const paths = [...svg.querySelectorAll('path')]
+    expect(paths.length).toBeGreaterThan(4)
+    for (const path of paths) {
+      expect(path.getAttribute('fill')).toMatch(/^rgba?\(/)
+      const coords = (path.getAttribute('d') ?? '').match(/-?\d+\.?\d*/g)?.map(Number) ?? []
+      // 4 corners × (x, y).
+      expect(coords.length).toBeGreaterThanOrEqual(8)
+      for (const value of coords) {
+        expect(Number.isFinite(value)).toBe(true)
+        expect(value).toBeGreaterThanOrEqual(-1)
+        expect(value).toBeLessThanOrEqual(361) // viewBox is 360×240
+      }
+    }
   })
 })
