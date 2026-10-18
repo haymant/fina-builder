@@ -7,7 +7,6 @@
 
 import { useRef, useState } from 'react'
 import { useInstrumentStore } from '../../../store/instrumentStore'
-import { useRigaSourceStore } from '../../../store/rigaSourceStore'
 import { useRigaTradePrice } from '../hooks'
 import { RIGA_TRADE_PRESETS } from '../../../store/rigaTradeStore'
 import { INSTRUMENT_LABELS } from '../instrument/ui'
@@ -27,7 +26,6 @@ export function RigaTradeEconomicsPanel() {
   const patch = useInstrumentStore((s) => s.patch)
   const importText = useInstrumentStore((s) => s.importText)
   const reset = useInstrumentStore((s) => s.reset)
-  const source = useRigaSourceStore((s) => s.source)
   const price = useRigaTradePrice()
 
   const fileRef = useRef<HTMLInputElement>(null)
@@ -62,7 +60,7 @@ export function RigaTradeEconomicsPanel() {
       bodyClassName="overflow-auto"
       actions={
         <span className="rounded border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-[9px] text-primary">
-          source: {source}
+          source: riga
         </span>
       }
     >

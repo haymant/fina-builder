@@ -1,16 +1,4 @@
 export type TileType =
-  | 'PayoffGraph' | 'PathTimeline' | 'NodeDetails' | 'Sankey' | 'Attribution' | 'Histogram' | 'Distribution'
-  | 'QuantileFan' | 'StateOccupancy' | 'BarrierHeatmap' | 'PathPercentileHeatmap' | 'PathDistributionPosition'
-  | 'SimulationSummary' | 'PVConvergence' | 'ConfidenceIntervalShrinkage' | 'ErrorVsPathCount'
-  | 'PercentileConvergence' | 'KIProbabilityConvergence' | 'KOProbabilityConvergence'
-  | 'DistributionStability' | 'SimulationEfficiency' | 'ConvergenceHealth'
-  | 'TradeSummary' | 'EconomicsImpactSummary' | 'SensitivityTornado' | 'ParameterImpactMatrix'
-  | 'RiskSummary' | 'GreeksTable' | 'BucketVega' | 'SpotPriceExplorer' | 'VolatilitySurface'
-  | 'CorrelationMatrix' | 'FXSpotExplorer' | 'GreeksWaterfall' | 'ScenarioComparison'
-  | 'ScheduleExplorer' | 'ObservationExplorer' | 'ExecutionStateInspector' | 'LifecycleOverview'
-  | 'CashflowSummary' | 'CashflowTimeline' | 'CashflowDetail' | 'PnLSummary' | 'PnLTimeline'
-  | 'ValuationExplainSummary' | 'MasterExplainWaterfall' | 'TaylorExplain' | 'PLVAExplain'
-  | 'ExplainLedgerTable' | 'ExplainLedgerExplorer' | 'ExplainReconciliation'
   // riga-flow tiles (additive; handoff §5.1b)
   | 'RigaPayoffPetriNet' | 'RigaTransitionDetail' | 'RigaTokenDetail' | 'RigaRiskNet' | 'RigaExplainNet'
   | 'RigaDataLineage' | 'RigaPathCubeQuery' | 'RigaExecutionTape' | 'RigaBookRisk' | 'RigaScenarioComparison'

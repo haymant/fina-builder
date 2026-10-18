@@ -5,13 +5,20 @@ import { describe, expect, it } from 'vitest'
 import { TILE_CATALOG } from '../../features/dashboards/catalog'
 import { useDashboardDocsStore } from '../dashboardDocsStore'
 import { useExplorerStore } from '../explorerStore'
-import { dashboardNeedsDemoBundle } from '../../features/dashboards/needsBundle'
 
 const catalogTypes = new Set<string>(TILE_CATALOG.map((tile) => tile.type))
 const catalogIds = new Set<string>(TILE_CATALOG.map((tile) => tile.id))
 
 describe('riga-flow templates', () => {
   const templates = useDashboardDocsStore.getState().templates
+
+  it('every template references only real catalog tile types', () => {
+    for (const template of templates) {
+      for (const type of template.tileTypes) {
+        expect(catalogTypes.has(type), `${template.id} → ${type}`).toBe(true)
+      }
+    }
+  })
 
   it('registers the riga-lineage template with notebook docs', () => {
     const template = templates.find((t) => t.id === 'riga-lineage')!
@@ -32,8 +39,17 @@ describe('riga-flow templates', () => {
   })
 })
 
-describe('built-in riga dashboards', () => {
+describe('built-in dashboards', () => {
   const dashboards = useExplorerStore.getState().dashboards
+
+  it('every built-in dashboard has valid catalog tile ids', () => {
+    for (const dashboard of dashboards) {
+      expect(dashboard.layout.length).toBeGreaterThan(0)
+      for (const item of dashboard.layout) {
+        expect(catalogIds.has(item.i), `${dashboard.id} → ${item.i}`).toBe(true)
+      }
+    }
+  })
 
   for (const id of ['riga-lineage', 'tac-market-data']) {
     it(`registers the '${id}' built-in dashboard with valid tile ids`, () => {
@@ -47,17 +63,10 @@ describe('built-in riga dashboards', () => {
   }
 })
 
-describe('demo-bundle gating', () => {
-  it('engine dashboards do not need the demo bundle', () => {
-    const dashboards = useExplorerStore.getState().dashboards
-    for (const id of ['riga-lineage', 'tac-market-data']) {
-      const dashboard = dashboards.find((d) => d.id === id)!
-      expect(dashboardNeedsDemoBundle(dashboard.layout)).toBe(false)
+describe('catalog lane', () => {
+  it('contains no demo-group tile', () => {
+    for (const tile of TILE_CATALOG) {
+      expect(['riga-flow', 'tac-engine'], `${tile.id} → ${tile.group}`).toContain(tile.group)
     }
-  })
-
-  it('demo dashboards do need the demo bundle', () => {
-    const dashboard = useExplorerStore.getState().dashboards.find((d) => d.id === 'payoff-explorer')!
-    expect(dashboardNeedsDemoBundle(dashboard.layout)).toBe(true)
   })
 })

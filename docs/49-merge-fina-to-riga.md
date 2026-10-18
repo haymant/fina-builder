@@ -237,7 +237,7 @@ Per sub-phase **exit:** the six gate commands pass; the tile(s) render populated
 transcript data with a behaviour test; `git diff --stat` shows **no** hot-path file
 (G2); Appendix A rows marked **ported**.
 
-### P4 — Retire the demo UI lane
+### P4 — Retire the demo UI lane — ✅ **done (2026-10-18)**
 **Entrance:** every demo-group tile in Appendix A is **ported**.
 **Changes:** remove the demo bundle from the tile path — no tile imports
 `useSimulationStore` / `useSelectedPath` / `src/api`; remove the demo-group
@@ -245,11 +245,22 @@ catalog entries and `TileRenderer` cases; remove or force the `rigaSource`
 toggle (lane labels + stand-down from docs/46/48 become moot); remove the demo
 trade/market side-panels.
 **Exit:**
-- [ ] `grep -rn "useSimulationStore\|useSelectedPath" src/features --include=*.tsx`
+- [x] `grep -rn "useSimulationStore\|useSelectedPath" src/features --include=*.tsx`
       returns only non-tile infrastructure kept for tests (or nothing).
-- [ ] `TILE_CATALOG` contains **no** demo-group tile.
-- [ ] `npx vitest run` passes with the demo tile tests removed/adjusted.
-- [ ] the six gate commands pass (frontend + kernel; riga guard unchanged).
+- [x] `TILE_CATALOG` contains **no** demo-group tile.
+- [x] `npx vitest run` passes with the demo tile tests removed/adjusted.
+- [x] the six gate commands pass (frontend + kernel; riga guard unchanged).
+
+**Delivered (2026-10-18):** removed the 51 demo catalog entries + `TileRenderer`
+imports/cases; deleted the demo tile components (`pathcube`, `path-inspector`,
+`payoff-graph`, `attribution`, `branch-statistics`, `distribution`), the demo
+hooks (`src/hooks/index.ts`), the demo-only stores (`cashflowStore`,
+`valuationExplainStore`, `explainLedgerStore`, `rigaSourceStore`), the demo
+side-panels (`TradeEconomicsPanel`, `MarketDataPanel`), the unused `TopToolbar`
+and the demo-bundle gate (`needsBundle`). Retargeted the six built-in dashboards
++ all notebook templates to riga/tac tiles; forced `RigaTradeEconomicsPanel` to a
+static `source: riga`; dropped the demo `TileType` members. `App` no longer loads
+the demo bundle. **G2: `modules/riga-flow` untouched (0 diff).**
 
 ### P5 — Retire `fina-server` + `fina-mcp`
 **Entrance:** P4 complete (nothing in the shipped app uses the demo lane).

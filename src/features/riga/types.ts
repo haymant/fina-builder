@@ -594,5 +594,3 @@ export interface RigaBaseline {
     frozenAtUnix: number
   }
 }
-
-export type RigaSource = 'demo' | 'riga'
