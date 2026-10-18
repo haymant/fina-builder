@@ -21,7 +21,7 @@ export type TileType =
   | 'RigaEconomicsImpactSummary' | 'RigaSensitivityTornado' | 'RigaParameterImpactMatrix'
   | 'RigaMasterExplainWaterfall'
   | 'RigaPathTimeline' | 'RigaQuantileFan' | 'RigaWorstOfEvolution' | 'RigaBarrierHeatmap' | 'RigaStateOccupancy'
-  | 'RigaBranchFlow' | 'RigaMarketExplorer' | 'RigaVolSurface'
+  | 'RigaBranchFlow' | 'RigaMarketExplorer' | 'RigaVolSurface' | 'RigaPayoffGraph'
   | 'RigaGovernanceEvidence' | 'RigaRootCause' | 'RigaRegressionTriage' | 'RigaGreeksSanity'
   | 'RigaStressBands' | 'RigaMarketSnapshot' | 'RigaHealthRun' | 'RigaTradeEconomics' | 'RigaMarketData'
   // tac-engine market-data tiles (additive; handoff §6.7)

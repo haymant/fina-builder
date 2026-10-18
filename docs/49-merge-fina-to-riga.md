@@ -226,7 +226,7 @@ separate, read-only code path.
 | Sub-phase | Tool | Tiles unlocked |
 |---|---|---|
 | **P3g-i `path_series`** | bounded GBM `PathCube` → selected-path worst-of series + population quantiles (P05/P25/P50/P75/P95) per step + barrier-crossing counts + state occupancy | Path Timeline, Quantile Fan, Worst-of Evolution, Barrier Heatmap, State Occupancy — ✅ **ported (2026-10-18)** |
-| **P3g-ii `payoff_graph`** | `payoff::build_put_graph(spec)` → nodes/edges (additive graph accessor) | Payoff Graph |
+| **P3g-ii `payoff_graph`** | `payoff::build_put_graph(spec)` → 8-transition product graph (nodes/edges) via an additive `graph.rs` accessor; **also folded into `query_execution_net`** so the Petri-net tool is the superset | Payoff Graph — ✅ **ported (2026-10-18)** |
 | **P3g-iii `observation_series`** | per-observation schedule + triggered counts from the cube | Observation Explorer, Schedule Explorer |
 | **P3g-iv branch Sankey** | **frontend-only** — `get_branch_stats` + `query_execution_net` (real transition populations) | Branch Statistics (Sankey) — ✅ **ported (2026-10-18)** |
 | **P3g-v market explorers** | **frontend-only** — `get_market` (spots / flat ATM vols / correlation); Vol Surface from the instrument document's Dupire grid | Spot · Correlation **ported (2026-10-18)**; Vol Surface from the document; FX Spot **n/a** |
@@ -322,7 +322,7 @@ additive riga tool — P3).
 | P&L Timeline | `build_cashflows.timeline` | **covered** (Cashflow Timeline, P2a) |
 | **Payoff Analysis** | | |
 | Attribution | `riga-attribution` | **covered** |
-| Payoff Graph | — | **engine** |
+| Payoff Graph | `payoff_graph` — the full 8-transition product pipeline; also carried by `query_execution_net` | **ported P3g-ii** |
 | **Settlement / Payoff Evaluation / Execution Timeline** | `riga-transition-detail`, `riga-execution-tape`, ledger | mostly **covered** |
 | Observation Explorer | — (needs an observation series) | **engine** |
 | **Trade Design** | | |

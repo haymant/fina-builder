@@ -200,6 +200,21 @@ export interface ExecutionNet {
   transitions: NetTransition[]
   stats: unknown
   runId: string
+  /** The full product payoff graph (superset of the execution net). */
+  payoffGraph?: RigaPayoffGraph
+}
+
+export interface RigaPayoffGraphNode {
+  id: string
+  inputs: string[]
+  output: string
+}
+
+export interface RigaPayoffGraph {
+  sources: string[]
+  nodes: RigaPayoffGraphNode[]
+  edges: Array<{ source: string; target: string }>
+  nodeCount: number
 }
 
 export interface RiskNetTransition {

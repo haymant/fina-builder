@@ -37,6 +37,7 @@ const RigaTradeDesignModule = () => import('../../riga/components/RigaTradeDesig
 const RigaPathSeriesModule = () => import('../../riga/components/RigaPathSeriesTiles')
 const RigaBranchFlowModule = () => import('../../riga/components/RigaBranchFlowTile')
 const RigaMarketExplorerModule = () => import('../../riga/components/RigaMarketExplorerTiles')
+const RigaPayoffGraphModule = () => import('../../riga/components/RigaPayoffGraphTile')
 const TacTilesModule = () => import('../../tac/components/TacTiles')
 
 const RigaTradeEconomicsTile = lazyNamed(RigaTradePanelModule, 'RigaTradeEconomicsTile')
@@ -66,6 +67,7 @@ const RigaStateOccupancyTile = lazyNamed(RigaPathSeriesModule, 'RigaStateOccupan
 const RigaBranchFlowTile = lazyNamed(RigaBranchFlowModule, 'RigaBranchFlowTile')
 const RigaMarketExplorerTile = lazyNamed(RigaMarketExplorerModule, 'RigaMarketExplorerTile')
 const RigaVolSurfaceTile = lazyNamed(RigaMarketExplorerModule, 'RigaVolSurfaceTile')
+const RigaPayoffGraphTile = lazyNamed(RigaPayoffGraphModule, 'RigaPayoffGraphTile')
 const RigaDistributionSummaryTile = lazyNamed(RigaAnalyticsModule, 'RigaDistributionSummaryTile')
 const RigaSelectedPathTile = lazyNamed(RigaAnalyticsModule, 'RigaSelectedPathTile')
 const RigaPvConvergenceTile = lazyNamed(RigaConvergenceModule, 'RigaPvConvergenceTile')
@@ -182,6 +184,7 @@ function renderTile(type: TileType): ReactElement | null {
     case 'RigaBranchFlow': return wrap(<RigaBranchFlowTile />)
     case 'RigaMarketExplorer': return wrap(<RigaMarketExplorerTile />)
     case 'RigaVolSurface': return wrap(<RigaVolSurfaceTile />)
+    case 'RigaPayoffGraph': return wrap(<RigaPayoffGraphTile />)
     case 'RigaDistributionSummary': return wrap(<RigaDistributionSummaryTile />)
     case 'RigaSelectedPath': return wrap(<RigaSelectedPathTile />)
     case 'RigaPvConvergence': return wrap(<RigaPvConvergenceTile />)

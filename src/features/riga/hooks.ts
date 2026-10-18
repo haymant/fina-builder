@@ -81,6 +81,7 @@ const TOOLS_WITH_REQUEST = new Set<string>([
   'risk_detailed',
   'trade_design',
   'path_series',
+  'payoff_graph',
   'build_cashflows',
   'execution_events',
   'compute_risk',

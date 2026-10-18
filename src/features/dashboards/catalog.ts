@@ -85,6 +85,7 @@ export const TILE_CATALOG: TileMeta[] = [
   { id: 'riga-branch-flow', type: 'RigaBranchFlow', title: 'Branch Flow (riga)', description: 'KO / survive / put / coupon populations (query_execution_net).', group: 'riga-flow', icon: '≋' },
   { id: 'riga-market-explorer', type: 'RigaMarketExplorer', title: 'Market Explorer (riga)', description: 'Spots, flat ATM vols and correlation (get_market).', group: 'riga-flow', icon: '◫' },
   { id: 'riga-vol-surface', type: 'RigaVolSurface', title: 'Vol Surface (riga)', description: 'Dupire local-vol grid from the instrument document.', group: 'riga-flow', icon: '∇' },
+  { id: 'riga-payoff-graph', type: 'RigaPayoffGraph', title: 'Payoff Graph (riga)', description: 'Full product payoff pipeline; the execution net is its priced projection (query_execution_net).', group: 'riga-flow', icon: '◈' },
   { id: 'riga-token-detail', type: 'RigaTokenDetail', title: 'Token Detail', description: 'Bounded sample of the tokens in a place, with replay.', group: 'riga-flow', icon: '◦' },
   { id: 'riga-risk-net', type: 'RigaRiskNet', title: 'Risk Net', description: 'Layer 2 risk propagation over the same transitions.', group: 'riga-flow', icon: 'Σ' },
   { id: 'riga-explain-net', type: 'RigaExplainNet', title: 'Explain Net', description: 'Layer 3 ledger overlay: condition, populations, PV impact, evidence.', group: 'riga-flow', icon: '≡' },

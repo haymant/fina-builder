@@ -5,7 +5,7 @@
     "name": "riga-mcp",
     "version": "0.1.0"
   },
-  "recordedAt": "2026-10-18T01:42:01.983Z",
+  "recordedAt": "2026-10-18T01:57:20.006Z",
   "tools": {
     "generate_paths": {
       "checksum": 13424780670936460000,
@@ -783,7 +783,7 @@
         ],
         "correlation_sensitivity": 0.00634053512862387,
         "dv01": -0.24440917914314575,
-        "frozen_at_unix": 1792287655,
+        "frozen_at_unix": 1792288573,
         "pv": 1.000264636050433
       },
       "name": "default"
@@ -2069,7 +2069,7 @@
         "cpu_gbm": true,
         "gpu": false
       },
-      "git_sha": "7d7551d",
+      "git_sha": "fff27dd",
       "status": "ok",
       "version": "0.1.0"
     },
@@ -5036,6 +5036,117 @@
       ],
       "steps": 105
     },
+    "payoff_graph": {
+      "edges": [
+        {
+          "source": "perf0",
+          "target": "worst_of_performance"
+        },
+        {
+          "source": "perf1",
+          "target": "worst_of_performance"
+        },
+        {
+          "source": "worst",
+          "target": "range_accrual"
+        },
+        {
+          "source": "worst",
+          "target": "global_ko_gate"
+        },
+        {
+          "source": "worst",
+          "target": "knock_in_gate"
+        },
+        {
+          "source": "worst",
+          "target": "down_and_in_put"
+        },
+        {
+          "source": "ki_flag",
+          "target": "down_and_in_put"
+        },
+        {
+          "source": "put",
+          "target": "aggregate_legs"
+        },
+        {
+          "source": "coupon_mask",
+          "target": "memory_carry"
+        },
+        {
+          "source": "ko_period",
+          "target": "memory_carry"
+        },
+        {
+          "source": "coupon_pv",
+          "target": "aggregate_coupon"
+        }
+      ],
+      "node_count": 8,
+      "nodes": [
+        {
+          "id": "worst_of_performance",
+          "inputs": [
+            "perf0",
+            "perf1"
+          ],
+          "output": "worst"
+        },
+        {
+          "id": "range_accrual",
+          "inputs": [
+            "worst"
+          ],
+          "output": "coupon_mask"
+        },
+        {
+          "id": "global_ko_gate",
+          "inputs": [
+            "worst"
+          ],
+          "output": "ko_period"
+        },
+        {
+          "id": "knock_in_gate",
+          "inputs": [
+            "worst"
+          ],
+          "output": "ki_flag"
+        },
+        {
+          "id": "down_and_in_put",
+          "inputs": [
+            "worst",
+            "ki_flag"
+          ],
+          "output": "put"
+        },
+        {
+          "id": "aggregate_legs",
+          "inputs": [
+            "put"
+          ],
+          "output": "put_pv"
+        },
+        {
+          "id": "memory_carry",
+          "inputs": [
+            "coupon_mask",
+            "ko_period"
+          ],
+          "output": "coupon_pv"
+        },
+        {
+          "id": "aggregate_coupon",
+          "inputs": [
+            "coupon_pv"
+          ],
+          "output": "coupon_pv_mean"
+        }
+      ],
+      "sources": []
+    },
     "pl_explain": {
       "contributions": [
         {
@@ -5442,6 +5553,117 @@
       ]
     },
     "query_execution_net": {
+      "payoff_graph": {
+        "edges": [
+          {
+            "source": "perf0",
+            "target": "worst_of_performance"
+          },
+          {
+            "source": "perf1",
+            "target": "worst_of_performance"
+          },
+          {
+            "source": "worst",
+            "target": "range_accrual"
+          },
+          {
+            "source": "worst",
+            "target": "global_ko_gate"
+          },
+          {
+            "source": "worst",
+            "target": "knock_in_gate"
+          },
+          {
+            "source": "worst",
+            "target": "down_and_in_put"
+          },
+          {
+            "source": "ki_flag",
+            "target": "down_and_in_put"
+          },
+          {
+            "source": "put",
+            "target": "aggregate_legs"
+          },
+          {
+            "source": "coupon_mask",
+            "target": "memory_carry"
+          },
+          {
+            "source": "ko_period",
+            "target": "memory_carry"
+          },
+          {
+            "source": "coupon_pv",
+            "target": "aggregate_coupon"
+          }
+        ],
+        "node_count": 8,
+        "nodes": [
+          {
+            "id": "worst_of_performance",
+            "inputs": [
+              "perf0",
+              "perf1"
+            ],
+            "output": "worst"
+          },
+          {
+            "id": "range_accrual",
+            "inputs": [
+              "worst"
+            ],
+            "output": "coupon_mask"
+          },
+          {
+            "id": "global_ko_gate",
+            "inputs": [
+              "worst"
+            ],
+            "output": "ko_period"
+          },
+          {
+            "id": "knock_in_gate",
+            "inputs": [
+              "worst"
+            ],
+            "output": "ki_flag"
+          },
+          {
+            "id": "down_and_in_put",
+            "inputs": [
+              "worst",
+              "ki_flag"
+            ],
+            "output": "put"
+          },
+          {
+            "id": "aggregate_legs",
+            "inputs": [
+              "put"
+            ],
+            "output": "put_pv"
+          },
+          {
+            "id": "memory_carry",
+            "inputs": [
+              "coupon_mask",
+              "ko_period"
+            ],
+            "output": "coupon_pv"
+          },
+          {
+            "id": "aggregate_coupon",
+            "inputs": [
+              "coupon_pv"
+            ],
+            "output": "coupon_pv_mean"
+          }
+        ],
+        "sources": []
+      },
       "places": [
         {
           "id": "start",
@@ -5817,7 +6039,7 @@
             "transition_id": "memory_coupon"
           }
         ],
-        "frozen_at_unix": 1792287655
+        "frozen_at_unix": 1792288573
       },
       "engine_model": "dupire_local_vol_calibrated_cpu",
       "evidence_refs": [
