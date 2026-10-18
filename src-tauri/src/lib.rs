@@ -1,30 +1,18 @@
-//! fina-builder desktop shell: kernel-command adapters, the MCP server registry
-//! (visual atlas), and the in-process RIGA agent that backs the chat panel.
+//! fina-builder desktop shell: the MCP server registry (visual atlas) and the
+//! in-process RIGA agent that backs the chat panel.
 //!
-//! All product-domain logic lives in `fina-kernel`; commands in `commands/` are
-//! pure pass-throughs (see `FEATURES.md` §5c). The chat panel is RIGA's
+//! The shell owns no pricing logic: it drives the vendored `riga-mcp` and
+//! `tac-engine` servers over stdio, and the chat panel is RIGA's
 //! `@rigai/assistant-ui`, driven by the `riga-server` IPC service in
-//! `riga_agent` — this shell owns no agent logic of its own.
+//! `riga_agent`.
 
-pub mod commands;
 pub mod mcp;
 pub mod mcp_commands;
 pub mod riga_agent;
 
-use fina_kernel::api::HealthResponse;
-use fina_kernel::FinaErrorWire;
 use riga_kernel::Agent;
 use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
-
-/// `health` — one line, no domain inputs.
-#[tauri::command]
-fn health() -> Result<HealthResponse, FinaErrorWire> {
-    Ok(HealthResponse {
-        version: fina_kernel::VERSION.to_string(),
-        core_version: fina_kernel::VERSION.to_string(),
-    })
-}
 
 /// Open an external URL in the OS browser. The chat's markdown links are
 /// `target="_blank"`; in the webview that would spawn a second app window, so the
@@ -63,19 +51,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            health,
             open_external,
-            commands::path_generator::generate_paths,
-            commands::path_generator::get_path,
-            commands::path_generator::get_branch_stats,
-            commands::path_generator::get_distributions,
-            commands::path_generator::execution_events,
-            commands::economics::compute_trade_analytics,
-            commands::risk_engine::compute_risk,
-            commands::diagnostics::get_mc_diagnostics,
-            commands::valuation::build_cashflows,
-            commands::valuation::valuation_explain,
-            commands::valuation::explain_ledger,
             // MCP registry (visual atlas + vendored engines).
             mcp_commands::get_riga_mcp_path,
             mcp_commands::get_tac_engine_path,

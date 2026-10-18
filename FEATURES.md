@@ -20,9 +20,11 @@
 Part II is prescriptive ("must", "do not"); Part I is descriptive ("is", "does not").
 Where they disagree about **behaviour**, Part II §5 (invariants) wins and the discrepancy
 is a bug. Where they disagree about **packaging**, this note wins: the demo transport stack
-(`fina-cli` §P1, `fina-server` + `fina-mcp` §P5) is **retired** per `docs/49-merge-fina-to-riga.md`,
-and the product surface is `riga-flow` (`riga-mcp`) + `tac-engine`. Part II's transport/adapter
-sections are kept as the decision record.
+(`fina-cli` §P1, `fina-server` + `fina-mcp` §P5) is **retired** and the demo kernel
+(`crates/fina-kernel` **and its golden fixture**, §P6) is **deleted**, per
+`docs/49-merge-fina-to-riga.md`. The product surface is `riga-flow` (`riga-mcp`) + `tac-engine`.
+Part I's demo-kernel/tile sections and Part II's transport/adapter sections are kept as the
+decision record.
 
 ---
 
@@ -89,20 +91,26 @@ The layering rule, stated once:
       └──────────────────────────────────────────────────────┘
 
       ┌──────────────────────────────────────────────────────┐
-      │  crates/fina-kernel — FROZEN parity witness (P6)      │
-      │  no transport; not a dependency of any shipped binary │
+      │  crates/fina-kernel — REMOVED (docs/49 §P6)           │
+      │  the demo engine, its golden and the demo IPC commands│
+      │  were deleted; the frontend drives only the engines   │
       └──────────────────────────────────────────────────────┘
 ```
 
 > **Transport status (docs/49).** `crates/fina-cli` (§P1), `crates/fina-server` and
-> `crates/fina-mcp` (§P5) are **retired** — no longer built or shipped. The product surface
-> is now `riga-flow` (`riga-mcp`) plus `tac-engine` for market data. Browser/dev mode reaches
-> `riga-mcp --transport http` through the Vite proxy path `/riga/mcp`. `crates/fina-kernel`
-> stays frozen as the migration/parity witness (§P6).
+> `crates/fina-mcp` (§P5) are **retired** — no longer built or shipped. `crates/fina-kernel`
+> and its golden fixture were **deleted** outright in §P6 (owner decision): it shipped nothing
+> and its last dependant, `src-tauri`'s in-process demo commands, was removed with it. The
+> product surface is now `riga-flow` (`riga-mcp`) plus `tac-engine` for market data. Browser/dev
+> mode reaches `riga-mcp --transport http` through the Vite proxy path `/riga/mcp`.
+>
+> **Everything below that describes the demo kernel, its twelve commands, its golden and the
+> demo-tile UI is the pre-merge inventory** — kept as the record of what was migrated, not as the
+> current product. The live product is `riga-flow` + `tac-engine`.
 
-`fina-kernel` may depend on `serde`, `serde_json` and `thiserror` — nothing else. This is
+~~`fina-kernel` may depend on `serde`, `serde_json` and `thiserror` — nothing else. This is
 machine-enforced by `crates/fina-kernel/tests/dependency_hygiene.rs`, which also fails if the
-allowlist in that test drifts from the one in Part II §4.
+allowlist in that test drifts from the one in Part II §4.~~ *(Moot: the crate is removed.)*
 
 The **wire contract and the command dispatcher live in the kernel**
 (`fina_kernel::api::{CommandId, dispatch, dispatch_sync}`). Every adapter calls the same

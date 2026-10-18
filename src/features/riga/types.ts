@@ -1,10 +1,8 @@
 // riga-flow domain mirror (§4 of 45-fina-builder-build-handoff-prompt.md).
 //
-// These are the camelCase shapes `riga-mcp` serialises. They are intentionally
-// separate from the `fina-kernel` demo types in `src/api/types.ts`: the two
-// systems must not be merged (40 §3). Every field name here must match the
-// `riga-mcp` `structuredContent` payload — the golden transcript test pins the
-// ones the UI reads.
+// These are the camelCase shapes `riga-mcp` serialises. Every field name here must
+// match the `riga-mcp` `structuredContent` payload — the golden transcript test pins
+// the ones the UI reads.
 
 // ---------------------------------------------------------------------------
 // Request inputs (`PriceRequest` fragment)

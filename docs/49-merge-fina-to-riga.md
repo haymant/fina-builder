@@ -1,7 +1,9 @@
 # 49 — Merge fina into riga: retire the demo transports, port the charts
 
-**Status:** PLAN — execute phase by phase. Each phase is one commit and must pass
-its **exit gate** before the next phase starts. No phase may be skipped.
+**Status:** ✅ **COMPLETE** — P0–P6 executed and pushed. P6 deleted the demo kernel
+outright (owner decision, 2026-10-18), so `fina-builder` now ships only the Tauri shell
+over the vendored `riga-flow` + `tac-engine`. Each phase was one commit behind its exit gate;
+the per-phase records and Appendix A hold the evidence.
 
 **Goal:** make **riga-flow the single product surface** and retire the demo
 transport stack (`fina-cli`, then `fina-mcp` + `fina-server`) — without touching
@@ -20,7 +22,7 @@ sets:
 
 | Layer | Contents | Consumed by | Merge action |
 |---|---|---|---|
-| **Kernel** | `crates/fina-kernel` (deterministic demo engine, 12 commands) | in-process by `src-tauri`; via `fina-server` in browser mode; via `fina-mcp` for external MCP clients | **Freeze** (P6) — keeps the parity golden |
+| **Kernel** | `crates/fina-kernel` (deterministic demo engine, 12 commands) | in-process by `src-tauri`; via `fina-server` in browser mode; via `fina-mcp` for external MCP clients | **Retire** (P6) — crate + golden deleted |
 | **Transports** | `fina-cli`, `fina-mcp`, `fina-server` | CI/release, external MCP, browser backend | **Retire** (P1, P5) |
 | **UI tiles** | ~40 demo-group tiles | the workspace | **Port to riga** (P2), then **retire the lane** (P4) |
 | **Engine features** | `compute_trade_analytics` (trade-parameter sensitivity) | 3 Trade-Design tiles | **Rebuild batched on riga** (P3) |
@@ -66,9 +68,12 @@ A phase is **done** only when, from a clean tree:
 ```sh
 npx tsc -b                                  # 0 errors
 npm run build                               # exit 0
+npm run lint                                # 0 errors
 npx vitest run                              # all pass
-cargo test -p fina-kernel                   # (until P6)
-cargo build --workspace                     # compiles (until P5)
+cargo fmt --all --check
+cargo build --workspace                     # compiles (the Tauri shell)
+cargo clippy -p payoff-explorer --all-targets -- -D warnings
+cargo test -p payoff-explorer
 # engine guard (submodule)
 cargo test --manifest-path modules/riga-flow/Cargo.toml -p riga-engine
 cargo test --manifest-path modules/riga-flow/Cargo.toml -p riga-mcp -- --test-threads=1
@@ -295,16 +300,36 @@ transports (`src/api/{rigaTransport,tacTransport,keyCase}.ts`) are untouched. **
 payoff-explorer` (incl. `lists_and_calls_riga_flow_tools_over_stdio`) · `riga-engine` pass ·
 `riga-mcp` 16 pass.
 
-### P6 — Freeze `fina-kernel` as the parity witness
+### P6 — Delete `fina-kernel` — ✅ **done (2026-10-18)**
 **Entrance:** P5 complete; nothing at runtime depends on `fina-kernel`.
-**Changes:** keep `crates/fina-kernel` + `golden.json` + parity tests; add a
-deprecation banner to its `lib.rs` and a `FEATURES.md` note that it is a frozen
-migration/parity artefact, not a product dependency; ensure it is not a
-dependency of any shipped binary.
+**Changes:** remove `crates/fina-kernel` entirely — it ships nothing, and P6 removes
+its last dependant (`src-tauri`'s in-process demo commands). Delete its golden fixture
+(`golden.json` + `tofixed-cases.json`), the generator artefacts
+(`generate-golden-fixture.ts`, `generate-tofixed-cases.mjs`, `extend-tofixed-cases.mjs`,
+`golden-src/`) and the frontend mock that read the golden across the tree
+(`src/tests/mocks/goldenBundle.ts` → `httpMock.ts`, plus `src/api/types.ts`).
+The migration numbers stay in git history + Appendix A; the parked PUT-payoff anchor
+(≈0.02112) lives in `modules/riga-flow/docs/fixture/`, not here.
 **Exit:**
-- [ ] `cargo tree -p fina-kernel --workspace`/`grep` shows no runtime crate depends on it.
-- [ ] `cargo test -p fina-kernel` still passes (parity preserved).
-- [ ] `FEATURES.md` + `crates/fina-kernel/src/lib.rs` state the frozen status.
+- [x] `cargo metadata --no-deps` lists **only** `payoff-explorer`.
+- [x] `grep -rn "fina-kernel\|fina_kernel" Cargo.toml package.json .github scripts src src-tauri` returns nothing.
+- [x] `FEATURES.md` states the demo kernel is removed; Part II's adapter sections are historical.
+- [x] the gate commands pass (frontend + `payoff-explorer`; `fina-kernel` no longer exists).
+
+**Delivered (2026-10-18):** `crates/fina-kernel` (10 MB incl. fixtures) deleted; `crates/` is
+gone. `src-tauri`'s demo surface removed (`src/commands/`, the `health` command, the 11 demo IPC
+registrations, `tests/commands.rs`) and its `fina-kernel` dependency dropped; the workspace is now
+just `src-tauri`. CI loses the `core` + `dependency-hygiene` jobs (their subject is gone);
+`adapters` absorbs the toolchain-verify + `cargo fmt --all --check`. `gate-coverage.py`,
+`set-version.mjs` and `rust-toolchain.toml` de-kernelised. (`msw` is left in
+`package.json` — unused now, but removing it would require regenerating
+`package-lock.json`, which the offline environment cannot do.)
+**G2: `modules/riga-flow` 0 diff.**
+
+**Evidence:** tsc 0 · build 0 · **vitest 43 files / 211 tests** · `cargo fmt --all --check` ·
+`cargo build --workspace` · `clippy -p payoff-explorer -D warnings` · `cargo test -p
+payoff-explorer` 5 · `riga-engine` pass · `riga-mcp` 16 · oxlint 0 errors. (Note: `src-tauri`
+was **not** rustfmt-clean before P6, so this commit includes a mechanical `cargo fmt --all` on it.)
 
 ---
 
@@ -375,7 +400,7 @@ is why the P4/P5 retirements are gated on P3, not on P2.
 | Frozen tool-schema SHA breaks CI | additive change + SHA bump + transcript re-record in the same P3 commit |
 | Removing `fina-cli` breaks release | P1 exit greps every reference; `cargo build --workspace` gate |
 | Deleting `fina-server`/`fina-mcp` too early | gated behind P4 (no demo-lane consumer) |
-| Losing the migration witness | P6 **freezes** `fina-kernel` + golden; never deleted |
+| Losing the migration witness | git history + Appendix A record the numbers; the PUT-payoff anchor lives in `modules/riga-flow/docs/fixture/` |
 
 Rollback: each phase is one commit; revert it. Nothing in P1–P5 alters
 `fina-kernel`'s numbers, so the parity baseline survives any single revert.

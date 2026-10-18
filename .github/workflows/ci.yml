@@ -37,15 +37,15 @@ jobs:
           fi
       - run: npm run test:run
 
-  core:
-    name: Rust core (fmt, clippy, kernel tests)
+  adapters:
+    name: Desktop shell (fmt, clippy, tauri)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.99.0
         with:
-          components: rustfmt, clippy
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       # rust-toolchain.toml is the single source of truth; the workflows pin the
       # same version so the toolchain is installed explicitly. This step fails if
@@ -62,22 +62,6 @@ jobs:
           fi
           echo "toolchain $have matches rust-toolchain.toml"
       - run: cargo fmt --all --check
-      # `--exclude payoff-explorer` on purpose: the Tauri crate links against GTK,
-      # GLib and WebKit, which are not installed in this job. It is clipped and
-      # tested in the `adapters` job, which installs them.
-      - run: cargo clippy --workspace --all-targets --exclude payoff-explorer -- -D warnings
-      - run: cargo test -p fina-kernel
-
-  adapters:
-    name: Adapters (cli, server, tauri)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.99.0
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
       # `payoff-explorer`'s build script (tauri-build) validates every
       # `bundle.externalBin` resource at compile time and fails the build if one
       # is missing: "resource path `binaries/riga-mcp-<triple>` doesn't exist".
@@ -140,12 +124,3 @@ jobs:
             lcov.info
             coverage/
           if-no-files-found: ignore
-
-  dependency-hygiene:
-    name: Kernel dependency hygiene
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.99.0
-      - run: cargo test -p fina-kernel --test dependency_hygiene

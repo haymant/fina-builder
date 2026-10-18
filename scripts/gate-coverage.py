@@ -3,7 +3,6 @@
 `lcov.info` produced by `cargo llvm-cov --workspace --lcov`.
 
 Gates (line coverage):
-  - fina-kernel:  >= 70%   (spec §6.1)
   - payoff-explorer (src-tauri): >= 75% on non-main sources (commands)
 
 Binary mains (`src/main.rs`) are excluded for tauri because it is a few lines
@@ -19,7 +18,6 @@ import sys
 from collections import defaultdict
 
 MIN = {
-    "fina-kernel": 70.0,
     # `run()`/window glue in lib.rs is not unit-testable without a webview;
     # `src/commands/` (the adapters this crate is actually responsible for)
     # are at 100%.
@@ -27,7 +25,6 @@ MIN = {
 }
 # Crate directory prefixes (the tauri package lives in `src-tauri/`).
 DIRS = {
-    "fina-kernel": "crates/fina-kernel/",
     "payoff-explorer": "src-tauri/",
 }
 # Files excluded from a crate's denominator, with the reason each one is out:

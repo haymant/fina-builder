@@ -3,7 +3,7 @@
 # Local development and CI must run the SAME rustc/clippy/rustfmt. CI additionally
 # pins `@1.99.0` in `.github/workflows/{ci,release}.yml` (so the toolchain is
 # installed explicitly rather than downloaded implicitly), and the
-# "Verify the pinned toolchain" step in the ci.yml `core` job fails if the two
+# "Verify the pinned toolchain" step in the ci.yml `adapters` job fails if the two
 # ever disagree.
 #
 # Why pin at all: an unpinned `@stable` means every clippy release can turn CI red

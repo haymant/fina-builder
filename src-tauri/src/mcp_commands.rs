@@ -73,7 +73,10 @@ fn resolve_engine_binary(
     }
     if let Some(app) = app {
         if let Ok(resources) = app.path().resource_dir() {
-            for candidate in [resources.join(&exe_name), resources.join("binaries").join(&exe_name)] {
+            for candidate in [
+                resources.join(&exe_name),
+                resources.join("binaries").join(&exe_name),
+            ] {
                 if candidate.is_file() {
                     return Ok(candidate.to_string_lossy().into_owned());
                 }
@@ -168,7 +171,10 @@ pub fn engine_env(app: &AppHandle) -> Vec<(String, String)> {
 }
 
 #[tauri::command]
-pub async fn riga_mcp_list_tools(app: AppHandle, state: State<'_, McpState>) -> Result<Value, String> {
+pub async fn riga_mcp_list_tools(
+    app: AppHandle,
+    state: State<'_, McpState>,
+) -> Result<Value, String> {
     let binary = get_riga_mcp_path(app)?;
     let mcp = state.runtime.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -195,7 +201,10 @@ pub async fn riga_mcp_call_tool(
 }
 
 #[tauri::command]
-pub async fn riga_mcp_list_resources(app: AppHandle, state: State<'_, McpState>) -> Result<Value, String> {
+pub async fn riga_mcp_list_resources(
+    app: AppHandle,
+    state: State<'_, McpState>,
+) -> Result<Value, String> {
     let binary = get_riga_mcp_path(app)?;
     let mcp = state.runtime.clone();
     tauri::async_runtime::spawn_blocking(move || mcp.list_resources("riga", &binary))
@@ -217,7 +226,10 @@ pub async fn riga_mcp_read_resource(
 }
 
 #[tauri::command]
-pub async fn riga_mcp_list_prompts(app: AppHandle, state: State<'_, McpState>) -> Result<Value, String> {
+pub async fn riga_mcp_list_prompts(
+    app: AppHandle,
+    state: State<'_, McpState>,
+) -> Result<Value, String> {
     let binary = get_riga_mcp_path(app)?;
     let mcp = state.runtime.clone();
     tauri::async_runtime::spawn_blocking(move || mcp.list_prompts("riga", &binary))
@@ -260,7 +272,10 @@ pub fn riga_mcp_reset(state: State<'_, McpState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn tac_mcp_list_tools(app: AppHandle, state: State<'_, McpState>) -> Result<Value, String> {
+pub async fn tac_mcp_list_tools(
+    app: AppHandle,
+    state: State<'_, McpState>,
+) -> Result<Value, String> {
     let binary = get_tac_engine_path(app)?;
     let mcp = state.runtime.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -315,15 +330,33 @@ mod tests {
     fn engine_binary_search_prefers_the_submodule_default_relative_path() {
         let workspace = std::path::Path::new("/ws");
         let candidates = engine_binary_candidates(workspace, "riga-flow", "riga-mcp");
-        assert_eq!(candidates[0], std::path::Path::new("/ws/modules/riga-flow/target/release/riga-mcp"));
-        assert_eq!(candidates[1], std::path::Path::new("/ws/modules/riga-flow/target/debug/riga-mcp"));
-        assert_eq!(candidates[candidates.len() - 1], std::path::Path::new("/ws/target/debug/riga-mcp"));
+        assert_eq!(
+            candidates[0],
+            std::path::Path::new("/ws/modules/riga-flow/target/release/riga-mcp")
+        );
+        assert_eq!(
+            candidates[1],
+            std::path::Path::new("/ws/modules/riga-flow/target/debug/riga-mcp")
+        );
+        assert_eq!(
+            candidates[candidates.len() - 1],
+            std::path::Path::new("/ws/target/debug/riga-mcp")
+        );
     }
 
     #[test]
     fn resolve_engine_binary_reports_the_missing_binary_and_env_var() {
-        let err = resolve_engine_binary(None, "RIGA_MCP_BIN_TEST_UNSET_VAR", "definitely-not-a-submodule", "no-such-binary").unwrap_err();
-        assert!(err.contains("RIGA_MCP_BIN_TEST_UNSET_VAR"), "unhelpful: {err}");
+        let err = resolve_engine_binary(
+            None,
+            "RIGA_MCP_BIN_TEST_UNSET_VAR",
+            "definitely-not-a-submodule",
+            "no-such-binary",
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("RIGA_MCP_BIN_TEST_UNSET_VAR"),
+            "unhelpful: {err}"
+        );
         assert!(err.contains("no-such-binary"), "unhelpful: {err}");
     }
 
@@ -334,7 +367,9 @@ mod tests {
         let file = dir.join("riga-mcp");
         std::fs::write(&file, b"").unwrap();
         std::env::set_var("RIGA_MCP_BIN_TEST_OVERRIDE", &file);
-        let resolved = resolve_engine_binary(None, "RIGA_MCP_BIN_TEST_OVERRIDE", "riga-flow", "riga-mcp").unwrap();
+        let resolved =
+            resolve_engine_binary(None, "RIGA_MCP_BIN_TEST_OVERRIDE", "riga-flow", "riga-mcp")
+                .unwrap();
         assert_eq!(resolved, file.to_string_lossy());
         std::env::remove_var("RIGA_MCP_BIN_TEST_OVERRIDE");
     }

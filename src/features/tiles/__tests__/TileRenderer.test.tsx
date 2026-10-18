@@ -6,18 +6,15 @@ import { afterAll, beforeAll, describe, it } from 'vitest'
 import { render } from '@testing-library/react'
 import { TILE_CATALOG } from '../../dashboards/catalog'
 import { TileRenderer } from '../components/TileRenderer'
-import { server } from '../../../tests/mocks/httpMock'
 import { installRigaTranscript, installTacTranscript, preloadTacMarket, resetTranscripts } from '../../../tests/mocks/transcripts'
 
 beforeAll(() => {
-  server.listen({ onUnhandledRequest: 'error' })
   installRigaTranscript()
   installTacTranscript()
   preloadTacMarket()
 })
 afterAll(() => {
   resetTranscripts()
-  server.close()
 })
 
 describe('TileRenderer (I-7: every tile renders)', () => {

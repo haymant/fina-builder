@@ -67,8 +67,14 @@ impl McpProcess {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("Could not start {binary}: {e}"))?;
-        let stdin = child.stdin.take().ok_or(format!("{binary} stdin unavailable"))?;
-        let stdout = child.stdout.take().ok_or(format!("{binary} stdout unavailable"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or(format!("{binary} stdin unavailable"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or(format!("{binary} stdout unavailable"))?;
         let responses: Arc<Mutex<HashMap<i64, Value>>> = Arc::new(Mutex::new(HashMap::new()));
         let (wake_tx, wake) = mpsc::channel();
         let reader_responses = responses.clone();
@@ -125,13 +131,13 @@ impl McpProcess {
             }
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
-                return Err(format!("the MCP server did not respond to request {id} in time"));
+                return Err(format!(
+                    "the MCP server did not respond to request {id} in time"
+                ));
             }
             match self.wake.recv_timeout(remaining) {
                 Ok(()) | Err(RecvTimeoutError::Timeout) => continue,
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err("MCP connection closed".into())
-                }
+                Err(RecvTimeoutError::Disconnected) => return Err("MCP connection closed".into()),
             }
         }
     }
@@ -213,11 +219,12 @@ impl McpRuntime {
             .lock()
             .map_err(|_| "MCP state is unavailable")?;
         if !guard.contains_key(server) {
-            guard.insert(server.to_string(), McpProcess::spawn(binary, &self.child_env())?);
+            guard.insert(
+                server.to_string(),
+                McpProcess::spawn(binary, &self.child_env())?,
+            );
         }
-        let process = guard
-            .get_mut(server)
-            .ok_or("MCP process is unavailable")?;
+        let process = guard.get_mut(server).ok_or("MCP process is unavailable")?;
         run(process)
     }
 
@@ -256,7 +263,11 @@ impl McpRuntime {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            Ok((process.server_name.clone(), process.server_version.clone(), tools))
+            Ok((
+                process.server_name.clone(),
+                process.server_version.clone(),
+                tools,
+            ))
         })
     }
 
@@ -287,7 +298,10 @@ impl McpRuntime {
     pub fn list_resources(&self, server: &str, binary: &str) -> Result<Value, String> {
         self.with_process(server, binary, |process| {
             let result = process.request("resources/list", json!({}), INIT_TIMEOUT)?;
-            Ok(result.get("resources").cloned().unwrap_or_else(|| json!([])))
+            Ok(result
+                .get("resources")
+                .cloned()
+                .unwrap_or_else(|| json!([])))
         })
     }
 
@@ -373,7 +387,10 @@ mod tests {
         };
         let runtime = McpRuntime::default();
         let (server, _version, tools) = runtime.list_tools("riga", &binary).expect("tools/list");
-        assert!(server.to_lowercase().contains("riga"), "unexpected server name {server}");
+        assert!(
+            server.to_lowercase().contains("riga"),
+            "unexpected server name {server}"
+        );
         assert!(
             tools.iter().any(|tool| tool.name == "price_put"),
             "expected the riga-flow tool catalogue, got {} tools",
@@ -389,6 +406,9 @@ mod tests {
             .as_ref()
             .and_then(|value| value.pointer("/result/pv"))
             .and_then(Value::as_f64);
-        assert!(pv.is_some_and(|value| value > 0.0), "price_put returned no pv");
+        assert!(
+            pv.is_some_and(|value| value > 0.0),
+            "price_put returned no pv"
+        );
     }
 }

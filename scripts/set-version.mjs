@@ -6,12 +6,11 @@
 //   node scripts/set-version.mjs v0.1.1       # leading `v` is stripped
 //
 // Touched files:
-//   Cargo.toml              [workspace.package] version   (workspace crates)
-//   src-tauri/Cargo.toml    [package] version             (the Tauri crate is not in the workspace)
+//   src-tauri/Cargo.toml    [package] version             (the Tauri crate)
 //   src-tauri/tauri.conf.json version                     (bundles, the Tauri binary)
 //
 // `cargo` also needs `Cargo.lock` refreshed when the version changes; run
-// `cargo check -p fina-kernel` (or commit the lockfile update) after this script.
+// `cargo check -p payoff-explorer` (or commit the lockfile update) after this script.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -61,7 +60,6 @@ function setTauriVersion(version) {
 
 const version = normalize(process.argv[2])
 console.log(`set-version: writing ${version}`)
-setTomlVersion('Cargo.toml', 'version', version)
 setTomlVersion('src-tauri/Cargo.toml', 'version', version)
 setTauriVersion(version)
 console.log('set-version: done (remember to commit Cargo.lock)')
