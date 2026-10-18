@@ -15,6 +15,7 @@ export type TileType =
   | 'RigaPayoffPetriNet' | 'RigaTransitionDetail' | 'RigaTokenDetail' | 'RigaRiskNet' | 'RigaExplainNet'
   | 'RigaDataLineage' | 'RigaPathCubeQuery' | 'RigaExecutionTape' | 'RigaBookRisk' | 'RigaScenarioComparison'
   | 'RigaTaylorExplain' | 'RigaStatisticsSummary' | 'RigaAttribution' | 'RigaCashflowSummary' | 'RigaCashflowTimeline' | 'RigaRiskSummary' | 'RigaDistributionSummary' | 'RigaSelectedPath'
+  | 'RigaPvConvergence' | 'RigaCiShrinkage' | 'RigaErrorVsPaths' | 'RigaKiConvergence' | 'RigaKoConvergence' | 'RigaConvergenceHealth'
   | 'RigaGovernanceEvidence' | 'RigaRootCause' | 'RigaRegressionTriage' | 'RigaGreeksSanity'
   | 'RigaStressBands' | 'RigaMarketSnapshot' | 'RigaHealthRun' | 'RigaTradeEconomics' | 'RigaMarketData'
   // tac-engine market-data tiles (additive; handoff §6.7)

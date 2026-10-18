@@ -163,10 +163,13 @@ same commit, and **no hot-loop change** (G2).
 
 - **P3a `mc_convergence`** — PV / SE / CI / KI / KO / percentiles vs path count →
   the 10 Monte Carlo Diagnostics tiles + `ConvergenceHealth` + `SimulationEfficiency`.
-  **Status (2026-10-18):** engine tool landed and verified — `mc_convergence`
-  (additive, one batched call, `TraceLevel::Off` ⇒ final point only), frozen SHA
-  bumped, transcript re-recorded (36 tools), `useRigaMcConvergence` hook added.
-  The 10 MC tiles are the remaining P3a UI work.
+  **Status (2026-10-18):** engine tool landed and verified (`mc_convergence`:
+  additive, one batched call, `TraceLevel::Off` ⇒ final point only; SHA bumped;
+  transcript 36 tools) **and 6 tiles ported** — PV Convergence, CI Shrinkage,
+  Error vs Path Count, KI Convergence, KO Convergence, Convergence Health. The
+  other 3 MC tiles need data `mc_convergence` doesn't emit: Percentile
+  Convergence + Distribution Stability → **P3b**; Simulation Efficiency → engine.
+  `Simulation Summary` is already covered by `riga-statistics-summary`.
 - **P3b `distributions_histogram`** — per-metric histogram `values[]` + percentiles →
   Distribution Analysis (Payoff Histogram, Distribution Explorer).
 - **P3c `risk_detailed`** — theta, rho, fxDelta, `bucketVegas[]`, crossGamma →
@@ -239,9 +242,10 @@ additive riga tool — P3).
 | **Distribution Analysis** | | |
 | Payoff Histogram · Selected Path | — (needs histogram `values[]`) | **engine P3b** |
 | Distribution Explorer · Metric Compare | — (needs histogram `values[]`) | **engine P3b** |
-| Selected Path in Population | `query_path_cube` sample + `get_path` | **port-ready P2d** |
+| Worst-of deciles / KI (new) | `get_distributions` (`worst_final_deciles`, `ki_rate`, `mean_put`) | **ported P2c** |
+| Selected Path in Population | `query_path_cube` sample | **ported P2d** (Selected Path) |
 | **Path Analysis** | | |
-| Path Timeline | `query_path_cube` sample + `get_path` | **port-ready P2d** |
+| Path Timeline | — (`get_path` has no price time series) | **engine** |
 | Node Details | — (`get_path` has no `nodeDetails`) | **engine** |
 | Quantile Fan · Worst-of Evolution | — (needs a time series) | **engine** |
 | **Market & Risk** | | |
