@@ -1,4 +1,4 @@
-// riga-flow domain mirror (§4 of 45-fina-builder-build-handoff-prompt.md).
+// riga-flow domain mirror (docs/49-merge-fina-to-riga.md; see FEATURES.md).
 //
 // These are the camelCase shapes `riga-mcp` serialises. Every field name here must
 // match the `riga-mcp` `structuredContent` payload — the golden transcript test pins

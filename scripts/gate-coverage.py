@@ -29,19 +29,10 @@ DIRS = {
 }
 # Files excluded from a crate's denominator, with the reason each one is out:
 #
-# - `src-tauri/src/main.rs`: the binary main is glue (its logic is in the
-#   lib/commands) and is not unit-testable without a webview.
-# - `src-tauri/src/local_agent.rs`: the embedded llama.cpp assistant runtime.
-#   It is a subsystem, not an adapter, and none of its instrumented bodies can
-#   run in a unit-test process: they need a live `AppHandle`, a loaded llama
-#   context, or the network. Measured 4% before this exclusion, which made the
-#   gate a vote on that subsystem rather than on the crate's adapters. Its
-#   pure logic IS covered by unit tests in the same file (`curated_model_catalog`,
-#   `default_max_tokens`, `safe_session_id`) and by the `mcp` stdio test; only
-#   the IPC/IO wrappers are out of reach. See FEATURES.md A-27.
+# - `src-tauri/src/main.rs`: the binary main is glue (its logic is in the lib)
+#   and is not unit-testable without a webview.
 EXCLUDE = {
     "src-tauri/src/main.rs",
-    "src-tauri/src/local_agent.rs",
 }
 
 

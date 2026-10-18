@@ -150,16 +150,17 @@ tests · `cargo test -p fina-kernel` 273 passed (2 ignored) · `cargo build
 
 Per sub-phase **entrance:** the named riga tool is in the recorded transcript
 **with the fields listed above**.
-Per sub-phase **exit:**
-- [ ] the new riga tile(s) are registered (`catalog.ts`, `TileRenderer.tsx`,
+Per sub-phase **exit:** *(checklist template — applied to every P2 sub-phase; all
+satisfied, see the per-sub-phase ✅ records above)*
+- [x] the new riga tile(s) are registered (`catalog.ts`, `TileRenderer.tsx`,
       `TileTypes`) and render without throwing (`TileRenderer.test.tsx` count
       increases).
-- [ ] one behaviour test per new tile asserts it renders populated data from the
+- [x] one behaviour test per new tile asserts it renders populated data from the
       transcript.
-- [ ] `git diff --stat` shows **no** file under `modules/riga-flow/crates/riga-engine`
+- [x] `git diff --stat` shows **no** file under `modules/riga-flow/crates/riga-engine`
       or `riga-scheduler` (G2).
-- [ ] the six gate commands pass.
-- [ ] Appendix A row(s) marked **ported**.
+- [x] the six gate commands pass.
+- [x] Appendix A row(s) marked **ported**.
 
 ### P3 — Engine-backed surfaces (new riga tools), additive and trace-gated
 **Entrance:** the corresponding Appendix A rows are marked **engine**; P2 complete.
@@ -210,14 +211,15 @@ same commit, and **no hot-loop change** (G2).
   Waterfall (riga)** tile is built directly from `useRigaValuationExplain` — no new
   tool. **Ported (2026-10-18).**
 
-**Exit (per tool):**
-- [ ] new cargo test: CRN-consistent, **one call** powers every bump/series point
+**Exit (per tool):** *(checklist template — applied to every P3 tool; all satisfied,
+see the per-sub-phase ✅ records below)*
+- [x] new cargo test: CRN-consistent, **one call** powers every bump/series point
       (assert the valuation count), and `TraceLevel::Off` returns the aggregate only.
-- [ ] frozen tool-schema SHA bumped; transcript re-recorded; `goldenTranscript.test.ts` SHA updated.
-- [ ] `git diff --stat` shows **no** change to `note.rs`/`simd.rs`/`gpu.rs`/`qmc.rs` (G2).
-- [ ] `cargo test -p riga-mcp -- --test-threads=1` + `-p riga-engine` pass.
-- [ ] the ported tiles render populated data; the six gate commands pass.
-- [ ] Appendix A rows marked **ported**.
+- [x] frozen tool-schema SHA bumped; transcript re-recorded; `goldenTranscript.test.ts` SHA updated.
+- [x] `git diff --stat` shows **no** change to `note.rs`/`simd.rs`/`gpu.rs`/`qmc.rs` (G2).
+- [x] `cargo test -p riga-mcp -- --test-threads=1` + `-p riga-engine` pass.
+- [x] the ported tiles render populated data; the six gate commands pass.
+- [x] Appendix A rows marked **ported**.
 
 ### P3g — the remaining engine-backed surfaces (no demo capability lost)
 **Entrance:** P4 is blocked because ~18 demo tiles have no riga counterpart.

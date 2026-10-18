@@ -13,7 +13,7 @@ import { TemplateGallery } from './TemplateGallery'
 import { useDashboardDocsStore } from '../../../store/dashboardDocsStore'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
-import '../tradeEconomics.css'
+import '../panels.css'
 
 const Grid = WidthProvider(Responsive)
 

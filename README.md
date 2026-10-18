@@ -1,27 +1,38 @@
 # Fina Builder — Structured Product Payoff Explorer
 
-An analytical workbench for inspecting synthetic Worst-of Phoenix Autocall paths and
-assembling role-oriented dashboards. The UI is React/TypeScript; **all domain logic lives in a
-single Rust crate** (`fina-kernel`) behind thin adapters, so the browser build, the desktop
-build, the CLI and (later) MCP return byte-identical numbers.
+An analytical workbench for inspecting structured-product payoffs and assembling
+role-oriented dashboards. The UI is React/TypeScript; **all pricing and market data come
+from the live engines** — `riga-flow` (`riga-mcp`) for products and `tac-engine` for market
+data — vendored under `modules/`. The desktop shell (`src-tauri`) is a thin adapter that
+drives them.
 
-> **Scope:** a demonstrator, not a production pricing or risk system. The data and most
-> calculations are deterministic or illustrative. Read [FEATURES.md](./FEATURES.md) for the
-> feature inventory, the architecture, and the documented divergences from a real model.
+> **Scope:** a demonstrator, not a production pricing or risk system. Read
+> [FEATURES.md](./FEATURES.md) for the feature inventory, the architecture, and the
+> documented divergences. FEATURES.md Part I also records the pre-merge demo stack
+> (`fina-kernel` + its transports), which was retired in `docs/49-merge-fina-to-riga.md`.
 
 ## Documentation
 
 | Document | What it covers |
 | --- | --- |
-| **[FEATURES.md](./FEATURES.md)** | What is implemented: product surfaces, kernel commands, local assistant, MCP tools, UI, and known gaps; followed by the migration specification and its completion record. |
+| **[FEATURES.md](./FEATURES.md)** | What is implemented: the engine surfaces, tiles, the chat panel and known gaps, followed by the migration specification and its completion record. |
+| **[AGENT-LOCAL.md](./AGENT-LOCAL.md)** | The RIGA assistant chat panel (desktop shell ↔ `riga-server`). |
 | [README.md](./README.md) (this file) | How to run it and how to release it. |
 
 ## Requirements
 
-- Node.js **22.19.0 or newer** and npm (`package-lock.json` is committed; Pi's local agent packages require this minimum).
-- Rust/Cargo for every backend mode — web backend, CLI and desktop all compile Rust.
-  The version is pinned in `rust-toolchain.toml` (currently **1.99.0**); `rustup`
-  installs it automatically on first use, so `cargo build` just works.
+- Node.js **22.19.0 or newer** and npm (`package-lock.json` is committed).
+- Rust/Cargo. The version is pinned in `rust-toolchain.toml` (currently **1.99.0**);
+  `rustup` installs it automatically, so `cargo build` just works.
+- **The engines.** `riga-flow` and `tac-engine` live under `modules/` as standalone
+  workspaces (they are *excluded* from the root workspace). Build them once:
+
+  ```bash
+  cargo build --release --manifest-path modules/riga-flow/Cargo.toml   # → modules/riga-flow/target/release/riga-mcp
+  cargo build --release --manifest-path modules/tac-engine/Cargo.toml  # → modules/tac-engine/target/release/tac-engine
+  ```
+
+  `npm run mcp:sidecar:engines` stages them into `src-tauri/binaries/` for packaged builds.
 - Desktop builds additionally need the [Tauri 2 platform prerequisites](https://v2.tauri.app/start/prerequisites/).
   On Debian/Ubuntu one command does it — the same script CI uses:
 
@@ -30,164 +41,84 @@ build, the CLI and (later) MCP return byte-identical numbers.
   ```
 
   It installs WebKitGTK, GTK, the Ayatana status-icon library, librsvg, libxdo, libssl,
-  patchelf, CMake, Ninja and libclang, then verifies `pkg-config` can see the Tauri libraries.
-  CMake and libclang are required to build the bundled `llama.cpp` inference backend. It is a no-op on
-  non-Debian systems.
-
-  The browser + web-backend mode does not need the WebKit libraries.
+  patchelf, CMake, Ninja and libclang, then verifies `pkg-config` can see the Tauri
+  libraries. It is a no-op on non-Debian systems. The browser mode does not need them.
 
 ## Run it
 
-### 1. Web mode (browser + HTTP backend) — two processes
+### 1. Web mode (browser + HTTP engines) — three processes
 
 ```bash
 npm ci
-npm run dev:all
+npm run dev:all          # riga-mcp (http) + tac-engine (http bridge) + Vite
 ```
 
 | | |
 | --- | --- |
 | Frontend | Vite on <http://127.0.0.1:5173> |
-| Backend | `fina-server` on <http://127.0.0.1:8787> |
+| `riga-mcp` | MCP over HTTP on <http://127.0.0.1:8788> |
+| `tac-engine` | MCP over HTTP on <http://127.0.0.1:8790> |
 
-`npm run dev:all` starts both. To run them separately:
+The webview calls the same-origin paths `/riga/mcp` and `/tac/mcp`, which Vite proxies to
+the two engines (see `vite.config.ts`). To run the pieces separately:
 
 ```bash
-npm run backend:dev    # cargo run -p fina-server   (--host / --port to change)
-npm run dev            # vite
+npm run backend:dev      # npm run mcp:http:riga   (riga-mcp --transport http)
+npm run mcp:http:tac     # the tac-engine HTTP bridge
+npm run dev              # vite
 ```
 
-> Starting only `npm run dev` gives you a frontend with **no** backend; every command then
-> fails with `ERR_CONNECTION_REFUSED`. That is the expected symptom of a missing
-> `fina-server`, not a frontend bug.
+> Starting only `npm run dev` gives you a frontend with **no** engines; the tiles then show
+> their unavailable/error state (they never fall back to fake data). Start the engines too.
 
-Smoke-test the backend directly:
+Configuration: `VITE_RIGA_UPSTREAM` / `VITE_TAC_UPSTREAM` override the proxy targets, and
+`VITE_RIGA_TRANSPORT=tauri|http` / `VITE_TAC_TRANSPORT=tauri|http` force a transport
+(otherwise Tauri is auto-detected via `__TAURI_INTERNALS__`).
 
-```bash
-curl -s http://127.0.0.1:8787/health
-curl -s -X POST http://127.0.0.1:8787/api/cmd/get_branch_stats \
-  -H 'content-type: application/json' -d '{}'
-```
-
-Configuration: `VITE_FINA_BASE_URL` overrides the backend URL, `VITE_FINA_TRANSPORT=http|tauri`
-forces a transport (otherwise Tauri is auto-detected via `__TAURI_INTERNALS__`).
-
-### 2. Desktop mode (Tauri IPC)
+### 2. Desktop mode (Tauri IPC + stdio engines)
 
 ```bash
-npm run tauri:dev      # window with IPC; no HTTP backend needed
+npm run tauri:dev      # window with IPC; the shell spawns the engines over stdio
 npm run tauri:build    # native bundles for the current platform
 ```
 
+The shell resolves `riga-mcp` / `tac-engine` from `RIGA_MCP_BIN` / `TAC_ENGINE_BIN`, else the
+submodule default path (`modules/<dir>/target/{release,debug}`), else a bundled sidecar. It
+forwards `.env` files (repo root, app-data, `modules/tac-engine/.env`, `modules/riga-flow/.env`)
+to the engine children, so `TAC_LAKE_DIR`, `APCA_*` and `FRED_API_KEY` work without exporting
+shell variables. Keys live in the host environment or a user-owned `.env` only — never in the
+UI, logs or persisted state.
+
 #### Optional NVIDIA CUDA backend
 
-The default desktop build is intentionally portable and uses the CPU/OpenMP
-llama.cpp backend. CUDA is an **opt-in compile-time backend**, not a runtime
-switch: the binary must be built with CUDA support before it can use an NVIDIA
-GPU. On a machine with an RTX 3060 Ti (or another CUDA-capable NVIDIA GPU),
-install the NVIDIA driver, CUDA toolkit, CMake, and the Tauri platform
-prerequisites, then use:
+The default desktop build is portable and uses the CPU/OpenMP llama.cpp backend inside
+`riga-server`. CUDA is an **opt-in compile-time backend**, not a runtime switch:
 
 ```bash
-npm run tauri:dev:cuda      # development window with llama.cpp CUDA enabled
+npm run tauri:dev:cuda      # development window with CUDA enabled
 npm run tauri:build:cuda    # CUDA-enabled native bundle
 ```
 
-The CUDA npm wrappers target compute capability **8.6** by default, which is
-the architecture of the RTX 3060 Ti. This avoids CUDA 13 selecting the obsolete
-`sm_52` target and failing during CMake compiler detection. For another NVIDIA
-GPU, override the architecture using the CMake variable supported by
-`llama-cpp-sys`:
+The CUDA npm wrappers target compute capability **8.6** by default. For another NVIDIA GPU,
+override it: `CMAKE_CUDA_ARCHITECTURES=89 npm run tauri:build:cuda` (numeric value, no `sm_`
+prefix). The wrapper pins `CUDACXX`, `CMAKE_CUDA_COMPILER`, `CUDA_PATH` and `PATH` to one
+detected toolkit when they are not already set. The CPU commands remain the safe fallback:
+`npm run tauri:dev:cpu` / `npm run tauri:build:cpu`.
+
+The CUDA profile is the `src-tauri` Cargo feature `cuda`, which enables `riga-server/cuda`
+(and `metal` for Apple GPUs). If CUDA compilation or driver init is unavailable, use the CPU
+commands rather than silently falling back inside a CUDA build.
+
+### Chat panel (Tauri desktop only)
+
+The **Chat** button opens RIGA's `@rigai/assistant-ui` side panel. Inference runs locally via
+the `riga-server` engine; the shell owns the process and the MCP engine connections (the
+webview never spawns a process). See [AGENT-LOCAL.md](./AGENT-LOCAL.md) for the wiring.
+
+### Price an instrument from its trading-system JSON
 
 ```bash
-CMAKE_CUDA_ARCHITECTURES=89 npm run tauri:dev:cuda
-CMAKE_CUDA_ARCHITECTURES=89 npm run tauri:build:cuda
-```
-
-Use the numeric compute capability without the `sm_` prefix (for example,
-`86` for RTX 3060 Ti, `89` for RTX 40-series, and `90` for many RTX 50/data
-center configurations). The wrapper preserves an explicitly supplied value.
-
-The wrapper also pins `CUDACXX`, `CMAKE_CUDA_COMPILER`, `CUDA_PATH`, and `PATH`
-to one detected toolkit when they are not already set. This prevents a common
-Linux failure mode where `/usr/bin/nvcc` comes from CUDA 12.x while CMake finds
-headers and `ptxas` under `/usr/local/cuda-13.0`. To select a toolkit manually:
-
-```bash
-CUDA_PATH=/usr/local/cuda-13.0 npm run tauri:build:cuda
-```
-
-The ordinary commands remain the safe CPU fallback:
-
-```bash
-npm run tauri:dev:cpu
-npm run tauri:build:cpu
-```
-
-The CUDA profile is implemented as the `src-tauri` Cargo feature
-`cuda`, which enables `llama-cpp-2/cuda`. If CUDA compilation or driver
-initialization is unavailable, use the CPU commands rather than silently
-falling back inside a CUDA build. This makes the shipped artifact's backend
-explicit and avoids confusing “GPU selected but CPU executed” behavior.
-
-### Local assistant (Tauri desktop only)
-
-The **Chat** button in the workspace header opens a side panel. The first run requires an
-explicit model download (internet required only for this download) or a compatible `.gguf`
-file copied into the app-managed models folder. Downloads are cancellable; incomplete files
-are removed on cancellation or error. Completed downloads are checked against the catalogued
-byte count and SHA-256 before being finalized. Models are
-stored under the OS-specific Tauri app-data directory; the panel can open that folder. A
-downloaded model is loaded in-process by Rust `llama-cpp-2` and the GGUF's embedded chat
-template is used. **Chat inference runs locally**; the app does not send prompts or model
-files to a hosted model API.
-
-Pi's `pi-agent-core` agent/session/tool orchestration and assistant-ui runtime execute in the
-embedded TypeScript webview, with a custom local provider calling the native Rust inference
-commands over Tauri IPC. The currently registered read-only tools are `get_branch_stats`,
-`get_distributions`, and `get_mc_diagnostics`. Session transcripts are persisted as JSONL in
-the app-data sessions directory. List/load commands are available, but a session picker is
-not yet exposed in the panel. Model terms are linked in the selector; usage remains subject
-to each model's upstream license. The curated models are several gigabytes, so check disk and
-RAM before downloading/loading them.
-
-The assistant is not available in browser + HTTP mode. Its analytics tools inspect the
-synthetic demo bundle and must not be treated as market-calibrated prices, official
-valuations, risk limits, or investment advice.
-
-Implementation references: [llama-cpp-2 Rust API](https://docs.rs/llama-cpp-2/latest/llama_cpp_2/),
-[Pi custom providers](https://pi.dev/docs/latest/custom-provider), [assistant-ui LocalRuntime](https://www.assistant-ui.com/docs/runtimes/custom/local-runtime), and the
-[MCP tools protocol](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
-
-### 3. CLI mode (headless)
-
-```bash
-cargo run -p fina-cli -- generate-paths --seed 42 --paths 100 --out bundle.json
-cargo run -p fina-cli -- compute-risk --trade trade.json --market market.json
-cargo run -p fina-cli -- --help
-```
-
-stdout is JSON only (pipe it into `jq`); progress goes to stderr as NDJSON.
-
-### MCP server (stdio)
-
-`fina-mcp` is a newline-delimited JSON-RPC 2.0 MCP server. Build it with
-`cargo build -p fina-mcp --release` and configure an MCP host to launch the resulting
-`target/release/fina-mcp` executable over stdio. It advertises all twelve kernel commands and
-dispatches calls through `fina_kernel::api::dispatch_sync`. The desktop chat panel spawns this
-server as a bundled Tauri sidecar (via `@earendil-works/pi-mcp`) and exposes all of its tools
-to the local model alongside three built-in read-only Tauri tools.
-
-### Other scripts
-
-```bash
-npm run build          # type-check + production frontend bundle
-npm run lint           # oxlint
-npm run test:run       # 49 Vitest tests
-npm run test:coverage  # Vitest coverage
-npm run backend:test   # cargo test --workspace (296 tests)
-npm run version:set -- 0.1.1   # stamp one version into Cargo.toml, src-tauri/Cargo.toml, tauri.conf.json
-npm run price:instrument -- 1.json   # price a leg from its trading-system JSON with the live engines
+npm run price:instrument -- 1.json   # market auto|file|lake, lanes flat|surface, --json
 ```
 
 `price:instrument` reads an instrument JSON (e.g. an `ELIFCN_KI` KIKO note) and prices the
@@ -195,30 +126,37 @@ down-and-in put leg. Market data comes from the instrument's own `marketData` bl
 present (Murex equity spots + dividends, correlation, the `eqVol` surface, and the discount
 curve — `evaluationDate` anchors the tenors), otherwise it falls back to `tac-engine`
 (`--market file|lake|auto`). It builds the `riga-flow` `PriceRequest` — including the Dupire
-`local_vol.grids[]` from the surface — and reports both the flat-ATM and the
-surface-calibrated lanes. It resolves the engines exactly like the app (`RIGA_MCP_BIN` /
-`TAC_ENGINE_BIN`, else `modules/<dir>/target/release/<bin>`). To reconcile against another
-pricer, `--no-call` drops the autocall gate, `--strike X` overrides the put strike, and
-`--vol a,b` overrides the flat vols (and disables the surface grid).
+`local_vol.grids[]` from the surface — and reports both the flat-ATM and the surface-calibrated
+lanes. It resolves the engines exactly like the app (`RIGA_MCP_BIN` / `TAC_ENGINE_BIN`, else
+`modules/<dir>/target/release/<bin>`). To reconcile against another pricer, `--no-call` drops
+the autocall gate, `--strike X` overrides the put strike, and `--vol a,b` overrides the flat
+vols (and disables the surface grid).
+
+### Other scripts
+
+```bash
+npm run build          # type-check + production frontend bundle
+npm run lint           # oxlint
+npm run test:run       # Vitest (43 files, 211 tests)
+npm run test:coverage  # Vitest coverage
+npm run backend:test   # cargo test --workspace (the Tauri shell)
+npm run version:set -- 0.1.1   # stamp one version into src-tauri/Cargo.toml + tauri.conf.json
+```
 
 ## Repository map
 
 ```text
-crates/fina-kernel/     All domain logic. Deps: serde, serde_json, thiserror. Nothing else.
-  src/api.rs            The 12-command wire contract + dispatch/dispatch_sync
-  src/path_generator.rs Deterministic demo path engine
-  src/{economics,risk_engine,diagnostics,valuation,execution}.rs
-  src/{jsnum,rng,dates}.rs   JavaScript-exact numerics, PRNG, calendar
-  tests/                Golden parity, path semantics, toFixed conformance, dep hygiene
-crates/fina-server/     HTTP adapter (actix-web): /health, /api/cmd/{cmd}, /api/stream/{cmd}
-crates/fina-cli/        CLI adapter (clap) over the same dispatcher
-crates/fina-mcp/        MCP JSON-RPC 2.0 stdio server over the shared kernel dispatcher
-src-tauri/              Desktop IPC adapter plus local model manager and in-process llama.cpp inference
-src/                    React frontend (unchanged location)
-  api/                  Transport-agnostic command client (Tauri | HTTP)
-  features/             Tiles, workspace, payoff graph, pathcube, attribution, local-agent UI/runtime, …
-  store/                Zustand input/UI state + localStorage persistence
-scripts/                Golden fixture tooling, live-engine instrument pricing, coverage gates, version stamping
+modules/riga-flow/     The pricing engine (`riga-mcp`). Submodule, standalone workspace.
+modules/tac-engine/    Market data (`tac-engine`: lake + Alpaca + FRED). Submodule.
+modules/riga/          The RIGA agent (`riga-kernel` / `riga-server` / `riga-shell`). Submodule.
+src-tauri/             Desktop shell: MCP server registry + the RIGA agent host (IPC adapter only)
+src/                   React frontend
+  api/                 riga / tac MCP transports (http + tauri)
+  features/riga/       riga-flow tiles, the `fina.instrument/v1` store, deep-form editor
+  features/tac/        tac-engine market-data tiles
+  features/dashboards/ tile catalog + types
+  store/               Zustand UI state (dashboards, instrument, observability) + localStorage
+scripts/               Engine sidecars, live-engine instrument pricing, coverage gates, version stamping
 ```
 
 ## Release a version
@@ -230,13 +168,11 @@ Pushing a `vX.Y.Z` tag builds every platform and publishes one GitHub Release
 | --- | --- |
 | `release-create` | Validates the tag, stamps the version into the manifests, opens a **draft** release |
 | `desktop` | Linux x86_64 (AppImage, deb, rpm) · macOS Apple Silicon + Intel (dmg) · Windows x86_64 (msi, setup.exe) |
-| `cli` | `fina-cli` for Linux (gnu, static musl, arm64), macOS (x64, arm64), Windows x86_64 |
 | `release-publish` | Publishes the draft — only if every platform build succeeded |
 
 ```bash
 # 1. optional: keep the manifests in step with the tag (CI re-derives it anyway)
 npm run version:set -- 0.1.1
-cargo check -p fina-cli          # refresh Cargo.lock, then commit the three files + lockfile
 
 # 2. tag and push — this is what triggers the release
 git tag -a v0.1.1 -m "0.1.1"
@@ -250,35 +186,34 @@ Notes:
 
 - Tags matching `v*.*.*` trigger the workflow; a `-rc.1`-style suffix is published as a
   GitHub **prerelease** and does not become the default download.
-- A single platform can also be built on demand: **Actions → release → Run workflow**, with
-  an existing tag as input.
+- A single platform can also be built on demand: **Actions → release → Run workflow**, with an
+  existing tag as input.
 - Builds are **unsigned** unless these repository secrets exist, in which case the Tauri CLI
   picks them up automatically: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
   `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`,
   `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD`.
-- The desktop matrix assumes the standard Linux/macOS/Windows runner images. Neither
-  workflow has completed a full green run on a real runner yet, so treat the first tag push
-  as the shakedown.
 
 ## Validation
 
 | Command | Covers |
 | --- | --- |
-| `cargo test --workspace` | 296 tests: kernel units, golden parity against the original TypeScript, adapter parity (server, CLI, Tauri) |
-| `npm run test:run` | 49 Vitest tests: stores, hooks, transports, transport parity, tile rendering |
+| `npm run test:run` | Vitest (43 files, 211 tests): riga/tac tile rendering, the instrument store, the golden transcript, stores |
+| `cargo test --workspace` | The Tauri shell (MCP client + engine resolution) |
+| `cargo test --manifest-path modules/riga-flow/Cargo.toml -p riga-engine -p riga-mcp` | The engine's own unit + tool-surface tests (the submodule's CI covers these too) |
 | `npm run build` / `npm run lint` | TypeScript + Vite build, Oxlint |
-| CI (`.github/workflows/ci.yml`) | frontend, Rust core, adapters, coverage gates, kernel dependency hygiene, and a guard that test mocks never reach a production bundle |
+| CI (`.github/workflows/ci.yml`) | frontend, desktop shell (fmt/clippy/tauri), coverage gates, and a guard that test mocks never reach a production bundle |
 
 There is no browser E2E suite, by design.
 
 ## Changing things
 
-- **A number:** it lives in `crates/fina-kernel`. Formulas were ported verbatim, so changing
-  one is a decision, not a fix — update the golden fixture expectations in the same commit.
-- **A tile:** `src/features/dashboards/{types,catalog}.ts`, the view under `src/features/`, and
-  the `case` in `src/features/tiles/components/TileRenderer.tsx`.
-- **The command surface:** `crates/fina-kernel/src/api.rs`. Adapters follow automatically —
-  they hold no command table of their own.
-- **Workspace state:** `src/store/explorerStore.ts`; trade and market inputs in
-  `tradeEconomicsStore.ts` / `marketDataStore.ts`. All of it persists to `localStorage` under
-  the existing `fina-*` keys.
+- **A number:** it lives in the engine, not here — `modules/riga-flow` (pricing) or
+  `modules/tac-engine` (market data). This repo only carries the request/response mirrors in
+  `src/features/riga/types.ts` and `src/features/tac/`.
+- **A tile:** `src/features/dashboards/{types,catalog}.ts`, the view under `src/features/`
+  (riga-flow tiles in `features/riga/components/`, tac tiles in `features/tac/components/`),
+  and the `case` in `src/features/tiles/components/TileRenderer.tsx`.
+- **The instrument document:** the canonical `fina.instrument/v1` schema lives in
+  `src/features/riga/instrument/` (schema, adapters, `toRequest`).
+- **Workspace state:** `src/store/` (dashboards in `explorerStore.ts`, the instrument in
+  `instrumentStore.ts`). It persists to `localStorage` under the existing `fina-*` keys.
