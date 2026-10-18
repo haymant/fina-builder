@@ -230,7 +230,12 @@ export interface LedgerPayload {
 export interface PathCubeQueryResponse {
   percentile: number
   sample: PathRecord[]
-  count: number
+  /** Selected path id (the corpus sample index). */
+  selected: number
+  /** Worst-final threshold at this percentile. */
+  thresholdWorstFinal: number
+  /** Number of paths in the run. */
+  total: number
 }
 
 export interface ExecutionTapeEvent {

@@ -137,8 +137,9 @@ tests · `cargo test -p fina-kernel` 273 passed (2 ignored) · `cargo build
 **Port-ready now** (the riga data exists; only a tile is needed):
 - **P2a** Cashflow Summary + Cashflow Timeline ← `build_cashflows` (`mean`, `paths`, `timeline`) — ✅ **ported (2026-10-18)**
 - **P2b** Risk Summary ← `risk_batch` (`base_pv`, per-asset Δ/Γ/ν, `dv01`, correlation) — ✅ **ported (2026-10-18)**
-- **P2c** Distribution deciles / KI ← `get_distributions` (`worst_final_deciles`, `ki_rate`, `mean_put`)
-- **P2d** Path Timeline ← `query_path_cube` sample + `get_path`
+- **P2c** Distribution deciles / KI ← `get_distributions` (`worst_final_deciles`, `ki_rate`, `mean_put`) — ✅ **ported (2026-10-18)**
+- **P2d** Selected Path ← `query_path_cube` sample (identity / worstFinal / KO / KI / put / PV + coupon-by-period) — ✅ **ported (2026-10-18)**
+  *(The demo "Path Timeline" — price over dates — is **not** portable: `get_path` has no price time series. Reclassified to **engine**.)*
 
 Per sub-phase **entrance:** the named riga tool is in the recorded transcript
 **with the fields listed above**.

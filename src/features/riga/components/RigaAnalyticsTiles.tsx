@@ -512,7 +512,7 @@ export const RigaPathCubeTile = memo(function RigaPathCubeTile() {
         <div className="space-y-2 p-3">
           <div className="flex flex-wrap gap-2">
             <Kpi label="Percentile" value={pct(data.percentile)} />
-            <Kpi label="Count" value={data.count} tone="primary" />
+            <Kpi label="Count" value={Number.isFinite(data.total) ? data.total.toLocaleString() : '—'} tone="primary" />
           </div>
           <DataTable
             columns={[
@@ -677,6 +677,96 @@ export const RigaRiskSummaryTile = memo(function RigaRiskSummaryTile() {
           </div>
         </div>
       )}
+    </RigaPanel>
+  )
+})
+
+/** Worst-of deciles, KI rate and mean put (`get_distributions`). */
+export const RigaDistributionSummaryTile = memo(function RigaDistributionSummaryTile() {
+  const state = useRigaDistributions()
+  const { tokens } = useTheme()
+  return (
+    <RigaPanel
+      title="Distribution Summary"
+      subtitle="get_distributions · worst-of deciles"
+      tool="get_distributions"
+      state={state}
+    >
+      {(data) => {
+        const deciles = data.worstFinalDeciles ?? []
+        const base = chartBase(tokens)
+        const option = {
+          ...base,
+          xAxis: { ...(base.xAxis as object), type: 'category', data: deciles.map((_, index) => `D${index + 1}`) },
+          yAxis: { ...(base.yAxis as object), name: 'Worst-of final' },
+          series: [{ type: 'bar', data: deciles, itemStyle: { color: tokens.primary } }],
+        }
+        return (
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="grid shrink-0 grid-cols-3 gap-2 p-3">
+              <Kpi label="Paths" value={Number.isFinite(data.count) ? data.count.toLocaleString() : '—'} />
+              <Kpi label="KI rate" value={pct(data.kiRate)} tone="danger" />
+              <Kpi label="Mean put" value={num(data.meanPut)} tone="primary" />
+            </div>
+            <div className="min-h-0 flex-1 p-2">
+              <ReactECharts option={option} style={{ height: '100%', width: '100%' }} notMerge />
+            </div>
+          </div>
+        )
+      }}
+    </RigaPanel>
+  )
+})
+
+/** Worst-percentile path sample + selected-path detail (`query_path_cube`). */
+export const RigaSelectedPathTile = memo(function RigaSelectedPathTile() {
+  const state = useRigaPathCube(0.05)
+  const { tokens } = useTheme()
+  return (
+    <RigaPanel
+      title="Selected Path"
+      subtitle="query_path_cube · worst-percentile sample"
+      tool="query_path_cube"
+      state={state}
+    >
+      {(data) => {
+        const sample = data.sample ?? []
+        const first = sample[0]
+        const base = chartBase(tokens)
+        const option = {
+          ...base,
+          xAxis: { ...(base.xAxis as object), type: 'category', data: (first?.couponByPeriod ?? []).map((_, index) => `P${index + 1}`), name: 'Coupon period' },
+          yAxis: { ...(base.yAxis as object), name: 'Coupon PV' },
+          series: [{ type: 'bar', data: first?.couponByPeriod ?? [], itemStyle: { color: tokens.primary } }],
+        }
+        return (
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="grid shrink-0 grid-cols-2 gap-2 p-3 sm:grid-cols-4">
+              <Kpi label="Percentile" value={pct(data.percentile)} />
+              <Kpi label="Paths" value={Number.isFinite(data.total) ? data.total.toLocaleString() : '—'} />
+              <Kpi label="Worst threshold" value={num(data.thresholdWorstFinal)} />
+              <Kpi label="Selected" value={`#${data.selected}`} />
+            </div>
+            <div className="shrink-0 p-2">
+              <DataTable
+                columns={[
+                  { key: 'identity', label: 'Path', render: (row) => `#${row.identity?.pathId ?? '—'}` },
+                  { key: 'worstFinal', label: 'Worst', render: (row) => num(row.worstFinal) },
+                  { key: 'knockedOut', label: 'KO', render: (row) => (row.knockedOut ? `@${row.koTime}` : '—') },
+                  { key: 'kiHit', label: 'KI', render: (row) => (row.kiHit ? 'yes' : 'no') },
+                  { key: 'putPayoff', label: 'Put', render: (row) => num(row.putPayoff) },
+                  { key: 'pv', label: 'PV', render: (row) => num(row.pv) },
+                ]}
+                rows={sample}
+                empty="No sample paths"
+              />
+            </div>
+            <div className="min-h-0 flex-1 p-2">
+              <ReactECharts option={option} style={{ height: '100%', width: '100%' }} notMerge />
+            </div>
+          </div>
+        )
+      }}
     </RigaPanel>
   )
 })
