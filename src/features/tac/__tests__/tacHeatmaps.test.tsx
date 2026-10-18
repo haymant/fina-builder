@@ -32,6 +32,7 @@ const lastOption = () => captured.at(-1) as {
   series: Array<{ type: string }>
   visualMap: { inRange: { color: string[] } }
   xAxis?: { axisLabel?: { color?: string } }
+  yAxis?: { data?: string[]; axisLabel?: { color?: string } }
 }
 
 describe('tac heatmap theming', () => {
@@ -82,5 +83,33 @@ describe('tac heatmap theming', () => {
         expect(value).toBeLessThanOrEqual(361) // viewBox is 360×240
       }
     }
+  })
+
+  it('formats the Excel-serial maturities as dates on the 2D axis', () => {
+    render(<TacVolSurface />)
+    const labels = lastOption().yAxis?.data ?? []
+    // The tac transcript maturities are serials 46311…46374.
+    expect(labels).toContain('16 Oct 26')
+    expect(labels.some((label) => /^\d{5}$/.test(label))).toBe(false)
+  })
+
+  it('filters a maturity out of the surface', () => {
+    render(<TacVolSurface />)
+    expect(lastOption().yAxis?.data).toHaveLength(8)
+    fireEvent.click(screen.getByTitle('16 Oct 26 · hide'))
+    const labels = lastOption().yAxis?.data ?? []
+    expect(labels).toHaveLength(7)
+    expect(labels).not.toContain('16 Oct 26')
+  })
+
+  it('rotates the 3D surface on drag', () => {
+    render(<TacVolSurface />)
+    fireEvent.click(screen.getByText('3D'))
+    const svg = screen.getByTestId('vol-surface-3d')
+    const before = svg.querySelector('path')!.getAttribute('d')
+    fireEvent.pointerDown(svg, { pointerId: 1, clientX: 100, clientY: 100 })
+    fireEvent.pointerMove(svg, { pointerId: 1, clientX: 145, clientY: 112 })
+    fireEvent.pointerUp(svg, { pointerId: 1 })
+    expect(svg.querySelector('path')!.getAttribute('d')).not.toBe(before)
   })
 })

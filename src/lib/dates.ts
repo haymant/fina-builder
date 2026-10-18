@@ -110,3 +110,18 @@ function normalizeYear(year: number): number {
 export function looksLikeDate(value: unknown): boolean {
   return toIsoDate(value) !== null
 }
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/**
+ * Compact axis label for a value that may be a date. Excel serials (e.g. `46318`
+ * → `16 Oct 26`), ISO strings and the rest of the heuristic render as a short
+ * date; everything else (a tenor like `"3M"`, a year fraction `0.25`) is shown
+ * verbatim.
+ */
+export function formatDateLabel(value: unknown): string {
+  const iso = toIsoDate(value)
+  if (!iso) return value === null || value === undefined ? '' : String(value)
+  const [year, month, day] = iso.split('-')
+  return `${day} ${MONTH_NAMES[Number(month) - 1]} ${year!.slice(2)}`
+}

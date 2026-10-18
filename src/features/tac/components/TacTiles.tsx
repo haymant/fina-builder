@@ -4,14 +4,14 @@
 // the pure selector and the effective market feeds the riga-flow request.
 
 import ReactECharts from '../../shared/components/Chart'
-import { memo, useMemo, useState, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { PanelCard } from '../../shared/components/PanelCard'
 import { useTheme } from '../../themes/ThemeProvider'
 import { useTacMarketStore } from '../../../store/tacMarketStore'
 import { useTacActions, useTacAutoFetch } from '../hooks'
 import { tacBaseUrl, tacTransportMode } from '../../../api/tacTransport'
 import { chartBase, DataTable, Kpi, num, pct, Provenance } from '../../riga/components/primitives'
-import { toIsoDate } from '../../riga/instrument'
+import { formatDateLabel, toIsoDate } from '../../riga/instrument'
 import { VolSurface3D } from './VolSurface3D'
 import { applyManipulations, volSurfaceWarnings } from '../manipulations'
 import type {
@@ -273,24 +273,54 @@ export const TacVolSurface = memo(function TacVolSurface() {
   const actions = useTacActions()
   const [underlying, setUnderlying] = useState(SYMBOLS[0]!)
   const [view, setView] = useState<'heat' | '3d'>('heat')
+  const [hidden, setHidden] = useState<ReadonlySet<number>>(() => new Set())
   const surface = raw.volSurfaces[underlying]
   const warnings = surface ? volSurfaceWarnings(surface) : []
   // Sequential ramp: calm (green) → elevated (amber) → stressed (red).
   const ramp = useMemo(() => [tokens.success, tokens.warning, tokens.danger], [tokens])
+
+  // A new symbol means a new maturity ladder — reset the filter.
+  useEffect(() => { setHidden(new Set()) }, [underlying, surface])
+
+  const maturityCount = surface?.maturities.length ?? 0
+  const visibleRows = useMemo(
+    () => Array.from({ length: maturityCount }, (_, index) => index).filter((index) => !hidden.has(index)),
+    [maturityCount, hidden],
+  )
+  const filtered = useMemo(() => {
+    if (!surface) return { labels: [] as string[], volatility: [] as number[][] }
+    return {
+      // The date heuristic reads Excel-serial / ISO maturities (46318 → 16 Oct 26).
+      labels: visibleRows.map((index) => formatDateLabel(surface.maturities[index])),
+      volatility: visibleRows.map((index) => surface.volatility[index] ?? []),
+    }
+  }, [surface, visibleRows])
+  const canHideMore = visibleRows.length > 2
+
+  const toggleMaturity = (index: number) => {
+    setHidden((previous) => {
+      const next = new Set(previous)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
+  }
+
   const option = useMemo(() => {
     if (!surface) return {}
-    const min = Math.min(...surface.volatility.flat()) * 100
-    const max = Math.max(...surface.volatility.flat()) * 100
-    const data = surface.volatility.flatMap((row, r) => row.map((value, c) => [c, r, +(value * 100).toFixed(2)]))
+    const values = filtered.volatility.flat().filter((value) => Number.isFinite(value))
+    const min = Math.min(...values) * 100
+    const max = Math.max(...values) * 100
+    const data = filtered.volatility.flatMap((row, r) => row.map((value, c) => [c, r, +(value * 100).toFixed(2)]))
     return {
       ...chartBase(tokens),
-      grid: { left: 56, right: 18, top: 16, bottom: 42 },
+      grid: { left: 64, right: 18, top: 16, bottom: 42 },
       xAxis: { type: 'category', data: surface.strikes.map((s) => String(s)), axisLabel: { color: tokens.muted, fontSize: 8, interval: Math.ceil(surface.strikes.length / 8) } },
-      yAxis: { type: 'category', data: surface.maturities.map((m) => String(m)), axisLabel: { color: tokens.muted, fontSize: 8 } },
+      yAxis: { type: 'category', data: filtered.labels, axisLabel: { color: tokens.muted, fontSize: 8 } },
       visualMap: { min, max, orient: 'horizontal', left: 'center', bottom: 0, calculable: false, textStyle: { color: tokens.muted, fontSize: 8 }, inRange: { color: ramp } },
       series: [{ type: 'heatmap', data, itemStyle: { borderColor: tokens.border, borderWidth: 1 }, label: { show: false } }],
     }
-  }, [surface, tokens, ramp])
+  }, [surface, tokens, ramp, filtered])
 
   return (
     <TacTile
@@ -316,13 +346,34 @@ export const TacVolSurface = memo(function TacVolSurface() {
             </button>
           ))}
         </div>
+        {surface && surface.maturities.length > 2 ? (
+          <div className="flex flex-wrap items-center gap-1 px-2 pb-1">
+            <span className="mr-1 text-[9px] text-muted">maturities</span>
+            {surface.maturities.map((value, index) => {
+              const active = !hidden.has(index)
+              const label = formatDateLabel(value)
+              return (
+                <button
+                  key={index}
+                  type="button"
+                  className={active ? 'shock-button bg-primary/20' : 'shock-button opacity-50'}
+                  disabled={active && !canHideMore}
+                  title={`${label} · ${active ? 'hide' : 'show'}`}
+                  onClick={() => toggleMaturity(index)}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
         {warnings.length ? <p className="px-2 text-[10px] text-warning">{warnings[0]}</p> : null}
         <div className="min-h-0 flex-1">
           {view === '3d' && surface ? (
             <VolSurface3D
               strikes={surface.strikes}
-              maturities={surface.maturities}
-              volatility={surface.volatility}
+              maturities={filtered.labels}
+              volatility={filtered.volatility}
               ramp={ramp}
               text={tokens.text}
               muted={tokens.muted}
@@ -330,11 +381,11 @@ export const TacVolSurface = memo(function TacVolSurface() {
               format={(value) => `${(value * 100).toFixed(1)}%`}
             />
           ) : (
-            <ReactECharts key={view} option={option} style={{ height: '100%', width: '100%' }} notMerge />
+            <ReactECharts key={`${view}-${visibleRows.length}`} option={option} style={{ height: '100%', width: '100%' }} notMerge />
           )}
         </div>
         <div className="px-3 pb-2 text-[10px] text-muted">
-          reference={num(surface?.reference, 2)} · {surface?.strikes.length ?? 0} strikes × {surface?.maturities.length ?? 0} maturities
+          reference={num(surface?.reference, 2)} · {surface?.strikes.length ?? 0} strikes × {visibleRows.length}/{maturityCount} maturities
         </div>
       </div>
     </TacTile>

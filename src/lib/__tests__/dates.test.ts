@@ -3,7 +3,7 @@
 // `a/b/yyyy`, with no declared format.
 
 import { describe, expect, it } from 'vitest'
-import { looksLikeDate, toIsoDate } from '../dates'
+import { formatDateLabel, looksLikeDate, toIsoDate } from '../dates'
 
 describe('toIsoDate', () => {
   it('reads Excel/Murex serials', () => {
@@ -52,5 +52,17 @@ describe('toIsoDate', () => {
   it('looksLikeDate mirrors toIsoDate', () => {
     expect(looksLikeDate('2026-09-07')).toBe(true)
     expect(looksLikeDate('nope')).toBe(false)
+  })
+
+  it('formats a date label compactly and passes non-dates through', () => {
+    // The tac vol-surface maturities are Excel serials.
+    expect(formatDateLabel(46318)).toBe('23 Oct 26')
+    expect(formatDateLabel(46311)).toBe('16 Oct 26')
+    expect(formatDateLabel('2026-10-16')).toBe('16 Oct 26')
+    // Tenors / year-fractions are not dates and must stay verbatim.
+    expect(formatDateLabel('3M')).toBe('3M')
+    expect(formatDateLabel(0.25)).toBe('0.25')
+    expect(formatDateLabel(1)).toBe('1')
+    expect(formatDateLabel(null)).toBe('')
   })
 })

@@ -1,4 +1,4 @@
-// A dependency-free 3D surface for the tac vol grid.
+// A dependency-free, interactive 3D surface for the tac vol grid.
 //
 // ECharts' own `series.type: 'surface'` needs `echarts-gl`, and echarts-gl 2.1.0
 // is **not** compatible with ECharts 6: it registers through
@@ -6,11 +6,11 @@
 // `points` layout never runs and `SurfaceView` throws
 // ("undefined is not an object (evaluating 'pointsArr.length')").
 //
-// So the surface is drawn here instead: an isometric projection of the grid as
-// SVG quads, painter-sorted back-to-front, coloured from the theme ramp. Pure
-// React + SVG — no WebGL, no extra dependency, and unit-testable.
+// So the surface is drawn here instead: an orthographic projection of the grid
+// as SVG quads, painter-sorted, coloured from the theme ramp. Pure React + SVG —
+// no WebGL, no extra dependency, unit-testable. Drag to rotate, wheel to zoom.
 
-import { useId } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 export interface VolSurface3DProps {
   /** Axis tick labels; geometry is index-based, so strings (e.g. `"3M"`) are fine. */
@@ -55,7 +55,20 @@ export function rampColor(ramp: string[], t: number): string {
   return index + 1 < ramp.length ? mix(ramp[index]!, ramp[index + 1]!, frac) : ramp[index]!
 }
 
-const clamp01 = (value: number) => Math.max(0, Math.min(1, value))
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
+
+interface ViewState {
+  /** Rotation about the vertical axis (radians). */
+  yaw: number
+  /** Camera tilt above the surface plane; kept in (0, π/2) so the painter sort holds. */
+  pitch: number
+  zoom: number
+}
+
+export const DEFAULT_VIEW: ViewState = { yaw: -0.6, pitch: 0.72, zoom: 1 }
+const MIN_PITCH = 0.15
+const MAX_PITCH = 1.45
+const PAD = { left: 42, right: 18, top: 14, bottom: 30 }
 
 export function VolSurface3D({
   strikes,
@@ -69,117 +82,160 @@ export function VolSurface3D({
   width = 360,
   height = 240,
 }: VolSurface3DProps) {
-  const gradientId = useId().replace(/:/g, '')
+  const [view, setView] = useState<ViewState>(DEFAULT_VIEW)
+  const drag = useRef<{ x: number; y: number } | null>(null)
+  const svgRef = useRef<SVGSVGElement>(null)
+
+  // Wheel must be a real (non-passive) listener to stop the page scrolling.
+  useEffect(() => {
+    const element = svgRef.current
+    if (!element) return
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault()
+      setView((current) => ({
+        ...current,
+        zoom: clamp(current.zoom * Math.exp(-event.deltaY * 0.0015), 0.4, 5),
+      }))
+    }
+    element.addEventListener('wheel', onWheel, { passive: false })
+    return () => element.removeEventListener('wheel', onWheel)
+  }, [])
 
   const rows = maturities.length
   const cols = strikes.length
-  const values = volatility.flat().filter((value) => Number.isFinite(value))
-  if (rows < 2 || cols < 2 || values.length === 0) {
+
+  const model = useMemo(() => {
+    const values = volatility.flat().filter((value) => Number.isFinite(value))
+    if (rows < 2 || cols < 2 || values.length === 0) return null
+    const min = Math.min(...values)
+    const max = Math.max(...values)
+    const span = max - min || 1
+    const norm = (r: number, c: number) => clamp(((volatility[r]?.[c] ?? min) - min) / span, 0, 1)
+
+    const cosYaw = Math.cos(view.yaw)
+    const sinYaw = Math.sin(view.yaw)
+    const cosPitch = Math.cos(view.pitch)
+    const sinPitch = Math.sin(view.pitch)
+    const raw = (r: number, c: number) => {
+      const x = c / (cols - 1) - 0.5
+      const y = r / (rows - 1) - 0.5
+      const z = (norm(r, c) - 0.5) * 0.9
+      const x1 = x * cosYaw - y * sinYaw
+      const y1 = x * sinYaw + y * cosYaw
+      return { X: x1, Y: y1 * cosPitch - z * sinPitch }
+    }
+
+    let minX = Infinity
+    let maxX = -Infinity
+    let minY = Infinity
+    let maxY = -Infinity
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const point = raw(r, c)
+        minX = Math.min(minX, point.X)
+        maxX = Math.max(maxX, point.X)
+        minY = Math.min(minY, point.Y)
+        maxY = Math.max(maxY, point.Y)
+      }
+    }
+    const scale =
+      Math.min(
+        (width - PAD.left - PAD.right) / (maxX - minX || 1),
+        (height - PAD.top - PAD.bottom) / (maxY - minY || 1),
+      ) * view.zoom
+    const offsetX = PAD.left + ((width - PAD.left - PAD.right) - (maxX - minX) * scale) / 2
+    const offsetY = PAD.top + ((height - PAD.top - PAD.bottom) - (maxY - minY) * scale) / 2
+    const at = (r: number, c: number) => {
+      const point = raw(r, c)
+      return { x: offsetX + (point.X - minX) * scale, y: offsetY + (point.Y - minY) * scale }
+    }
+
+    // Painter's algorithm: with the camera above the plane, larger screen-Y is
+    // nearer, so draw ascending Y (far → near).
+    const quads: Array<{ path: string; color: string; depth: number }> = []
+    for (let r = 0; r < rows - 1; r++) {
+      for (let c = 0; c < cols - 1; c++) {
+        const corners = [at(r, c), at(r, c + 1), at(r + 1, c + 1), at(r + 1, c)]
+        const mean = (norm(r, c) + norm(r, c + 1) + norm(r + 1, c + 1) + norm(r + 1, c)) / 4
+        quads.push({
+          path: `M${corners.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join('L')}Z`,
+          color: rampColor(ramp, mean),
+          depth: corners.reduce((sum, p) => sum + p.y, 0) / corners.length,
+        })
+      }
+    }
+    quads.sort((a, b) => a.depth - b.depth)
+    return { at, quads, min, max }
+  }, [rows, cols, volatility, ramp, view, width, height])
+
+  if (!model) {
     return <p className="p-3 text-[10px] text-muted">3D surface needs a 2×2 grid.</p>
   }
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const span = max - min || 1
-  const norm = (value: number) => clamp01((value - min) / span)
+  const { at, quads, min, max } = model
 
-  // Isometric projection of a unit grid; z lifts the point.
-  const project = (cx: number, cy: number, z: number) => {
-    const x = cx - 0.5
-    const y = cy - 0.5
-    return { X: (x - y) * 1, Y: (x + y) * 0.5 - z * 0.95 }
-  }
-
-  // Project every node, then fit the bounding box into the viewport.
-  const nodes: Array<{ X: number; Y: number }> = []
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      nodes.push(project(c / (cols - 1), r / (rows - 1), norm(volatility[r]?.[c] ?? min)))
-    }
-  }
-  const xs = nodes.map((n) => n.X)
-  const ys = nodes.map((n) => n.Y)
-  const minX = Math.min(...xs)
-  const maxX = Math.max(...xs)
-  const minY = Math.min(...ys)
-  const maxY = Math.max(...ys)
-  const pad = { left: 34, right: 12, top: 12, bottom: 30 }
-  const scale = Math.min(
-    (width - pad.left - pad.right) / (maxX - minX || 1),
-    (height - pad.top - pad.bottom) / (maxY - minY || 1),
-  )
-  const fit = (n: { X: number; Y: number }) => ({
-    x: pad.left + (n.X - minX) * scale,
-    y: pad.top + (n.Y - minY) * scale,
-  })
-  const at = (r: number, c: number) => fit(project(c / (cols - 1), r / (rows - 1), norm(volatility[r]?.[c] ?? min)))
-
-  // Painter's algorithm: the far corner has the smallest row+col sum.
-  const quads: Array<{ path: string; color: string; depth: number }> = []
-  for (let r = 0; r < rows - 1; r++) {
-    for (let c = 0; c < cols - 1; c++) {
-      const corners = [at(r, c), at(r, c + 1), at(r + 1, c + 1), at(r + 1, c)]
-      const mean =
-        ((volatility[r]?.[c] ?? min) +
-          (volatility[r]?.[c + 1] ?? min) +
-          (volatility[r + 1]?.[c + 1] ?? min) +
-          (volatility[r + 1]?.[c] ?? min)) /
-        4
-      quads.push({
-        path: `M${corners.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join('L')}Z`,
-        color: rampColor(ramp, norm(mean)),
-        depth: r + c,
-      })
-    }
-  }
-  quads.sort((a, b) => a.depth - b.depth)
-
-  const axisLabel = (r: number, c: number, dx: number, dy: number, label: string, anchor: 'start' | 'middle' | 'end') => {
-    const p = at(r, c)
+  const tick = (r: number, c: number, dx: number, dy: number, label: string, anchor: 'start' | 'middle' | 'end') => {
+    const point = at(r, c)
     return (
-      <text
-        key={`${r}-${c}-${label}`}
-        x={p.x + dx}
-        y={p.y + dy}
-        fill={muted}
-        fontSize={8}
-        textAnchor={anchor}
-      >
+      <text key={`${r}-${c}-${label}`} x={point.x + dx} y={point.y + dy} fill={muted} fontSize={8} textAnchor={anchor}>
         {label}
       </text>
     )
   }
-
-  const strikeTicks = [0, Math.floor((cols - 1) / 2), cols - 1].filter((v, i, a) => a.indexOf(v) === i)
-  const maturityTicks = [0, Math.floor((rows - 1) / 2), rows - 1].filter((v, i, a) => a.indexOf(v) === i)
+  const ticks = (count: number) => [0, Math.floor((count - 1) / 2), count - 1].filter((v, i, a) => a.indexOf(v) === i)
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-1 p-2">
       <svg
+        ref={svgRef}
         viewBox={`0 0 ${width} ${height}`}
         width="100%"
         height="100%"
         role="img"
-        aria-label="3D volatility surface"
+        aria-label="3D volatility surface (drag to rotate, scroll to zoom)"
         data-testid="vol-surface-3d"
         preserveAspectRatio="xMidYMid meet"
+        style={{ touchAction: 'none', cursor: 'grab' }}
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture?.(event.pointerId)
+          drag.current = { x: event.clientX, y: event.clientY }
+        }}
+        onPointerMove={(event) => {
+          if (!drag.current) return
+          const dx = event.clientX - drag.current.x
+          const dy = event.clientY - drag.current.y
+          drag.current = { x: event.clientX, y: event.clientY }
+          setView((current) => ({
+            ...current,
+            yaw: current.yaw - dx * 0.01,
+            pitch: clamp(current.pitch + dy * 0.01, MIN_PITCH, MAX_PITCH),
+          }))
+        }}
+        onPointerUp={(event) => {
+          drag.current = null
+          event.currentTarget.releasePointerCapture?.(event.pointerId)
+        }}
       >
         {quads.map((quad, index) => (
           <path key={index} d={quad.path} fill={quad.color} stroke={border} strokeWidth={0.4} />
         ))}
-        {strikeTicks.map((c) => axisLabel(rows - 1, c, 0, 12, String(strikes[c]), 'middle'))}
-        {maturityTicks.map((r) => axisLabel(r, cols - 1, 12, 3, String(maturities[r]), 'start'))}
-        <text x={pad.left} y={height - 4} fill={text} fontSize={8}>
-          strike →
+        {ticks(cols).map((c) => tick(rows - 1, c, 0, 12, String(strikes[c]), 'middle'))}
+        {ticks(rows).map((r) => tick(r, cols - 1, 12, 3, String(maturities[r]), 'start'))}
+        <text x={width - 6} y={height - 4} fill={muted} fontSize={8} textAnchor="end">
+          drag · scroll to zoom
         </text>
-        <text x={width - pad.right} y={pad.top + 8} fill={text} fontSize={8} textAnchor="end">
-          maturity →
+        <text x={6} y={12} fill={text} fontSize={9}>
+          vol
         </text>
       </svg>
-      <div className="flex w-full max-w-[280px] items-center gap-2 text-[9px] text-muted">
+      <div className="flex w-full max-w-[300px] items-center gap-2 text-[9px] text-muted">
         <span className="font-mono">{format(min)}</span>
-        <span className="relative h-2 flex-1 rounded" style={{ background: `linear-gradient(90deg, ${ramp.join(', ')})` }} data-testid={`${gradientId}-legend`} />
+        <span className="h-2 flex-1 rounded" style={{ background: `linear-gradient(90deg, ${ramp.join(', ')})` }} />
         <span className="font-mono">{format(max)}</span>
-        <span className="text-[9px]">vol</span>
+      </div>
+      <div className="flex items-center gap-2 text-[9px] text-muted">
+        <button type="button" className="shock-button" onClick={() => setView(DEFAULT_VIEW)}>
+          reset view
+        </button>
       </div>
     </div>
   )
