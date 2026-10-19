@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { RIGA_TRANSCRIPT, TAC_TRANSCRIPT } from '../../../tests/mocks/transcripts'
 
-const RIGA_TOOLS_SHA256 = '9b91509de7e8e4769458cbc64ccf93805953bc3715178fd99ff79e81c9ab0a05'
+const RIGA_TOOLS_SHA256 = 'e1ee33e9b3691c078675d75272d9e3efd26f4ee4c76849d8744972dbf90a98f4'
 const TAC_TOOLS_SHA256 = '6813ee7e366f554ad1ce09f69cb2614889573cf77522952749bf4ae0eefe7945'
 
 function sha256(value: unknown): string {

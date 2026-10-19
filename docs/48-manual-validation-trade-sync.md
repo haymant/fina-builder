@@ -301,6 +301,13 @@ depend on that axis.
 | Schedule Explorer (riga) | `path_series` | coupon-paid / below-KI counts per step | counts change | counts change |
 | Branch Flow (riga) | `query_execution_net` | KO / survive / put / coupon populations | put/coupon populations grow | populations change |
 
+> **t = 0 is a single point.** Every path starts at its initial spot, so the Quantile
+> Fan's P05/P50/P95 and the Worst-of Evolution's median must all sit at exactly
+> `1.0` at `years = 0`, and the last point must be at maturity — not one step past
+> it. (Fixed 2026-10-19: `gbm_evolve`'s slice 0 is already `t = dt`, so `path_series`
+> now prepends the true initial level.) The fan/timeline also draw the trade's
+> **strike**, knock-in, knock-out and coupon-barrier levels as reference lines.
+
 ### 4.7 riga-flow — governance & metadata
 
 | Tile | Tool | Watch | Trade edit | Market edit |

@@ -32,6 +32,32 @@ function timeChart(tokens: Tokens, series: object[]) {
   }
 }
 
+/** A horizontal reference level (a constant line across the observed years). */
+function levelLine(
+  name: string,
+  level: number | null | undefined,
+  years: number[],
+  color: string,
+  dashed = true,
+) {
+  if (level === null || level === undefined || years.length === 0) return null
+  const first = years[0]!
+  const last = years[years.length - 1]!
+  return line(name, [[first, level], [last, level]], color, 1, dashed)
+}
+
+/** The trade's barrier/strike levels, as reference lines over the path views. */
+function referenceLines(data: { barriers?: { knockIn: number; knockOut: number | null; coupon: number | null; strike: number } }, years: number[], tokens: Tokens) {
+  const barriers = data.barriers
+  if (!barriers) return []
+  return [
+    levelLine('Strike', barriers.strike, years, tokens.warning, true),
+    levelLine('Knock-in', barriers.knockIn, years, tokens.danger, true),
+    levelLine('Knock-out', barriers.knockOut, years, tokens.success, true),
+    levelLine('Coupon barrier', barriers.coupon, years, tokens.muted, true),
+  ].filter((entry): entry is ReturnType<typeof line> => entry !== null)
+}
+
 export const RigaPathTimelineTile = memo(function RigaPathTimelineTile() {
   const state = useRigaPathSeries()
   const { tokens } = useTheme()
@@ -39,14 +65,10 @@ export const RigaPathTimelineTile = memo(function RigaPathTimelineTile() {
     <RigaPanel title="Path Timeline" subtitle="path_series · selected path worst-of" tool="path_series" state={state}>
       {(data) => {
         const pts = data.series ?? []
+        const years = pts.map((p) => p.years)
         const option = timeChart(tokens, [
           line('Selected path', pts.map((p) => [p.years, p.worstOf]), tokens.primary, 2),
-          ...(data.barriers
-            ? [line('Knock-in', pts.map((p) => [p.years, data.barriers!.knockIn]), tokens.danger, 1, true)]
-            : []),
-          ...(data.barriers?.knockOut
-            ? [line('Knock-out', pts.map((p) => [p.years, data.barriers!.knockOut!]), tokens.success, 1, true)]
-            : []),
+          ...referenceLines(data, years, tokens),
         ])
         return (
           <div className="flex h-full min-h-0 flex-col">
@@ -72,12 +94,14 @@ export const RigaQuantileFanTile = memo(function RigaQuantileFanTile() {
     <RigaPanel title="Quantile Fan" subtitle="path_series · population envelope" tool="path_series" state={state}>
       {(data) => {
         const bands = data.bands ?? []
+        const years = bands.map((b) => b.years)
         const option = timeChart(tokens, [
           line('P95', bands.map((b) => [b.years, b.p95]), tokens.success, 1, true),
           line('P75', bands.map((b) => [b.years, b.p75]), tokens.muted, 1),
           line('P50', bands.map((b) => [b.years, b.p50]), tokens.primary, 2),
           line('P25', bands.map((b) => [b.years, b.p25]), tokens.muted, 1),
           line('P05', bands.map((b) => [b.years, b.p05]), tokens.danger, 1, true),
+          ...referenceLines(data, years, tokens),
         ])
         return (
           <div className="h-full min-h-0 p-2">
@@ -96,10 +120,12 @@ export const RigaWorstOfEvolutionTile = memo(function RigaWorstOfEvolutionTile()
     <RigaPanel title="Worst-of Evolution" subtitle="path_series · median with P05/P95" tool="path_series" state={state}>
       {(data) => {
         const bands = data.bands ?? []
+        const years = bands.map((b) => b.years)
         const option = timeChart(tokens, [
           line('P05', bands.map((b) => [b.years, b.p05]), tokens.danger, 1, true),
           line('P95', bands.map((b) => [b.years, b.p95]), tokens.success, 1, true),
           line('Median (P50)', bands.map((b) => [b.years, b.p50]), tokens.primary, 3),
+          ...referenceLines(data, years, tokens),
         ])
         return (
           <div className="h-full min-h-0 p-2">

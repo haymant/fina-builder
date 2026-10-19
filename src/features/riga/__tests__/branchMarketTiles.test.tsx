@@ -17,12 +17,16 @@ afterEach(() => {
 })
 
 describe('riga branch flow tile', () => {
-  it('renders the transition populations', async () => {
+  it('renders the Phoenix decision-tree populations', async () => {
     render(<RigaBranchFlowTile />)
     expect(await screen.findByText('Paths')).toBeTruthy()
-    expect(screen.getByText('KO')).toBeTruthy()
-    expect(screen.getByText('Put')).toBeTruthy()
-    expect(screen.getByText('Coupon')).toBeTruthy()
+    // The KO branch resolves to a P0x id for the current trade.
+    expect(screen.getByText(/^KO/)).toBeTruthy()
+    expect(screen.getByText('Survive')).toBeTruthy()
+    expect(screen.getByText('KI (P07)')).toBeTruthy()
+    expect(screen.getByText('No KI (P08)')).toBeTruthy()
+    // The coupon leg is additive on every branch, so it is a note, not a flow.
+    expect(screen.getByText(/Coupon leg/)).toBeTruthy()
   })
 })
 

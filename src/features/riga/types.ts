@@ -453,7 +453,7 @@ export interface RigaPathSeries {
   steps: number
   detailed: boolean
   selectedPath?: number
-  barriers?: { knockIn: number; knockOut: number | null; coupon: number | null }
+  barriers?: { knockIn: number; knockOut: number | null; coupon: number | null; strike: number }
   series?: RigaPathSeriesPoint[]
   bands?: RigaPathBand[]
   crossings?: RigaPathCrossing[]
