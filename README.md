@@ -160,6 +160,29 @@ lanes. It resolves the engines exactly like the app (`RIGA_MCP_BIN` / `TAC_ENGIN
 the autocall gate, `--strike X` overrides the put strike, and `--vol a,b` overrides the flat
 vols (and disables the surface grid).
 
+### Terminal analytics (`riga-cli`)
+
+The same engine tools the tiles use are available from the terminal via
+`riga-cli` (`modules/riga/crates/riga-cli`), which drives the MCP servers registered
+in `.mcp.json` and renders results as markdown tables. Run it **from the repo root**
+(it reads `.mcp.json` and `skills/` from the working directory):
+
+```bash
+cargo build --release --manifest-path modules/riga-flow/Cargo.toml
+cargo build --release --manifest-path modules/tac-engine/Cargo.toml
+cargo build -p riga-cli --manifest-path modules/riga/Cargo.toml
+
+./modules/riga/target/debug/riga-cli --tools   # engines reachable? (42 + 75 tools)
+./modules/riga/target/debug/riga-cli --tui     # terminal UI (agent chat)
+
+# model-free: one tool per call, markdown tables out
+./modules/riga/target/debug/riga-cli --call riga-flow/price_put
+./modules/riga/target/debug/riga-cli --call riga-flow/price_trade --set trade.strike=0.60
+```
+
+The `skills/` in this repo guide the agent, and `skills/riga-flow-cli/SKILL.md` holds
+the command reference plus sample prompts. Design/plan: `docs/50-cli.md`.
+
 ### Other scripts
 
 ```bash

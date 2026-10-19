@@ -42,6 +42,47 @@ No new pricing math — every number comes from an engine tool.
 
 ---
 
+### 1.1 How to run it today (through P4)
+
+`riga-cli` is an `IpcService` client of `riga-server`; it reads `.mcp.json` and
+`skills/` from the **workspace = its working directory**, so run it **from the
+repository root**.
+
+```bash
+# one-time: the engines the CLI connects to
+cargo build --release --manifest-path modules/riga-flow/Cargo.toml
+cargo build --release --manifest-path modules/tac-engine/Cargo.toml
+# the CLI
+cargo build -p riga-cli --manifest-path modules/riga/Cargo.toml
+
+./modules/riga/target/debug/riga-cli --tools   # 42 (riga-flow) + 75 (tac-engine)
+./modules/riga/target/debug/riga-cli --tui     # terminal UI
+```
+
+Two modes:
+
+- **Headless (no model)** — `--tools`, `--call`, `--catalog`, `--health`.
+  Deterministic; one tool per invocation, rendered as markdown tables.
+  ```bash
+  riga-cli --call riga-flow/price_put
+  riga-cli --call riga-flow/risk_batch
+  riga-cli --call riga-flow/price_trade --set trade.strike=0.60
+  riga-cli --call riga-flow/query_execution_net --set trade.strike=0.60 --json
+  ```
+- **Agent (TUI chat)** — configure a provider once (`/settings`, then `/model`) so a
+  model can call the MCP tools; `/mcp`, `/tools`, `/skills` browse. The CLI preflights
+  the engines at startup and warns on stderr about an unreachable one.
+
+**Skill pairing** (which skill guides which question):
+`risk-summary` → the risk tools (`risk_batch`, `risk_detailed`, `query_risk_net`,
+`scenario`, `validate_greeks`, `recommend_scenarios`); `riga-flow-dashboard` → every
+tile/tool; `cashflow-explain` → PV legs/coupons; `path-walkthrough` → one path /
+worst-tail; `tac-market-workbench` → real market data; `explain-demo-data` → demo vs
+live. Sample prompts for each live in
+[`skills/riga-flow-cli/SKILL.md`](../skills/riga-flow-cli/SKILL.md).
+
+---
+
 ## 2. Design
 
 ### 2.1 Layering
@@ -201,6 +242,12 @@ trace-gated call.
 **Entry:** P6 done (or skipped with a recorded reason).
 **Changes:** `skills/riga-flow-cli/SKILL.md` — the commands, flags, templates and
 packs, with a worked example per pack; cross-links the dashboard skill.
+
+> **Written early (2026-10-19, user request).** The skill already documents the
+> P2–P4 surface: how to start the CLI, the skill→question map (incl. which skill
+> drives the **risk** tools), the headless `--call`/`--template`/`--set` reference,
+> sample prompts per area, and grounding rules. P7 adds the `--report` packs and
+> their worked examples, and re-checks the flag list against `--help`.
 **Exit / evidence:**
 - [ ] `load_skills` parses it; `riga-cli --catalog` lists `riga-flow-cli`.
 - [ ] every command/flag in the skill exists (`--help` output diff), no invented flags.
