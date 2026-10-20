@@ -116,6 +116,17 @@ export function decodeRigaFixture(doc: any, fileName: string | null): Instrument
     : 0
   const barriers = te.barriers ?? {}
   const coupon = te.coupon ?? {}
+  // The engine's fixture loader prices only the observations that are still in the
+  // future (`observation > as_of`); past periods are not engine input. Mirror that
+  // here, so an imported fixture prices the same as `price_put` (coupon periods =
+  // future observations, first coupon fixed only if the first *future* one is).
+  const schedule: Array<{ observation?: string; coupon_type?: string }> = Array.isArray(te.schedule)
+    ? te.schedule
+    : []
+  const futureCoupons = schedule.filter(
+    (row) => typeof row.observation === 'string' && row.observation > asOf,
+  )
+  const callStart = String(te.callable?.period_start ?? '')
 
   const initialFixings = symbols.map(
     (symbol, index) => num(md.initial_fixings?.spots?.[symbol]) ?? num(assets[index]?.initial_spot) ?? NaN,
@@ -166,11 +177,12 @@ export function decodeRigaFixture(doc: any, fileName: string | null): Instrument
         couponBarrier: num(barriers.coupon?.level_pct),
         couponRate: num(coupon.rate_per_period),
         memoryCoupon: coupon.memory === true,
-        couponPeriods: num(coupon.periods),
-        fixedFirstCoupon: coupon.period_1 === 'fixed',
+        couponPeriods: futureCoupons.length > 0 ? futureCoupons.length : (num(coupon.periods) ?? null),
+        fixedFirstCoupon:
+          futureCoupons.length > 0 ? futureCoupons[0]!.coupon_type === 'fixed' : coupon.period_1 === 'fixed',
         maturityYears,
         steps: Math.min(Math.max(businessDays(asOf, finalFixing), 1), 500),
-        callStartStep: null,
+        callStartStep: callStart !== '' && callStart <= asOf ? 0 : null,
         rails: emptyRails(),
       },
     },

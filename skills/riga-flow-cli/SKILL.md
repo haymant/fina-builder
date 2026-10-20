@@ -71,15 +71,18 @@ riga-cli --call riga-flow/price_trade --template my-request.json \
 ```
 
 Flags: `--call <server>/<tool>`, `--input <json|@file>`, `--template <file>` (default:
-the embedded worst-of Phoenix baseline `templates/termsheet1.request.json`),
+the embedded **canonical `termsheet1` request**, generated from the pinned fixture so
+it prices the same as `price_put`),
 `--set path=value` (repeatable; dot paths and `[index]`, e.g. `trade.strike=0.6`,
 `market.vols[0]=0.48`, `market.correlation[0][1]=0.3`), `--json`, `--tools`,
 `--catalog`, `--health`, `--list-sessions`, `--create-session <title>`,
 `--workspace <dir>`, `--plain`, `--tui`.
 
-With no `--template`/`--set` a fixture tool prices the **pinned `termsheet1`
+With no `--template`/`--set`/`--input` a fixture tool prices the **pinned `termsheet1`
 fixture**; with a template/`--set` the composed `PriceRequest` is injected as the
-tool's `request` field, so every tool prices the *same* edited trade.
+tool's `request` field, so every tool prices the *same* edited trade. `price_trade`
+requires a request, so with no template/`--set` it uses the shipped canonical
+template (which reproduces `price_put`).
 
 ## Sample prompts (TUI chat)
 

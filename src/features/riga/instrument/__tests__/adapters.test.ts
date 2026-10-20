@@ -127,7 +127,11 @@ describe('riga-fixture adapter', () => {
     expect(put?.knockInBarrier).toBeCloseTo(0.7, 6)
     expect(put?.knockOutBarrier).toBeCloseTo(1.1, 6)
     expect(put?.couponRate).toBeCloseTo(0.009642, 9)
-    expect(put?.couponPeriods).toBe(9)
+    // Only the observations still in the future are engine input (as_of 2026-09-07
+    // leaves Oct/Nov/Dec/Jan/Feb); the first future coupon is not "fixed".
+    expect(put?.couponPeriods).toBe(5)
+    expect(put?.fixedFirstCoupon).toBe(false)
+    expect(put?.callStartStep).toBe(0)
     expect(put?.memoryCoupon).toBe(true)
   })
 
