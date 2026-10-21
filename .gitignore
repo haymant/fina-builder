@@ -54,3 +54,11 @@ playwright/recordings/
 # RIGA MCP registry written at runtime
 .riga-mcp-registry.json
 .draft
+
+# trade repository local store + secrets + playwright
+.trade-repo/
+.env
+playwright/artifacts/
+playwright/test-results/
+playwright/.report/
+playwright/.data/
