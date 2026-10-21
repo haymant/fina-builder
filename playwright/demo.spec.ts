@@ -85,15 +85,15 @@ test.describe('visualization gallery demo', () => {
 
     await test.step('Expand the Petri net', async () => {
       await page.getByTitle('Expand').click()
-      await expect(page.getByText('Expanded view')).toBeVisible()
-      const expanded = page.locator('.expanded-modal')
+      const expanded = page.getByTestId('expanded-tile')
+      await expect(expanded).toBeVisible()
       await expanded.locator('.react-flow__controls-zoomin').click()
       await expanded.locator('.react-flow__controls-zoomin').click()
       await page.waitForTimeout(4_000) // Hold on the zoomed execution net for narration.
     })
 
     await test.step('Switch to the risk and explain layers', async () => {
-      const expanded = page.locator('.expanded-modal')
+      const expanded = page.getByTestId('expanded-tile')
       await expanded.getByRole('button', { name: 'Risk', exact: true }).click()
       await page.waitForTimeout(3_000) // Hold on the risk-tinted net.
       await expanded.getByRole('button', { name: 'Explain', exact: true }).click()
