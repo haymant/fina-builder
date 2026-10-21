@@ -371,7 +371,7 @@ export function createRepository({ reference, store, now = () => new Date().toIS
       const id = resolveId(tradeId)
       const evts = eventsOf(id, knownAt)
       if (!visible(ctx, evts[0].state)) throw new TradeRepoError('FORBIDDEN', `not entitled to view ${id}`)
-      return { tradeId: id, uti: evts[0].uti, events: evts.map(({ state, kind, ...e }) => ({ ...e, notional: state.notional, status: state.status })) }
+      return { tradeId: id, uti: evts[0].uti, events: evts.map(({ state, kind: _kind, ...e }) => ({ ...e, notional: state.notional, status: state.status })) }
     },
 
     diff(ctx, { tradeId, fromVersion, toVersion }) {
@@ -509,7 +509,7 @@ export function createRepository({ reference, store, now = () => new Date().toIS
 
     breaksQuery(ctx, { filter = {}, limit = 200 } = {}) {
       const rows = [...breaks.values()].filter((b) => (!filter.runId || b.runId === filter.runId) && (!filter.statuses?.length || filter.statuses.includes(b.status)) && (!filter.types?.length || filter.types.includes(b.type)))
-      return { items: rows.slice(0, limit).map(({ kind, ...b }) => b), total: rows.length, nextCursor: null }
+      return { items: rows.slice(0, limit).map(({ kind: _kind, ...b }) => b), total: rows.length, nextCursor: null }
     },
 
     breakUpdate(ctx, { breakId, status, assignee, comment, expectedUpdatedAt }) {
@@ -524,7 +524,7 @@ export function createRepository({ reference, store, now = () => new Date().toIS
       const next = { ...b, status: status ?? b.status, assignee: assignee === undefined ? b.assignee : assignee, comments: comment ? [...b.comments, { at, actor: ctx.actor, text: comment }] : b.comments, updatedAt: at }
       applyRecord(next, true)
       writeAudit(ctx, 'recon.break.update', { type: 'break', id: breakId }, { from: b.status, to: next.status, assignee: next.assignee })
-      const { kind, ...rest } = next
+      const { kind: _kind, ...rest } = next
       return rest
     },
 
@@ -541,7 +541,7 @@ export function createRepository({ reference, store, now = () => new Date().toIS
       })
       const failed = results.filter((r) => r.status === 'ERROR').length
       if (dryRun || (mode === 'all-or-nothing' && failed > 0)) {
-        return { dryRun, committed: 0, failed, results: results.map(({ trade, ...r }) => r) }
+        return { dryRun, committed: 0, failed, results: results.map(({ trade: _trade, ...r }) => r) }
       }
       let committed = 0
       for (const r of results) {
@@ -551,7 +551,7 @@ export function createRepository({ reference, store, now = () => new Date().toIS
         committed++
       }
       writeAudit(ctx, 'trade.import', { type: 'import', id: `rows:${rows.length}` }, { committed, failed })
-      return { dryRun: false, committed, failed, results: results.map(({ trade, ...r }) => r) }
+      return { dryRun: false, committed, failed, results: results.map(({ trade: _trade, ...r }) => r) }
     },
 
     exportTrades(ctx, { format = 'csv', ...q } = {}) {

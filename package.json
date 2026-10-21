@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:all": "concurrently -k -n riga,tac,web -c blue,magenta,green \"npm:backend:dev\" \"npm:mcp:http:tac\" \"npm:dev\"",
+    "dev:all": "concurrently -k -n riga,tac,tr,web -c blue,magenta,yellow,green \"npm:backend:dev\" \"npm:mcp:http:tac\" \"npm:mcp:http:trade-repo\" \"npm:dev\"",
     "dev:http": "node scripts/dev-http.mjs",
     "dev:web": "vite",
     "build": "tsc -b && vite build",
@@ -24,6 +24,8 @@
     "mcp:sidecar:engines": "npm run mcp:sidecar:riga && npm run mcp:sidecar:tac",
     "mcp:http:tac": "node scripts/tac-mcp-http.mjs",
     "mcp:http:riga": "modules/riga-flow/target/release/riga-mcp --transport http --bind 127.0.0.1:8788 --allowed-host localhost --allowed-host 127.0.0.1",
+    "mcp:http:trade-repo": "node scripts/trade-repo-mcp-http.mjs --seed",
+    "mcp:http:trade-repo:reset": "node scripts/trade-repo-mcp-http.mjs --reset --seed",
     "mcp:http:engines": "concurrently -k -n riga,tac -c blue,magenta \"npm:mcp:http:riga\" \"npm:mcp:http:tac\"",
     "riga:fixture": "node scripts/record-transcripts.mjs riga",
     "smoke": "node scripts/smoke.mjs",

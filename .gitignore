@@ -55,10 +55,5 @@ playwright/recordings/
 .riga-mcp-registry.json
 .draft
 
-# trade repository local store + secrets + playwright
+# trade repository local store
 .trade-repo/
-.env
-playwright/artifacts/
-playwright/test-results/
-playwright/.report/
-playwright/.data/

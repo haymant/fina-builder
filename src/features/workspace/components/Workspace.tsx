@@ -1,5 +1,5 @@
-import { BookOpen, Copy, FilePlus2, LayoutGrid, MessageSquare, Moon, Plus, Sun, Trash2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { BookOpen, Copy, Database, FilePlus2, LayoutGrid, MessageSquare, Moon, Plus, Sun, Trash2 } from 'lucide-react'
+import { lazy, Suspense, useMemo, useState } from 'react'
 import { Responsive, WidthProvider, type Layout, type ResponsiveLayouts } from 'react-grid-layout/legacy'
 import { useExplorerStore } from '../../../store/explorerStore'
 import { TILE_CATALOG, tileFromType } from '../../dashboards/catalog'
@@ -16,6 +16,7 @@ import 'react-resizable/css/styles.css'
 import '../panels.css'
 
 const Grid = WidthProvider(Responsive)
+const TradeRepository = lazy(() => import('../../trade-repository/components/TradeRepository').then((m) => ({ default: m.TradeRepository })))
 
 export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }) {
   const dashboards = useExplorerStore((s) => s.dashboards)
@@ -33,6 +34,8 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
   const [notebookOpen, setNotebookOpen] = useState(false)
   const [templateOpen, setTemplateOpen] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
+  // 'trade-repository' is a built-in workspace (not a tile dashboard).
+  const [workspaceMode, setWorkspaceMode] = useState<'dashboards' | 'trade-repository'>('dashboards')
   const layout = dashboard.layout
   const layouts = useMemo<ResponsiveLayouts>(
     () => ({ lg: layout, md: layout, sm: layout.map((item) => ({ ...item, w: Math.min(item.w, 6) })) }),
@@ -134,13 +137,21 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
               <button
                 key={d.id}
                 type="button"
-                onClick={() => selectDashboard(d.id)}
-                className={`dashboard-tab ${d.id === selectedId ? 'active' : ''}`}
+                onClick={() => { selectDashboard(d.id); setWorkspaceMode('dashboards') }}
+                className={`dashboard-tab ${workspaceMode === 'dashboards' && d.id === selectedId ? 'active' : ''}`}
               >
                 {d.name}
                 <span>{d.layout.length}</span>
               </button>
             ))}
+            <button
+              type="button"
+              data-testid="tab-trade-repository"
+              onClick={() => setWorkspaceMode('trade-repository')}
+              className={`dashboard-tab ${workspaceMode === 'trade-repository' ? 'active' : ''}`}
+            >
+              <Database size={12} /> Trade Repository
+            </button>
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-2">
             <button type="button" onClick={() => setGalleryOpen(true)} className="add-tile-button">
@@ -158,6 +169,13 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
           </div>
         </div>
       </header>
+      {workspaceMode === 'trade-repository' ? (
+        <main className="workspace-canvas relative flex min-h-0 flex-1 flex-col overflow-hidden p-3">
+          <Suspense fallback={null}>
+            <TradeRepository />
+          </Suspense>
+        </main>
+      ) : (
       <main className="workspace-canvas relative min-h-0 flex-1 overflow-auto p-3">
         <Grid
           className="layout"
@@ -222,6 +240,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
           </div>
         ) : null}
       </main>
+      )}
       <NotebookDrawer
         dashboardId={dashboard.id}
         dashboardName={dashboard.name}
