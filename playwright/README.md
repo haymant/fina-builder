@@ -56,16 +56,26 @@ PLAYWRIGHT_CHROMIUM_EXECUTABLE=/usr/bin/chromium npm run test:e2e
 
 Use Playwright's native `tag` metadata with canonical tags from `support/tags.ts`. Give each test at least one `@journey-*` tag and one `@feature-*` tag. Add `@smoke` only to the fast, high-value release checks; use `@requires-*` to identify tests whose meaningful behavior depends on a live engine or external service. Apply `@demo` and a specific `@demo-*` tag only to deterministic flows suitable for screen recording. Use test titles for readable intent; tags are classification metadata, not a substitute for meaningful names.
 
-Current vocabulary includes `@journey-dashboard-setup`, `@journey-dashboard-review`, `@journey-notebook-capture`, `@journey-visualization-add`, `@journey-preferences`, `@journey-trade-navigation`, `@journey-trade-blotter`, `@journey-trade-positions`, `@journey-trade-operations`, and features such as `@feature-dashboards`, `@feature-templates`, `@feature-notebook`, `@feature-visualizations`, `@feature-theme`, `@feature-trade-repository`, `@feature-trade-blotter`, `@feature-trade-positions`, `@feature-trade-recon`, `@feature-trade-audit`, and `@feature-trade-import`.
+Current vocabulary includes `@journey-dashboard-setup`, `@journey-dashboard-review`, `@journey-notebook-capture`, `@journey-visualization-add`, `@journey-pricer-dashboards`, `@journey-preferences`, `@journey-trade-navigation`, `@journey-trade-blotter`, `@journey-trade-positions`, `@journey-trade-operations`, and features such as `@feature-dashboards`, `@feature-templates`, `@feature-notebook`, `@feature-visualizations`, `@feature-pricer`, `@feature-risk`, `@feature-theme`, `@feature-trade-repository`, `@feature-trade-blotter`, `@feature-trade-positions`, `@feature-trade-recon`, `@feature-trade-audit`, and `@feature-trade-import`.
 
 ```bash
 npm run test:e2e:smoke
 npm run test:e2e:journey:dashboard
+npm run test:e2e:journey:pricer
 npm run test:e2e:journey:trades
 npm run test:e2e:feature:notebook
 npm run test:e2e -- --grep @feature-dashboards
 npm run test:e2e -- --grep '(?=.*@journey-dashboard-setup)(?=.*@feature-templates)'
 ```
+
+The pricer suites drive the default tile dashboards through the `Dashboards` menu and read live `riga-flow` output. Start the engine first:
+
+```bash
+npm run mcp:http:riga
+npm run test:e2e:journey:pricer
+```
+
+They are classified `@requires-riga` and skip with a clear message when `127.0.0.1:8788` is not answering, so the default UI-only suite still passes without the engine.
 
 The trade repository suites are integration tests: the config starts `npm run mcp:http:trade-repo` (SQLite, seeded, port 8792) as a second `webServer`, so they do not use the default engine stubs and require the `better-sqlite3` native module.
 
@@ -85,7 +95,7 @@ That runs all `@demo` tests and sets `PLAYWRIGHT_VIDEO=on`. To record only one c
 npm run test:e2e:demo -- --grep @demo-dashboard-note
 ```
 
-`@demo-visualization-add` is engine-backed; start `npm run mcp:http:riga` before recording it (the test opts out of the default `/riga/mcp` stub with `test.use({ stubEngines: false })`). `@demo-trade-repository` is backed by the seeded SQLite trade-repo server that the config starts automatically, so no manual setup is needed.
+`@demo-visualization-add` is engine-backed; start `npm run mcp:http:riga` before recording it (the test opts out of the default `/riga/mcp` stub with `test.use({ stubEngines: false })`). `@demo-pricer-dashboards` uses the same live engine and tours the pricing, trade-design and risk dashboards; start `npm run mcp:http:riga` first. `@demo-trade-repository` is backed by the seeded SQLite trade-repo server that the config starts automatically, so no manual setup is needed.
 
 The Playwright config explicitly records 1280×720. Successful recordings are under `playwright/test-results/`; generated test artifacts and finished videos under `playwright/recordings/` are ignored by Git. The runner only captures the selected browser flow; use [`skills/demo/SKILL.md`](./skills/demo/SKILL.md) to derive narration from its `test.step` names, synthesize and synchronize audio, export MP4, and verify the result. It does not automatically create speech or upload video. Narration uses the local `edge-tts` narrator selected with `npm run demo:narrate` — Andrew by default, with `steffan`, `thomas`, or `eric` as alternatives; speech generation does not clone or imitate a real person's voice.
 

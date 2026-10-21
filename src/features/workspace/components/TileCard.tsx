@@ -37,7 +37,10 @@ export const TileCard = memo(function TileCard({
   const lane = tileLane(group)
 
   return (
-    <section className="tile-shell flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-sm">
+    <section
+      data-testid={`tile-${tile.type}`}
+      className="tile-shell flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-sm"
+    >
       <header className="tile-header flex h-10 shrink-0 items-center gap-2 border-b border-line px-3">
         <span className="h-1.5 w-1.5 rounded-full bg-primary" />
         <div className="min-w-0 flex-1">

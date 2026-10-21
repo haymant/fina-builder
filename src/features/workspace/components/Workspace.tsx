@@ -213,7 +213,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
         ) : null}
         {expanded ? (
           <div className="modal-backdrop" onMouseDown={() => setExpanded(null)}>
-            <div className="expanded-modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="expanded-modal" data-testid="expanded-tile" onMouseDown={(e) => e.stopPropagation()}>
               <div className="flex items-center justify-between border-b border-line px-4 py-3">
                 <div>
                   <p className="eyebrow">Focused view</p>

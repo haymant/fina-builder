@@ -7,6 +7,9 @@ import {
   expectReconciliationLoaded,
   expectTradeDrawerOpen,
 } from './assertions/tradeRepository.assertions'
+import { expectTileLoaded } from './assertions/pricer.assertions'
+import { PricerPage } from './pages/PricerPage'
+import { isRigaEngineReady } from './support/engines'
 import {
   expectEmptyDashboard,
   expectNotebookOpen,
@@ -144,5 +147,72 @@ test('walks the trade repository dashboards from the Trades menu', {
     await workspace.openDashboard('Playwright Dashboard')
     await expect(workspace.emptyDashboardMessage).toBeVisible()
     await page.waitForTimeout(5_500) // Hold on the dashboards menu for the closing narration.
+  })
+})
+
+test.describe('pricer dashboards demo', () => {
+  test.use({ stubEngines: false })
+
+  test.beforeEach(async ({ request }) => {
+    test.skip(
+      !(await isRigaEngineReady(request)),
+      'riga-mcp is not reachable on 127.0.0.1:8788; start it with `npm run mcp:http:riga`',
+    )
+  })
+
+  test('tours pricing, trade design and risk from the Dashboards menu', {
+    tag: [
+      TAG.demo.any,
+      TAG.demo.pricerDashboards,
+      TAG.journey.pricerDashboards,
+      TAG.feature.pricer,
+      TAG.feature.risk,
+      TAG.dependency.riga,
+    ],
+  }, async ({ page, workspace }) => {
+    test.setTimeout(180_000) // Paced holds are intentional in demo recordings.
+    const pricer = new PricerPage(page)
+
+    await test.step('Open the payoff and path explorer', async () => {
+      await workspace.openDashboard('Payoff Explorer')
+      await expectTileLoaded(pricer, 'RigaPayoffGraph', 'query_execution_net')
+      await page.waitForTimeout(4_000) // Hold on the priced payoff pipeline.
+      await pricer.expand('RigaPayoffGraph')
+      await page.waitForTimeout(4_000) // Hold on the full product graph.
+      await pricer.closeExpanded()
+    })
+
+    await test.step('Reprice the note in Trade Design', async () => {
+      await workspace.openDashboard('Trade Design')
+      await expectTileLoaded(pricer, 'RigaEconomicsImpactSummary', 'trade_design')
+      await page.waitForTimeout(3_500) // Hold on base economics and sensitivities.
+      const expanded = await pricer.expand('RigaTradeEconomics')
+      await page.waitForTimeout(2_200) // Hold on the editable trade terms.
+      await expanded.getByRole('button', { name: 'Aggressive Yield' }).click()
+      await page.waitForTimeout(1_500) // Let the preset settle before showing the price.
+      await expanded.getByTestId('kpi-pv').scrollIntoViewIfNeeded()
+      await page.waitForTimeout(4_000) // Hold on the repriced PV from price_trade.
+      await pricer.closeExpanded()
+    })
+
+    await test.step('Attribute PV and inspect the distribution', async () => {
+      await workspace.openDashboard('Risk Diagnostics')
+      await expectTileLoaded(pricer, 'RigaAttribution', 'explain_pv_attribution')
+      await page.waitForTimeout(5_000) // Hold on leg attribution and payoff distribution.
+    })
+
+    await test.step('Review greeks and scenario bumps', async () => {
+      await workspace.openDashboard('Market & Risk')
+      await expectTileLoaded(pricer, 'RigaRiskSummary', 'risk_batch')
+      await page.waitForTimeout(4_500) // Hold on risk summary and per-asset greeks.
+      await pricer.expand('RigaGreeksTable')
+      await page.waitForTimeout(4_000) // Hold on theta, rho and the cross-gamma matrix.
+      await pricer.closeExpanded()
+    })
+
+    await test.step('Show the dashboards menu', async () => {
+      await pricer.openDashboardsMenu()
+      await page.waitForTimeout(3_000) // Hold on the dashboard list for the closing narration.
+    })
   })
 })

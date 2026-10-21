@@ -138,10 +138,11 @@ export function Kpi({ label, value, tone }: { label: string; value: ReactNode; t
           : tone === 'warning'
             ? 'text-warning'
             : 'text-main'
+  const testId = `kpi-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`
   return (
-    <div className="rounded border border-line bg-surface px-2 py-1">
+    <div data-testid={testId} className="rounded border border-line bg-surface px-2 py-1">
       <div className="text-[9px] tracking-wide text-muted uppercase">{label}</div>
-      <div className={`font-mono text-xs font-semibold tabular-nums ${toneClass}`}>{value}</div>
+      <div data-testid="kpi-value" className={`font-mono text-xs font-semibold tabular-nums ${toneClass}`}>{value}</div>
     </div>
   )
 }
