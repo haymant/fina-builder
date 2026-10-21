@@ -1,4 +1,4 @@
-import { History, Pencil, X } from 'lucide-react'
+import { ExternalLink, GitCompare, History, Pencil, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { fmtNotional, tradeRepo } from '../api'
 import type { AsOf, Change, LifecycleEvent, Trade, TradeEvent } from '../types'
@@ -6,10 +6,20 @@ import { Badge, ErrorState, Loading, fmtTs } from './common'
 
 const ACTION_LABEL: Record<string, string> = { CANCEL: 'Cancel', NOVATE: 'Novate', PARTIAL_TERMINATE: 'Partial terminate', EXERCISE: 'Exercise', MATURE: 'Mature', BOOK_TRANSFER: 'Book transfer' }
 
-export function TradeDrawer({ tradeId, asOf, refreshKey, canWrite, onClose, onAmend, onLifecycle, onOpenTrade }: {
+export function TradeDrawer({ tradeId, asOf, refreshKey, canWrite, onClose, onAmend, onLifecycle, onOpenTrade, mode = 'inspector', version: controlledVersion, onVersion, onOpenTab, hasDraft }: {
   tradeId: string; asOf: AsOf; refreshKey: number; canWrite: boolean
   onClose: () => void; onAmend: (t: Trade) => void; onLifecycle: (t: Trade, e: LifecycleEvent) => void; onOpenTrade: (id: string) => void
+  /** inspector = side panel next to the blotter; document = full-width tab body. */
+  mode?: 'inspector' | 'document'
+  /** Explicit version to show (undefined = latest / as-of). Controlled when onVersion is given. */
+  version?: number; onVersion?: (v: number | undefined) => void
+  onOpenTab?: (version?: number) => void
+  hasDraft?: boolean
 }) {
+  const [localVersion, setLocalVersion] = useState<number | undefined>(undefined)
+  const version = onVersion ? controlledVersion : localVersion
+  const setVersion = (v: number | undefined) => (onVersion ? onVersion(v) : setLocalVersion(v))
+  useEffect(() => { setLocalVersion(undefined) }, [tradeId])
   const [tab, setTab] = useState<'economics' | 'timeline' | 'diff'>('economics')
   const [data, setData] = useState<{ trade: Trade; isLatest: boolean; latestVersion: number; allowedEvents: string[] } | null>(null)
   const [events, setEvents] = useState<TradeEvent[]>([])
@@ -20,7 +30,7 @@ export function TradeDrawer({ tradeId, asOf, refreshKey, canWrite, onClose, onAm
     setError(null)
     try {
       const [d, h] = await Promise.all([
-        tradeRepo.call<typeof data>('tr_trade_get', { tradeId, ...asOf }),
+        tradeRepo.call<typeof data>('tr_trade_get', version ? { tradeId, version } : { tradeId, ...asOf }),
         tradeRepo.call<{ events: TradeEvent[] }>('tr_trade_history', { tradeId }),
       ])
       setData(d)
@@ -33,7 +43,7 @@ export function TradeDrawer({ tradeId, asOf, refreshKey, canWrite, onClose, onAm
     } catch (e) {
       setError(e)
     }
-  }, [tradeId, asOf])
+  }, [tradeId, asOf, version])
   useEffect(() => { void load() }, [load, refreshKey])
 
   const pickDiff = async (from: number, to: number) => {
@@ -58,20 +68,37 @@ export function TradeDrawer({ tradeId, asOf, refreshKey, canWrite, onClose, onAm
   ] : []
 
   return (
-    <aside className="tr-drawer" data-testid="trade-drawer" aria-label={`Trade ${tradeId}`}>
+    <aside className={`tr-drawer ${mode === 'document' ? 'tr-document' : ''}`} data-testid={mode === 'document' ? 'trade-document' : 'trade-drawer'} aria-label={`Trade ${tradeId}`}>
       <div className="flex items-start justify-between gap-2 border-b border-line px-4 py-3">
         <div className="min-w-0">
           <p className="eyebrow">Trade detail</p>
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-main"><span data-testid="drawer-trade-id">{tradeId}</span>{t ? <Badge value={t.status} testId="drawer-status" /> : null}{t ? <span className="text-[11px] text-muted" data-testid="drawer-version">v{t.version}</span> : null}</h2>
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-main"><span data-testid="drawer-trade-id">{tradeId}</span>{hasDraft ? <span className="tr-dirty" title="Unsaved amend draft" data-testid="draft-marker">● draft</span> : null}{t ? <Badge value={t.status} testId="drawer-status" /> : null}{t ? <span className="text-[11px] text-muted" data-testid="drawer-version">v{t.version}</span> : null}</h2>
         </div>
-        <button type="button" className="icon-button" aria-label="Close drawer" onClick={onClose}><X size={14} /></button>
+        <div className="flex items-center gap-1.5">
+          {events.length > 1 ? (
+            <select aria-label="Version" data-testid="version-switcher" className="control-select" value={version ?? ''} onChange={(e) => setVersion(e.target.value ? Number(e.target.value) : undefined)}>
+              <option value="">Latest (v{events.length})</option>
+              {events.slice().reverse().map((e) => <option key={e.version} value={e.version}>v{e.version} · {e.eventType.replace(/_/g, ' ').toLowerCase()}</option>)}
+            </select>
+          ) : null}
+          {mode === 'inspector' && onOpenTab ? <button type="button" className="icon-button" title="Open in tab (double-click row)" aria-label="Open in tab" data-testid="open-in-tab" onClick={() => onOpenTab(version)}><ExternalLink size={14} /></button> : null}
+          {mode === 'inspector' ? <button type="button" className="icon-button" aria-label="Close drawer" onClick={onClose}><X size={14} /></button> : null}
+        </div>
       </div>
+      {t && version && data && !data.isLatest ? (
+        <div className="tr-info flex flex-wrap items-center gap-2" data-testid="version-banner">
+          Viewing historical v{t.version} of {data.latestVersion}.
+          <button type="button" className="tr-link" data-testid="compare-latest" onClick={() => { setTab('diff'); void pickDiff(t.version, data.latestVersion) }}><GitCompare size={12} className="inline" /> Compare with latest</button>
+          {onOpenTab ? <button type="button" className="tr-link" data-testid="open-version-tab" onClick={() => onOpenTab(t.version)}>Open v{t.version} in new tab</button> : null}
+          <button type="button" className="tr-link" data-testid="back-to-latest" onClick={() => setVersion(undefined)}>Back to latest</button>
+        </div>
+      ) : null}
       {error ? <ErrorState error={error} onRetry={load} /> : !t ? <Loading /> : (
         <>
-          {!data!.isLatest ? <div className="tr-asof-banner" data-testid="drawer-asof">Showing v{t.version} as of the selected time — latest is v{data!.latestVersion}. Actions are disabled in time-travel mode.</div> : null}
+          {!data!.isLatest && !version ? <div className="tr-asof-banner" data-testid="drawer-asof">Showing v{t.version} as of the selected time — latest is v{data!.latestVersion}. Actions are disabled in time-travel mode.</div> : null}
           {canWrite && data!.isLatest && t.status === 'LIVE' ? (
             <div className="flex flex-wrap gap-1.5 border-b border-line px-4 py-2" data-testid="drawer-actions">
-              <button type="button" className="tr-primary tr-sm" data-testid="action-AMEND" onClick={() => onAmend(t)}><Pencil size={12} /> Amend</button>
+              <button type="button" className="tr-primary tr-sm" data-testid="action-AMEND" onClick={() => onAmend(t)}><Pencil size={12} /> {hasDraft ? 'Resume amend draft' : 'Amend'}</button>
               {data!.allowedEvents.filter((e) => e !== 'AMEND').map((e) => (
                 <button key={e} type="button" className={`add-tile-button tr-sm ${e === 'CANCEL' ? 'hover:text-danger' : ''}`} data-testid={`action-${e}`} onClick={() => onLifecycle(t, e as LifecycleEvent)}>{ACTION_LABEL[e]}</button>
               ))}

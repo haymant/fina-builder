@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
 import { createRepository, parseCsv, TradeRepoError } from './lib/trade-repo/core.mjs'
 import { REFERENCE } from './lib/trade-repo/reference.mjs'
+import { shippedTemplates } from './lib/trade-repo/product.mjs'
 import { seedRepository } from './lib/trade-repo/seed.mjs'
 import { createStoreFromUrl } from './lib/trade-repo/store.mjs'
 import { TOOLS } from './lib/trade-repo/tools.mjs'
@@ -31,7 +32,7 @@ const log = (...a) => console.error('[trade-repo]', ...a)
 
 const store = createStoreFromUrl(process.env.DATABASE_URL, { reset: args.has('--reset') })
 await store.init()
-const repo = createRepository({ reference: REFERENCE, store })
+const repo = createRepository({ reference: REFERENCE, store, templates: shippedTemplates() })
 if (args.has('--seed') && repo.query({ role: 'admin' }, { limit: 1 }).total === 0) {
   const n = store.transaction ? store.transaction(() => seedRepository(repo)) : seedRepository(repo)
   await store.flush()

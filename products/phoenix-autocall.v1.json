@@ -1,0 +1,203 @@
+{
+  "$schema": "fina.product-template/v1",
+  "id": "PHOENIX_AUTOCALL",
+  "version": 1,
+  "name": "Phoenix autocallable note (worst-of)",
+  "assetClass": "EQUITY_STRUCTURED",
+  "status": "ACTIVE",
+  "description": "Worst-of Phoenix: conditional (memory) coupons, step-down autocall, European or American knock-in put at maturity.",
+  "kernel": {
+    "sideLabels": { "BUY": "Buy (we hold the note)", "SELL": "Sell (we issue / place the note)" },
+    "defaults": { "currency": "USD", "side": "SELL", "venue": "PRIMARY" },
+    "maturityFrom": "last(terms.observations).paymentDate",
+    "underlyingFrom": "join(pluck(terms.underlyings, 'symbol'), '/')"
+  },
+  "terms": {
+    "fields": [
+      { "path": "isin", "label": "ISIN", "type": "string", "required": true, "format": "isin", "help": "ISO 6166 with valid check digit" },
+      { "path": "issuerId", "label": "Issuer", "type": "ref", "ref": "party", "required": true, "default": "LE-FINA-UK" },
+      { "path": "basket", "label": "Basket", "type": "enum", "values": ["WORST_OF"], "default": "WORST_OF" },
+      { "path": "underlyings", "label": "Underlyings", "type": "array", "minItems": 1, "maxItems": 5, "required": true,
+        "items": [
+          { "path": "symbol", "label": "Symbol", "type": "string", "required": true, "pattern": "^[A-Z0-9.]{1,12}$" },
+          { "path": "name", "label": "Name", "type": "string" },
+          { "path": "initialFixing", "label": "Initial fixing", "type": "number", "required": true, "min": 0, "exclusiveMin": true }
+        ] },
+      { "path": "denomination", "label": "Denomination", "type": "number", "default": 1000, "min": 1 },
+      { "path": "issuePrice", "label": "Issue price", "type": "percent", "default": 1, "min": 0.5, "max": 1.5 },
+      { "path": "upfrontFeePct", "label": "Upfront fee", "type": "percent", "default": 0, "min": 0, "max": 0.1 },
+      { "path": "strikeDate", "label": "Strike date", "type": "date", "required": true },
+      { "path": "issueDate", "label": "Issue date", "type": "date" },
+      { "path": "frequency", "label": "Observation frequency", "type": "enum", "values": ["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "ANNUAL"], "default": "QUARTERLY", "required": true },
+      { "path": "numObservations", "label": "Number of observations", "type": "integer", "required": true, "min": 1, "max": 120, "default": 12 },
+      { "path": "calendar", "label": "Holiday calendar", "type": "enum", "values": ["NYSE", "TARGET", "SGX"], "default": "NYSE" },
+      { "path": "bdc", "label": "Business-day convention", "type": "enum", "values": ["FOLLOWING", "MODIFIED_FOLLOWING", "PRECEDING"], "default": "MODIFIED_FOLLOWING" },
+      { "path": "paymentLagDays", "label": "Payment lag (business days)", "type": "integer", "default": 5, "min": 0, "max": 20 },
+      { "path": "coupon.ratePerPeriod", "label": "Coupon per period", "type": "percent", "required": true, "min": 0, "max": 0.25 },
+      { "path": "coupon.barrier", "label": "Coupon barrier", "type": "percent", "required": true, "min": 0.01, "max": 1.5, "default": 0.7 },
+      { "path": "coupon.memory", "label": "Memory coupon", "type": "boolean", "default": true },
+      { "path": "autocall.startObservation", "label": "First callable observation", "type": "integer", "default": 2, "min": 1 },
+      { "path": "autocall.initialLevel", "label": "Autocall trigger", "type": "percent", "default": 1, "min": 0.01, "max": 1.5 },
+      { "path": "autocall.stepDown", "label": "Step-down per observation", "type": "percent", "default": 0, "min": 0, "max": 0.2 },
+      { "path": "autocall.floor", "label": "Autocall floor", "type": "percent", "default": 0, "min": 0, "max": 1.5 },
+      { "path": "knockIn.barrier", "label": "KI / protection barrier", "type": "percent", "required": true, "min": 0.01, "max": 1.2, "default": 0.6 },
+      { "path": "knockIn.observation", "label": "KI observation", "type": "enum", "values": ["EUROPEAN", "AMERICAN"], "default": "EUROPEAN" },
+      { "path": "putStrike", "label": "Put strike (redemption)", "type": "percent", "default": 1, "min": 0.01, "max": 1.5 },
+      { "path": "settlement", "label": "Settlement", "type": "enum", "values": ["CASH", "PHYSICAL"], "default": "CASH" }
+    ],
+    "constraints": [
+      { "expr": "unique(pluck(terms.underlyings, 'symbol'))", "path": "terms.underlyings", "code": "DUPLICATE", "message": "duplicate underlying in basket" },
+      { "expr": "isNull(terms.strikeDate) || terms.strikeDate >= tradeDate", "path": "terms.strikeDate", "code": "DATE_ORDER", "message": "strike date cannot precede trade date" },
+      { "expr": "isNull(terms.issueDate) || terms.issueDate >= terms.strikeDate", "path": "terms.issueDate", "code": "DATE_ORDER", "message": "issue date cannot precede strike date" },
+      { "expr": "notional % terms.denomination == 0", "path": "terms.denomination", "code": "MULTIPLE", "message": "notional must be a multiple of the denomination" },
+      { "expr": "terms.coupon.barrier >= terms.knockIn.barrier", "path": "terms.coupon.barrier", "code": "UNUSUAL", "severity": "warning", "message": "coupon barrier below KI barrier is unusual" },
+      { "expr": "terms.coupon.barrier <= terms.autocall.initialLevel", "path": "terms.coupon.barrier", "code": "UNUSUAL", "severity": "warning", "message": "coupon barrier above the autocall trigger is unusual" },
+      { "expr": "terms.autocall.startObservation <= terms.numObservations", "path": "terms.autocall.startObservation", "code": "RANGE", "message": "first callable observation is after the last observation" },
+      { "expr": "len(terms.underlyings) == 2", "path": "terms.underlyings", "code": "ENGINE_SCOPE", "severity": "warning", "message": "riga prices 2-asset worst-of today; the note is stored but cannot be priced" }
+    ],
+    "plugins": ["phoenix.isin"]
+  },
+  "schedules": [
+    {
+      "id": "observations", "target": "terms.observations", "generator": "periodic",
+      "params": { "start": "terms.strikeDate", "frequency": "terms.frequency", "count": "terms.numObservations", "calendar": "terms.calendar", "bdc": "terms.bdc", "paymentLagDays": "terms.paymentLagDays" },
+      "columns": {
+        "autocallLevel": "n < terms.autocall.startObservation || n == count ? null : round(max(terms.autocall.initialLevel - terms.autocall.stepDown * (n - terms.autocall.startObservation), terms.autocall.floor), 6)",
+        "couponBarrier": "terms.coupon.barrier",
+        "couponRate": "terms.coupon.ratePerPeriod"
+      },
+      "derive": { "terms.finalValuationDate": "last.observationDate", "terms.issueDate": "terms.issueDate ?? addBusinessDays(terms.strikeDate, 5)" }
+    }
+  ],
+  "state": {
+    "initial": { "fixings": [], "coupons": [], "unpaidPeriods": 0, "couponsPaidTotal": 0, "knockedIn": false, "kiDate": null, "kiWorst": null, "autocall": null, "redemption": null, "corporateActions": [], "unwinds": [], "monitor": [] }
+  },
+  "lifecycle": {
+    "initialStatus": "LIVE",
+    "statuses": { "LIVE": { "terminal": false }, "AUTOCALLED": { "terminal": true }, "MATURED": { "terminal": true }, "TERMINATED": { "terminal": true }, "CANCELLED": { "terminal": true } },
+    "events": {
+      "FIXING": {
+        "label": "Capture fixing", "from": ["LIVE"], "roles": ["ops", "admin"], "economic": true,
+        "params": [
+          { "path": "n", "label": "Observation #", "type": "integer", "required": true, "min": 1, "defaultFrom": "len(productState.fixings) + 1" },
+          { "path": "levels", "label": "Closing levels by underlying", "type": "map", "required": true, "keysFrom": "pluck(terms.underlyings, 'symbol')" },
+          { "path": "source", "label": "Fixing source", "type": "string", "default": "Bloomberg close" }
+        ],
+        "guards": [
+          { "expr": "params.n == len(productState.fixings) + 1", "code": "OUT_OF_ORDER", "message": "fixings must be captured in observation order" },
+          { "expr": "params.n <= len(terms.observations)", "code": "RANGE", "message": "no such observation" }
+        ],
+        "effectiveDate": "terms.observations[params.n - 1].observationDate",
+        "plugin": "phoenix.fixing"
+      },
+      "KI_MONITOR": {
+        "label": "Barrier monitoring (American KI)", "from": ["LIVE"], "roles": ["ops", "admin"], "economic": true,
+        "params": [ { "path": "date", "label": "Date", "type": "date", "required": true }, { "path": "levels", "label": "Levels", "type": "map", "required": true, "keysFrom": "pluck(terms.underlyings, 'symbol')" } ],
+        "guards": [ { "expr": "terms.knockIn.observation == 'AMERICAN'", "code": "NOT_APPLICABLE", "message": "continuous KI monitoring applies to American KI only" }, { "expr": "!productState.knockedIn", "code": "ALREADY", "message": "already knocked in" } ],
+        "effectiveDate": "params.date",
+        "plugin": "phoenix.monitor"
+      },
+      "COUPON": { "label": "Coupon determination", "derived": true, "economic": true },
+      "KNOCK_IN": { "label": "Knock-in event", "derived": true, "economic": true },
+      "AUTOCALL": { "label": "Autocall / early redemption", "derived": true, "economic": true, "to": "AUTOCALLED" },
+      "REDEMPTION": { "label": "Final redemption", "derived": true, "economic": true, "to": "MATURED" },
+      "CORPORATE_ACTION": {
+        "label": "Corporate action adjustment", "from": ["LIVE"], "roles": ["ops", "admin"], "economic": true,
+        "params": [
+          { "path": "symbol", "label": "Underlying", "type": "string", "required": true, "optionsFrom": "pluck(terms.underlyings, 'symbol')" },
+          { "path": "type", "label": "Type", "type": "enum", "values": ["SPLIT", "REVERSE_SPLIT", "SPECIAL_DIVIDEND", "RIGHTS_ISSUE"], "required": true },
+          { "path": "exDate", "label": "Ex-date", "type": "date", "required": true },
+          { "path": "ratio", "label": "Ratio (split: new shares per old)", "type": "number", "min": 0, "exclusiveMin": true },
+          { "path": "dividend", "label": "Dividend per share", "type": "number", "min": 0 },
+          { "path": "cumPrice", "label": "Cum price", "type": "number", "min": 0, "exclusiveMin": true }
+        ],
+        "guards": [
+          { "expr": "contains(pluck(terms.underlyings, 'symbol'), params.symbol)", "code": "UNKNOWN_REF", "message": "symbol is not an underlying of this note" },
+          { "expr": "params.type == 'SPECIAL_DIVIDEND' ? params.dividend > 0 && params.cumPrice > params.dividend : params.ratio > 0", "code": "REQUIRED", "message": "SPLIT/REVERSE_SPLIT/RIGHTS need ratio; SPECIAL_DIVIDEND needs dividend < cumPrice" }
+        ],
+        "effectiveDate": "params.exDate",
+        "plugin": "phoenix.corporateAction"
+      },
+      "UNWIND": {
+        "label": "Partial unwind / buyback", "from": ["LIVE"], "roles": ["trader", "ops", "admin"], "economic": true, "requiresReason": true,
+        "params": [
+          { "path": "notional", "label": "Notional bought back", "type": "number", "required": true, "min": 0, "exclusiveMin": true, "defaultFrom": "notional" },
+          { "path": "pricePct", "label": "Buyback price (% of notional)", "type": "percent", "required": true, "min": 0, "max": 2 },
+          { "path": "date", "label": "Trade date", "type": "date", "required": true }
+        ],
+        "guards": [
+          { "expr": "params.notional <= notional", "code": "RANGE", "message": "cannot buy back more than the outstanding notional" },
+          { "expr": "params.notional % terms.denomination == 0", "code": "MULTIPLE", "message": "buyback must be a multiple of the denomination" }
+        ],
+        "effectiveDate": "params.date",
+        "effects": [
+          { "append": "productState.unwinds", "value": { "date": "params.date", "notional": "params.notional", "pricePct": "params.pricePct", "cash": "round(params.notional * params.pricePct, 2)" } },
+          { "set": "status", "expr": "params.notional == notional ? 'TERMINATED' : status" },
+          { "set": "terminatedNotional", "expr": "(terminatedNotional ?? 0) + params.notional" },
+          { "set": "notional", "expr": "notional - params.notional" }
+        ]
+      },
+      "CANCEL": { "label": "Cancel (booked in error)", "from": ["LIVE"], "roles": ["trader", "ops", "admin"], "requiresReason": true, "params": [], "effects": [ { "set": "status", "expr": "'CANCELLED'" } ] },
+      "BOOK_TRANSFER": { "kernel": true, "from": ["LIVE"] },
+      "NOVATE": { "kernel": true, "from": ["LIVE"] }
+    }
+  },
+  "pricing": {
+    "engine": "riga",
+    "tool": "price_trade",
+    "payoff": "phoenix-worst-of-2@riga-engine",
+    "dashboard": "payoff-explorer",
+    "applicable": "len(terms.underlyings) == 2 && status == 'LIVE'",
+    "mapping": {
+      "tradeId": "tradeId",
+      "initialSpots": "pluck(terms.underlyings, 'initialFixing')",
+      "maturityYears": "yearFrac(terms.strikeDate, terms.finalValuationDate)",
+      "steps": "len(terms.observations)",
+      "strike": "terms.putStrike",
+      "knockInBarrier": "terms.knockIn.barrier",
+      "knockInType": "terms.knockIn.observation == 'AMERICAN' ? 'AKI' : 'EKI'",
+      "knockOutBarrier": "terms.autocall.initialLevel",
+      "couponBarrier": "terms.coupon.barrier",
+      "couponRate": "terms.coupon.ratePerPeriod",
+      "memoryCoupon": "terms.coupon.memory",
+      "couponPeriods": "len(terms.observations)",
+      "fixedFirstCoupon": "false",
+      "callStartStep": "terms.autocall.startObservation",
+      "symbols": "pluck(terms.underlyings, 'symbol')",
+      "notional": "notional",
+      "currency": "currency"
+    },
+    "notes": ["riga's Phoenix payoff has a flat KO barrier; a step-down schedule is priced at its initial level (flagged on the pricing request)."]
+  },
+  "ui": {
+    "form": [
+      { "id": "note", "title": "Note", "fields": ["isin", "issuerId", "denomination", "issuePrice", "upfrontFeePct", "settlement"] },
+      { "id": "basket", "title": "Underlyings (worst-of)", "fields": ["basket", "underlyings"] },
+      { "id": "schedule", "title": "Schedule", "fields": ["strikeDate", "issueDate", "frequency", "numObservations", "calendar", "bdc", "paymentLagDays"] },
+      { "id": "coupon", "title": "Conditional coupon", "fields": ["coupon.ratePerPeriod", "coupon.barrier", "coupon.memory"] },
+      { "id": "autocall", "title": "Autocall", "fields": ["autocall.initialLevel", "autocall.startObservation", "autocall.stepDown", "autocall.floor"] },
+      { "id": "protection", "title": "Capital protection", "fields": ["knockIn.barrier", "knockIn.observation", "putStrike"] }
+    ],
+    "termSheet": [
+      { "title": "Summary", "rows": [
+        ["Product", "'Phoenix autocallable note — worst-of ' + len(terms.underlyings)"],
+        ["ISIN", "terms.isin"], ["Issuer", "terms.issuerId"], ["Notional", "fmtMoney(notional, currency)"],
+        ["Denomination", "fmtMoney(terms.denomination, currency)"], ["Issue price", "pct(terms.issuePrice)"], ["Upfront fee", "pct(terms.upfrontFeePct)"] ] },
+      { "title": "Underlyings", "table": "terms.underlyings", "columns": [["Symbol", "row.symbol"], ["Name", "row.name ?? ''"], ["Initial fixing", "row.initialFixing"], ["KI level", "round(row.initialFixing * terms.knockIn.barrier, 4)"], ["Coupon level", "round(row.initialFixing * terms.coupon.barrier, 4)"]] },
+      { "title": "Key dates", "rows": [["Trade date", "tradeDate"], ["Strike date", "terms.strikeDate"], ["Issue date", "terms.issueDate"], ["Final valuation", "terms.finalValuationDate"], ["Maturity", "maturityDate"], ["Observations", "len(terms.observations) + ' × ' + lower(terms.frequency) + ', ' + terms.bdc + ' / ' + terms.calendar"]] },
+      { "title": "Payoff", "rows": [
+        ["Conditional coupon", "pct(terms.coupon.ratePerPeriod) + ' per period if worst-of ≥ ' + pct(terms.coupon.barrier) + (terms.coupon.memory ? ' (memory)' : '')"],
+        ["Autocall", "'from obs ' + terms.autocall.startObservation + ' if worst-of ≥ ' + pct(terms.autocall.initialLevel) + (terms.autocall.stepDown > 0 ? ', stepping down ' + pct(terms.autocall.stepDown) + ' to ' + pct(terms.autocall.floor) : '')"],
+        ["Protection", "pct(terms.knockIn.barrier) + ' ' + lower(terms.knockIn.observation) + ' knock-in; if knocked in, redemption = notional × worst-of / ' + pct(terms.putStrike)"] ] },
+      { "title": "Lifecycle status", "rows": [["Status", "status"], ["Observations fixed", "len(productState.fixings) + ' / ' + len(terms.observations)"], ["Coupons paid", "fmtMoney(productState.couponsPaidTotal, currency)"], ["Unpaid (memory) periods", "productState.unpaidPeriods"], ["Knocked in", "productState.knockedIn ? 'YES on ' + productState.kiDate : 'No'"], ["Redemption", "productState.redemption ? fmtMoney(productState.redemption.amount, currency) + ' on ' + productState.redemption.paymentDate : '—'"]] }
+    ],
+    "widgets": ["observation-timeline"],
+    "blotterColumns": [
+      { "field": "terms.isin", "header": "ISIN", "width": 130 },
+      { "field": "underlyingLabel", "header": "Basket", "expr": "join(pluck(terms.underlyings, 'symbol'), ' / ')", "width": 130 },
+      { "field": "nextObs", "header": "Next obs", "expr": "status == 'LIVE' ? coalesce(terms.observations[len(productState.fixings)].observationDate, '—') : '—'", "width": 110 },
+      { "field": "lastWorst", "header": "Last worst-of", "expr": "len(productState.fixings) ? pct(last(productState.fixings).worst) : '—'", "width": 110 },
+      { "field": "ki", "header": "KI", "expr": "productState.knockedIn ? 'KI' : ''", "width": 60 }
+    ]
+  }
+}

@@ -13,7 +13,7 @@ const GROUPABLE = [['bookId', 'Book'], ['productType', 'Product'], ['counterpart
 
 export interface BlotterHandle { focusSearch: () => void; reload: () => void }
 
-export const Blotter = forwardRef<BlotterHandle, { reference: Reference; asOf: AsOf; refreshKey: number; selectedId: string | null; onSelect: (id: string) => void; onNew: () => void; canWrite: boolean }>(function Blotter({ asOf, refreshKey, selectedId, onSelect, onNew, canWrite }, ref) {
+export const Blotter = forwardRef<BlotterHandle, { reference: Reference; asOf: AsOf; refreshKey: number; selectedId: string | null; onSelect: (id: string) => void; onOpen?: (id: string) => void; onNew: () => void; canWrite: boolean }>(function Blotter({ asOf, refreshKey, selectedId, onSelect, onOpen, onNew, canWrite }, ref) {
   const [views, setViews] = useState<BlotterView[]>(() => loadViews())
   const [viewId, setViewId] = useState('all')
   const view = views.find((v) => v.id === viewId) ?? views[0]!
@@ -183,6 +183,7 @@ export const Blotter = forwardRef<BlotterHandle, { reference: Reference; asOf: A
               getRowId={(p) => ((p.data as GroupRow).__group ? `g:${(p.data as GroupRow).groupKey}` : (p.data as Trade).tradeId)}
               rowSelection={{ mode: 'singleRow', checkboxes: false, enableClickSelection: true }}
               onRowClicked={onRowClicked}
+              onRowDoubleClicked={(e) => { if (e.data && !(e.data as GroupRow).__group) onOpen?.((e.data as Trade).tradeId) }}
               onGridReady={(e) => { apiRef.current = e.api }}
               getRowClass={(p) => ((p.data as GroupRow)?.__group ? 'tr-group-row' : (p.data as Trade)?.status !== 'LIVE' ? 'tr-row-terminal' : '')}
               animateRows={false}

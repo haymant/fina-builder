@@ -5,25 +5,17 @@
 // reconciliation are projections over that log. Pure JS (no deps) so it runs in
 // the Node MCP server (`scripts/trade-repo-mcp-http.mjs`) and under Vitest.
 
+import { allowedEvents, applyDefaults, coerceFields, createRegistry, displayColumns, flatten, generateSchedules, getPath, isTerminal, pricingRequest, runEvent, setPath, termSheet, validateProduct } from './product.mjs'
+import { evaluate } from './expr.mjs'
+
 export const SCHEMA_VERSION = 'fina.trade-event/v1'
 
-export const EVENT_TYPES = ['NEW', 'AMEND', 'CANCEL', 'NOVATE', 'PARTIAL_TERMINATE', 'EXERCISE', 'MATURE', 'BOOK_TRANSFER']
-export const LIFECYCLE_EVENTS = ['CANCEL', 'NOVATE', 'PARTIAL_TERMINATE', 'EXERCISE', 'MATURE', 'BOOK_TRANSFER']
-export const STATUSES = ['LIVE', 'CANCELLED', 'TERMINATED', 'EXERCISED', 'MATURED', 'NOVATED']
-export const PRODUCT_TYPES = ['IRS', 'FX_FORWARD', 'EQUITY_OPTION', 'CDS', 'PHOENIX_AUTOCALL']
-export const ECONOMIC_FIELDS = [
-  'productType', 'side', 'notional', 'currency', 'underlying', 'price', 'fixedRate', 'strike', 'optionType',
-  'tradeDate', 'effectiveDate', 'maturityDate', 'counterpartyId', 'quantity',
-]
+/** Kernel events every product gets; everything else comes from the product template. */
+export const KERNEL_EVENTS = ['NEW', 'AMEND', 'NOVATE', 'BOOK_TRANSFER']
+/** Kernel (product-agnostic) trade fields. Product economics live under `terms`, lifecycle state under `productState`. */
+export const ECONOMIC_FIELDS = ['productType', 'side', 'notional', 'currency', 'tradeDate', 'effectiveDate', 'maturityDate', 'counterpartyId', 'terms']
 export const NON_ECONOMIC_FIELDS = ['bookId', 'trader', 'venue', 'externalId', 'tags', 'comment']
 export const ROLES = ['viewer', 'trader', 'ops', 'admin']
-const TERMINAL = new Set(['CANCELLED', 'TERMINATED', 'EXERCISED', 'MATURED', 'NOVATED'])
-
-// Allowed transitions: lifecycle state machine (status -> event types).
-export const TRANSITIONS = {
-  LIVE: ['AMEND', 'CANCEL', 'NOVATE', 'PARTIAL_TERMINATE', 'EXERCISE', 'MATURE', 'BOOK_TRANSFER'],
-  CANCELLED: [], TERMINATED: [], EXERCISED: [], MATURED: [], NOVATED: [],
-}
 
 export class TradeRepoError extends Error {
   constructor(code, message, details = [], retryable = false) {
@@ -62,31 +54,35 @@ export function contentHash(value) {
 const isDate = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s))
 const isCcy = (s) => typeof s === 'string' && /^[A-Z]{3}$/.test(s)
 
+const SKIP = new Set(['version', 'lastEventId', 'lastEventType', 'recordedAt', 'validFrom', 'contentHash', 'originalNotional', 'productTemplate', 'display'])
+/** Leaf-level diff: `terms.coupon.barrier`, `productState.coupons[2].amount`, … */
 export function diffTrades(a, b) {
-  const fields = new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})])
+  const pick = (o) => Object.fromEntries(Object.entries(o ?? {}).filter(([k]) => !SKIP.has(k) && k !== 'status'))
+  const fa = flatten(pick(a)), fb = flatten(pick(b))
   const changes = []
-  for (const f of [...fields].sort()) {
-    if (['version', 'lastEventId', 'lastEventType', 'recordedAt', 'validFrom', 'contentHash', 'status', 'originalNotional'].includes(f)) continue
-    const av = a?.[f], bv = b?.[f]
-    if (stableStringify(av) !== stableStringify(bv)) {
-      changes.push({ field: f, before: av ?? null, after: bv ?? null, economic: ECONOMIC_FIELDS.includes(f) })
+  for (const f of [...new Set([...Object.keys(fa), ...Object.keys(fb)])].sort()) {
+    if (f === '') continue
+    if (stableStringify(fa[f]) !== stableStringify(fb[f])) {
+      const top = f.split(/[.[]/)[0]
+      changes.push({ field: f, before: fa[f] ?? null, after: fb[f] ?? null, economic: ECONOMIC_FIELDS.includes(top) || top === 'productState' })
     }
   }
   return changes
 }
 
 // ---------------------------------------------------------------------------
-// validation
+// validation: generic kernel rules + the product template's interpreted rules
 // ---------------------------------------------------------------------------
 
-export function validateTrade(t, ref) {
+export function validateTrade(t, ref, registry) {
   const errors = []
   const warnings = []
   const req = (field) => {
     if (t[field] === undefined || t[field] === null || t[field] === '') errors.push({ code: 'REQUIRED', path: field, message: `${field} is required` })
   }
   ;['productType', 'side', 'notional', 'currency', 'tradeDate', 'maturityDate', 'counterpartyId', 'bookId'].forEach(req)
-  if (t.productType && !PRODUCT_TYPES.includes(t.productType)) errors.push({ code: 'ENUM', path: 'productType', message: `productType must be one of ${PRODUCT_TYPES.join(', ')}` })
+  const tpl = t.productType && registry ? registry.get(t.productType, t.productTemplate?.version) : null
+  if (t.productType && registry && !tpl) errors.push({ code: 'ENUM', path: 'productType', message: `unknown product ${t.productType}${t.productTemplate?.version ? `@${t.productTemplate.version}` : ''}; registered: ${registry.ids().join(', ')}` })
   if (t.side && !['BUY', 'SELL'].includes(t.side)) errors.push({ code: 'ENUM', path: 'side', message: 'side must be BUY or SELL' })
   if (t.notional !== undefined && !(typeof t.notional === 'number' && t.notional > 0)) errors.push({ code: 'RANGE', path: 'notional', message: 'notional must be a positive number (direction is carried by side)' })
   if (t.currency && !isCcy(t.currency)) errors.push({ code: 'FORMAT', path: 'currency', message: 'currency must be an ISO-4217 code' })
@@ -99,19 +95,22 @@ export function validateTrade(t, ref) {
     if (t.counterpartyId && !ref.parties.find((p) => p.partyId === t.counterpartyId && p.kind === 'COUNTERPARTY')) errors.push({ code: 'UNKNOWN_REF', path: 'counterpartyId', message: `unknown counterparty ${t.counterpartyId}` })
     if (t.bookId && !ref.books.find((b) => b.bookId === t.bookId)) errors.push({ code: 'UNKNOWN_REF', path: 'bookId', message: `unknown book ${t.bookId}` })
   }
-  if (t.productType === 'EQUITY_OPTION') {
-    if (!t.underlying) errors.push({ code: 'REQUIRED', path: 'underlying', message: 'underlying is required for options' })
-    if (!(t.strike > 0)) errors.push({ code: 'REQUIRED', path: 'strike', message: 'strike must be positive for options' })
-    if (!['CALL', 'PUT'].includes(t.optionType)) errors.push({ code: 'ENUM', path: 'optionType', message: 'optionType must be CALL or PUT' })
-  }
-  if (t.productType === 'IRS' && !(typeof t.fixedRate === 'number')) errors.push({ code: 'REQUIRED', path: 'fixedRate', message: 'fixedRate is required for IRS' })
-  if (t.productType === 'IRS' && typeof t.fixedRate === 'number' && Math.abs(t.fixedRate) > 0.25) warnings.push({ code: 'OFF_MARKET', path: 'fixedRate', message: 'fixedRate looks off-market (> 25%)' })
-  if (t.productType === 'FX_FORWARD' && !(t.price > 0)) errors.push({ code: 'REQUIRED', path: 'price', message: 'forward rate (price) is required for FX forwards' })
-  if (['FX_FORWARD', 'CDS', 'PHOENIX_AUTOCALL', 'EQUITY_OPTION'].includes(t.productType) && !t.underlying) {
-    if (t.productType !== 'EQUITY_OPTION') errors.push({ code: 'REQUIRED', path: 'underlying', message: 'underlying is required' })
+  if (tpl) {
+    const p = validateProduct(tpl, t, ref)
+    errors.push(...p.errors)
+    warnings.push(...p.warnings)
   }
   if (typeof t.notional === 'number' && t.notional > 5e9) warnings.push({ code: 'FAT_FINGER', path: 'notional', message: 'notional above 5bn — confirm (fat-finger check)' })
   return { valid: errors.length === 0, errors, warnings }
+}
+
+/** Defaults + generated schedules + kernel fields derived from terms (maturity, underlying label). */
+export function prepareTrade(tpl, trade) {
+  let t = applyDefaults(tpl, trade)
+  coerceFields(tpl.terms?.fields, t.terms)
+  t = generateSchedules(tpl, t)
+  if (tpl.kernel?.underlyingFrom) { try { t.underlying = evaluate(tpl.kernel.underlyingFrom, { ...t, terms: t.terms }) } catch { /* left unset */ } }
+  return t
 }
 
 // ---------------------------------------------------------------------------
@@ -121,8 +120,9 @@ export function validateTrade(t, ref) {
 /**
  * @param {{ reference: object, store?: { append(e): void, load(): object[] }, now?: () => string }} opts
  */
-export function createRepository({ reference, store, now = () => new Date().toISOString() }) {
+export function createRepository({ reference, store, now = () => new Date().toISOString(), templates = [] }) {
   const ref = reference
+  const registry = createRegistry()
   /** @type {object[]} */
   const log = []
   const byTrade = new Map() // tradeId -> events[]
@@ -143,9 +143,13 @@ export function createRepository({ reference, store, now = () => new Date().toIS
     } else if (rec.kind === 'audit') audit.push(rec)
     else if (rec.kind === 'recon-run') reconRuns.push(rec)
     else if (rec.kind === 'break') breaks.set(rec.breakId, rec)
+    else if (rec.kind === 'product-template') registry.register(rec.template)
     if (persist && store) store.append(rec)
   }
   if (store) for (const rec of store.load()) applyRecord(rec, false)
+  // Templates shipped as data (products/*.json) are registered + persisted once per id@version.
+  for (const t of templates) if (!registry.has(t.id, t.version)) applyRecord({ kind: 'product-template', key: `${t.id}@${t.version}`, id: t.id, version: t.version, registeredAt: now(), registeredBy: 'system', template: t }, true)
+  const tplOf = (s) => registry.get(s.productTemplate?.id ?? s.productType, s.productTemplate?.version)
 
   const writeAudit = (ctx, action, target, detail) => {
     applyRecord({ kind: 'audit', auditId: `AUD-${String(audit.length + 1).padStart(6, '0')}`, occurredAt: ctx.recordedAt ?? now(), actor: ctx.actor, role: ctx.role, action, target, detail, correlationId: ctx.correlationId ?? null }, true)
@@ -196,7 +200,7 @@ export function createRepository({ reference, store, now = () => new Date().toIS
     return `${le?.lei ?? '5493000000000000000'}${'FINA'}${String(n).padStart(10, '0')}`
   }
 
-  function appendEvent(ctx, { tradeId, eventType, amendKind, validFrom, state, reason, idempotencyKey, prev, related }) {
+  function appendEvent(ctx, { tradeId, eventType, amendKind, validFrom, state, reason, idempotencyKey, prev, related, detail, causedBy }) {
     const recordedAt = ctx.recordedAt ?? now()
     const version = (prev?.version ?? 0) + 1
     const full = { ...state, tradeId, version, status: state.status, lastEventType: eventType, validFrom, recordedAt }
@@ -206,14 +210,14 @@ export function createRepository({ reference, store, now = () => new Date().toIS
       eventId: `EVT-${String(log.length + 1).padStart(7, '0')}`,
       tradeId, uti: full.uti, version, eventType, amendKind: amendKind ?? null,
       validFrom, recordedAt, actor: ctx.actor, idempotencyKey: idempotencyKey ?? null,
-      reason: reason ?? null, prevVersion: prev?.version ?? null, related: related ?? null,
+      reason: reason ?? null, prevVersion: prev?.version ?? null, related: related ?? null, detail: detail ?? null, causedBy: causedBy ?? null,
       changes: diffTrades(prev, full), state: full,
     }
     event.state.lastEventId = event.eventId
     if (related) event.state = { ...event.state, ...Object.fromEntries(Object.entries(related)) }
     const clean = JSON.parse(JSON.stringify(event))
     applyRecord(clean, true)
-    writeAudit(ctx, eventType === 'NEW' ? 'trade.book' : eventType === 'AMEND' ? 'trade.amend' : `trade.${eventType.toLowerCase()}`, { type: 'trade', id: tradeId, version }, { eventId: event.eventId, reason: reason ?? null, changes: event.changes.length })
+    writeAudit(ctx, eventType === 'NEW' ? 'trade.book' : eventType === 'AMEND' ? 'trade.amend' : `trade.${eventType.toLowerCase()}`, { type: 'trade', id: tradeId, version }, { eventId: event.eventId, reason: reason ?? null, changes: event.changes.length, ...(causedBy ? { causedBy } : {}) })
     return clean
   }
 
@@ -239,20 +243,75 @@ export function createRepository({ reference, store, now = () => new Date().toIS
 
     capabilities() {
       return {
-        schema: SCHEMA_VERSION, productTypes: PRODUCT_TYPES, eventTypes: EVENT_TYPES, statuses: STATUSES, roles: ROLES,
-        transitions: TRANSITIONS, economicFields: ECONOMIC_FIELDS, nonEconomicFields: NON_ECONOMIC_FIELDS,
+        schema: SCHEMA_VERSION, productTypes: registry.ids(), kernelEvents: KERNEL_EVENTS, roles: ROLES,
+        products: registry.list().map((t) => ({ id: t.id, version: t.version, name: t.name, statuses: Object.keys(t.lifecycle.statuses), events: Object.keys(t.lifecycle.events) })),
+        economicFields: ECONOMIC_FIELDS, nonEconomicFields: NON_ECONOMIC_FIELDS,
         bitemporal: true, idempotency: true, optimisticConcurrency: true, maxPageSize: 500,
       }
     },
 
     validate(trade) {
-      return validateTrade(trade, ref)
+      const tpl = trade?.productType ? registry.get(trade.productType, trade.productTemplate?.version) : null
+      let prepared = trade
+      try { if (tpl) prepared = prepareTrade(tpl, trade) } catch { /* invalid inputs: field errors below */ }
+      const v = validateTrade(prepared, ref, registry)
+      return { ...v, preview: tpl ? { maturityDate: prepared.maturityDate ?? null, underlying: prepared.underlying ?? null, effectiveDate: prepared.terms?.issueDate ?? null, schedule: prepared.terms?.observations ?? [], terms: prepared.terms } : null }
     },
 
-    book(ctx, { trade, idempotencyKey, dryRun, validFrom }) {
+    // ---- product registry -------------------------------------------------
+    products() {
+      return { items: registry.list().map((t) => ({ id: t.id, version: t.version, name: t.name, assetClass: t.assetClass ?? null, status: t.status ?? 'ACTIVE', description: t.description ?? null })) }
+    },
+    product(ctx, { id, version }) {
+      const t = registry.get(id, version)
+      if (!t) throw new TradeRepoError('NOT_FOUND', `product ${id}${version ? `@${version}` : ''} not found`)
+      return t
+    },
+    registerProduct(ctx, { template }) {
+      if (ctx?.role !== 'admin') throw new TradeRepoError('FORBIDDEN', 'only admins can register product templates')
+      if (registry.has(template?.id, template?.version)) throw new TradeRepoError('CONFLICT', `${template.id}@${template.version} already exists; templates are immutable — publish a new version`)
+      try { registry.register(template) } catch (e) { throw new TradeRepoError('VALIDATION_FAILED', e.message, e.details ?? []) }
+      applyRecord({ kind: 'product-template', key: `${template.id}@${template.version}`, id: template.id, version: template.version, registeredAt: ctx.recordedAt ?? now(), registeredBy: ctx.actor, template }, true)
+      writeAudit(ctx, 'product.register', { type: 'product', id: `${template.id}@${template.version}` }, { name: template.name })
+      return { id: template.id, version: template.version }
+    },
+    termSheet(ctx, { tradeId, version }) {
+      const s = api.get(ctx, { tradeId, version }).trade
+      const tpl = tplOf(s)
+      return { tradeId: s.tradeId, version: s.version, product: s.productTemplate, sections: termSheet(tpl, s), widgets: tpl.ui?.widgets ?? [] }
+    },
+    pricing(ctx, { tradeId, version }) {
+      const s = api.get(ctx, { tradeId, version }).trade
+      return { tradeId: s.tradeId, version: s.version, product: s.productTemplate, ...pricingRequest(tplOf(s), s) }
+    },
+    /** Schedule rows joined with what happened on each (fixing, coupon, autocall …) — the observation timeline. */
+    schedule(ctx, { tradeId, version }) {
+      const s = api.get(ctx, { tradeId, version }).trade
+      const ps = s.productState ?? {}
+      const rows = (s.terms?.observations ?? []).map((o) => {
+        const fixing = ps.fixings?.find((f) => f.n === o.n) ?? null
+        const coupon = ps.coupons?.find((c) => c.n === o.n) ?? null
+        return { ...o, fixing, coupon, autocalled: ps.autocall?.n === o.n, status: fixing ? 'FIXED' : s.status === 'LIVE' ? 'PENDING' : 'NOT_REACHED' }
+      })
+      return { tradeId: s.tradeId, version: s.version, status: s.status, knockIn: { barrier: s.terms?.knockIn?.barrier ?? null, observation: s.terms?.knockIn?.observation ?? null, knockedIn: !!ps.knockedIn, date: ps.kiDate ?? null, worst: ps.kiWorst ?? null }, underlyings: s.terms?.underlyings ?? [], rows, monitor: ps.monitor ?? [], corporateActions: ps.corporateActions ?? [], redemption: ps.redemption ?? null }
+    },
+    events(ctx, { tradeId }) {
+      const s = current(resolveId(tradeId))
+      const tpl = tplOf(s)
+      const allowed = allowedEvents(tpl, s)
+      // Resolve data-driven param hints (keys/options/defaults) against the trade, so UIs stay generic.
+      const sc = { ...s, terms: s.terms ?? {}, productState: s.productState ?? {} }
+      const hint = (ex) => { try { return evaluate(ex, sc) } catch { return null } }
+      const params = (ev) => (ev.params ?? []).map((f) => ({ ...f, ...(f.keysFrom ? { keys: hint(f.keysFrom) } : {}), ...(f.optionsFrom ? { values: hint(f.optionsFrom), type: 'enum' } : {}), ...(f.defaultFrom ? { default: hint(f.defaultFrom) } : {}) }))
+      return { tradeId: s.tradeId, status: s.status, events: Object.entries(tpl.lifecycle.events).map(([name, ev]) => ({ name, label: ev.label ?? name, derived: !!ev.derived, kernel: !!ev.kernel, allowed: allowed.includes(name) && (!ev.roles || ev.roles.includes(ctx?.role ?? 'viewer')) && (ctx?.role ?? 'viewer') !== 'viewer', roles: ev.roles ?? null, requiresReason: !!ev.requiresReason, params: params(ev) })) }
+    },
+
+    book(ctx, { trade, idempotencyKey, dryRun, validFrom }, internal = {}) {
       const replay = checkIdem(idempotencyKey)
       if (replay) return { ...replay, trade: current(replay.tradeId) }
-      const v = validateTrade(trade, ref)
+      const tpl0 = trade?.productType ? registry.get(trade.productType, trade.productTemplate?.version) : null
+      if (tpl0) trade = prepareTrade(tpl0, trade)
+      const v = validateTrade(trade, ref, registry)
       if (!v.valid) throw new TradeRepoError('VALIDATION_FAILED', `${v.errors.length} validation error(s)`, v.errors)
       entitle(ctx, 'book', trade.bookId)
       if (trade.externalId) {
@@ -265,8 +324,9 @@ export function createRepository({ reference, store, now = () => new Date().toIS
       const book = ref.books.find((b) => b.bookId === trade.bookId)
       const state = {
         ...trade, tradeId, uti: trade.uti ?? nextUti(book.legalEntityId, n), legalEntityId: book.legalEntityId,
-        effectiveDate: trade.effectiveDate ?? trade.tradeDate, status: 'LIVE', tags: trade.tags ?? {},
-        originalNotional: trade.notional,
+        effectiveDate: trade.effectiveDate ?? trade.terms?.issueDate ?? trade.tradeDate, status: tpl0.lifecycle.initialStatus, tags: trade.tags ?? {},
+        originalNotional: trade.notional, productTemplate: { id: tpl0.id, version: tpl0.version },
+        productState: JSON.parse(JSON.stringify(internal.productState ?? tpl0.state?.initial ?? {})),
       }
       const event = appendEvent(ctx, { tradeId, eventType: 'NEW', validFrom: validFrom ?? trade.tradeDate, state, reason: 'New trade', idempotencyKey })
       return { tradeId, version: event.version, eventId: event.eventId, warnings: v.warnings, trade: event.state }
@@ -278,13 +338,24 @@ export function createRepository({ reference, store, now = () => new Date().toIS
       const prev = current(resolveId(tradeId))
       entitle(ctx, 'amend', prev.bookId)
       if (expectedVersion !== undefined && expectedVersion !== prev.version) throw new TradeRepoError('CONFLICT', `trade ${prev.tradeId} is at version ${prev.version}, expected ${expectedVersion}`, [{ code: 'STALE_VERSION', path: 'expectedVersion', message: `current version is ${prev.version}` }], true)
-      if (TERMINAL.has(prev.status)) throw new TradeRepoError('INVALID_TRANSITION', `cannot amend a ${prev.status} trade`)
+      const tpl = tplOf(prev)
+      if (isTerminal(tpl, prev.status)) throw new TradeRepoError('INVALID_TRANSITION', `cannot amend a ${prev.status} trade`)
       if (!reason) throw new TradeRepoError('VALIDATION_FAILED', 'reason is required for amendments', [{ code: 'REQUIRED', path: 'reason', message: 'reason is required' }])
       const forbidden = Object.keys(changes ?? {}).filter((k) => !ECONOMIC_FIELDS.includes(k) && !NON_ECONOMIC_FIELDS.includes(k))
       if (forbidden.length) throw new TradeRepoError('VALIDATION_FAILED', `fields not amendable: ${forbidden.join(', ')}`, forbidden.map((f) => ({ code: 'NOT_AMENDABLE', path: f, message: 'use a lifecycle event or not amendable' })))
-      const next = { ...prev, ...changes }
+      let next = { ...prev, ...changes }
+      if (changes.terms) {
+        // Deep-merge a terms patch; regenerate schedules while nothing has been fixed yet.
+        const merged = JSON.parse(JSON.stringify(prev.terms ?? {}))
+        for (const [k, v] of Object.entries(flattenPatch(changes.terms))) setPath(merged, k, v)
+        const fixed = (prev.productState?.fixings ?? []).length > 0
+        const scheduleInputs = Object.keys(flattenPatch(changes.terms)).some((k) => !k.startsWith('observations'))
+        if (scheduleInputs && fixed && Object.keys(flattenPatch(changes.terms)).some((k) => /^(strikeDate|frequency|numObservations|calendar|bdc|paymentLagDays)/.test(k))) throw new TradeRepoError('INVALID_TRANSITION', 'schedule terms cannot be amended after the first fixing', [{ code: 'FIXED', path: 'terms', message: 'observations already fixed' }])
+        next.terms = merged
+        if (!fixed && scheduleInputs) { delete next.terms.observations; next = generateSchedules(tpl, next) }
+      }
       if (changes.bookId && changes.bookId !== prev.bookId) throw new TradeRepoError('VALIDATION_FAILED', 'use BOOK_TRANSFER to move a trade between books', [{ code: 'USE_LIFECYCLE', path: 'bookId', message: 'use BOOK_TRANSFER' }])
-      const v = validateTrade(next, ref)
+      const v = validateTrade(next, ref, registry)
       if (!v.valid) throw new TradeRepoError('VALIDATION_FAILED', `${v.errors.length} validation error(s)`, v.errors)
       const diff = diffTrades(prev, next)
       if (diff.length === 0) throw new TradeRepoError('NO_CHANGE', 'amendment changes nothing')
@@ -297,74 +368,69 @@ export function createRepository({ reference, store, now = () => new Date().toIS
     lifecycle(ctx, { tradeId, eventType, expectedVersion, effectiveDate, reason, idempotencyKey, params = {} }) {
       const replay = checkIdem(idempotencyKey)
       if (replay) return { ...replay, trade: current(replay.tradeId) }
-      if (!LIFECYCLE_EVENTS.includes(eventType)) throw new TradeRepoError('VALIDATION_FAILED', `eventType must be one of ${LIFECYCLE_EVENTS.join(', ')}`)
       const prev = current(resolveId(tradeId))
+      const tpl = tplOf(prev)
       entitle(ctx, 'lifecycle', prev.bookId)
       if (expectedVersion !== undefined && expectedVersion !== prev.version) throw new TradeRepoError('CONFLICT', `trade ${prev.tradeId} is at version ${prev.version}, expected ${expectedVersion}`, [], true)
-      if (!TRANSITIONS[prev.status]?.includes(eventType)) throw new TradeRepoError('INVALID_TRANSITION', `${eventType} is not allowed from ${prev.status}`)
-      const eff = effectiveDate ?? now().slice(0, 10)
-      if (!isDate(eff)) throw new TradeRepoError('VALIDATION_FAILED', 'effectiveDate must be YYYY-MM-DD', [{ code: 'FORMAT', path: 'effectiveDate', message: 'YYYY-MM-DD' }])
-      if (eff < prev.tradeDate) throw new TradeRepoError('VALIDATION_FAILED', 'effectiveDate precedes tradeDate', [{ code: 'DATE_ORDER', path: 'effectiveDate', message: 'must be on/after tradeDate' }])
-      const next = { ...prev }
-      let related = null
-      let newTrade = null
-      switch (eventType) {
-        case 'CANCEL':
-          if (!reason) throw new TradeRepoError('VALIDATION_FAILED', 'reason is required to cancel', [{ code: 'REQUIRED', path: 'reason', message: 'reason is required' }])
-          next.status = 'CANCELLED'
-          break
-        case 'MATURE':
-          if (eff < prev.maturityDate) throw new TradeRepoError('VALIDATION_FAILED', `cannot mature before maturityDate ${prev.maturityDate}`, [{ code: 'DATE_ORDER', path: 'effectiveDate', message: 'before maturity' }])
-          next.status = 'MATURED'
-          break
-        case 'EXERCISE':
-          if (!['EQUITY_OPTION', 'PHOENIX_AUTOCALL'].includes(prev.productType)) throw new TradeRepoError('INVALID_TRANSITION', `${prev.productType} has no exercise right`)
-          next.status = 'EXERCISED'
-          next.settlement = params.settlement ?? 'CASH'
-          break
-        case 'PARTIAL_TERMINATE': {
-          const amt = Number(params.terminatedNotional)
-          if (!(amt > 0) || amt >= prev.notional) throw new TradeRepoError('VALIDATION_FAILED', 'terminatedNotional must be > 0 and < current notional (use a full termination/CANCEL otherwise)', [{ code: 'RANGE', path: 'params.terminatedNotional', message: `0 < x < ${prev.notional}` }])
-          next.notional = prev.notional - amt
-          next.terminatedNotional = (prev.terminatedNotional ?? 0) + amt
-          if (params.fee !== undefined) next.terminationFee = params.fee
-          break
-        }
-        case 'NOVATE': {
-          const to = params.transfereeId
-          if (!ref.parties.find((p) => p.partyId === to && p.kind === 'COUNTERPARTY')) throw new TradeRepoError('VALIDATION_FAILED', 'params.transfereeId must be a known counterparty', [{ code: 'UNKNOWN_REF', path: 'params.transfereeId', message: 'unknown counterparty' }])
-          if (to === prev.counterpartyId) throw new TradeRepoError('VALIDATION_FAILED', 'transferee equals current counterparty')
-          next.status = 'NOVATED'
-          break
-        }
-        case 'BOOK_TRANSFER': {
+      const ev = tpl.lifecycle.events[eventType]
+      if (!ev) throw new TradeRepoError('VALIDATION_FAILED', `${tpl.id} has no event ${eventType}; allowed: ${allowedEvents(tpl, prev).join(', ')}`)
+      if (effectiveDate !== undefined && !isDate(effectiveDate)) throw new TradeRepoError('VALIDATION_FAILED', 'effectiveDate must be YYYY-MM-DD', [{ code: 'FORMAT', path: 'effectiveDate', message: 'YYYY-MM-DD' }])
+      if (ev.kernel) {
+        if (!(ev.from ?? []).includes(prev.status)) throw new TradeRepoError('INVALID_TRANSITION', `${eventType} is not allowed from ${prev.status}`)
+        const eff = effectiveDate ?? now().slice(0, 10)
+        if (eff < prev.tradeDate) throw new TradeRepoError('VALIDATION_FAILED', 'effectiveDate precedes tradeDate', [{ code: 'DATE_ORDER', path: 'effectiveDate', message: 'must be on/after tradeDate' }])
+        if (eff < prev.validFrom) throw new TradeRepoError('VALIDATION_FAILED', `effective date precedes the trade's latest event (${prev.validFrom})`, [{ code: 'BACKDATED', path: 'effectiveDate', message: `must be on/after ${prev.validFrom}` }])
+        const next = { ...prev }
+        let related = null, newTrade = null
+        if (eventType === 'BOOK_TRANSFER') {
           const to = params.toBookId
           if (!ref.books.find((b) => b.bookId === to)) throw new TradeRepoError('VALIDATION_FAILED', 'params.toBookId must be a known book', [{ code: 'UNKNOWN_REF', path: 'params.toBookId', message: 'unknown book' }])
           entitle(ctx, 'lifecycle', to)
           next.bookId = to
           next.legalEntityId = ref.books.find((b) => b.bookId === to).legalEntityId
-          break
-        }
+        } else if (eventType === 'NOVATE') {
+          const to = params.transfereeId
+          if (!ref.parties.find((p) => p.partyId === to && p.kind === 'COUNTERPARTY')) throw new TradeRepoError('VALIDATION_FAILED', 'params.transfereeId must be a known counterparty', [{ code: 'UNKNOWN_REF', path: 'params.transfereeId', message: 'unknown counterparty' }])
+          if (to === prev.counterpartyId) throw new TradeRepoError('VALIDATION_FAILED', 'transferee equals current counterparty')
+          next.status = Object.keys(tpl.lifecycle.statuses).includes('NOVATED') ? 'NOVATED' : 'TERMINATED'
+          // Novation = step-out of the old trade + a new trade with the transferee (new UTI, linked), carrying the lifecycle state.
+          newTrade = api.book(ctx, { validFrom: eff,
+            trade: { ...Object.fromEntries([...ECONOMIC_FIELDS, ...NON_ECONOMIC_FIELDS].map((f) => [f, prev[f]])), productTemplate: prev.productTemplate, counterpartyId: to, effectiveDate: eff, externalId: undefined, tags: { ...(prev.tags ?? {}), novatedFrom: prev.tradeId } },
+            idempotencyKey: idempotencyKey ? `${idempotencyKey}:novation` : undefined,
+          }, { productState: prev.productState })
+          related = { novatedTo: newTrade.tradeId }
+        } else throw new TradeRepoError('VALIDATION_FAILED', `unknown kernel event ${eventType}`)
+        const event = appendEvent(ctx, { tradeId: prev.tradeId, eventType, validFrom: eff, state: next, reason, idempotencyKey, prev, related, detail: params })
+        return { tradeId: prev.tradeId, version: event.version, eventId: event.eventId, events: [{ eventId: event.eventId, eventType, version: event.version }], trade: event.state, ...(newTrade ? { novatedTo: newTrade.tradeId } : {}) }
       }
-      if (eventType === 'NOVATE') {
-        // Novation = step-out of the old trade + a new trade with the transferee (new UTI, linked).
-        newTrade = api.book(ctx, { validFrom: eff,
-          trade: { ...Object.fromEntries([...ECONOMIC_FIELDS, ...NON_ECONOMIC_FIELDS].map((f) => [f, prev[f]])), counterpartyId: params.transfereeId, effectiveDate: eff, externalId: undefined, tags: { ...(prev.tags ?? {}), novatedFrom: prev.tradeId } },
-          idempotencyKey: idempotencyKey ? `${idempotencyKey}:novation` : undefined,
-        })
-        related = { novatedTo: newTrade.tradeId }
+      let out
+      try {
+        out = runEvent(tpl, prev, eventType, params, { role: ctx.role, reason, effectiveDate })
+      } catch (e) {
+        throw new TradeRepoError(e.code ?? 'VALIDATION_FAILED', e.message, e.details ?? [])
       }
-      const event = appendEvent(ctx, { tradeId: prev.tradeId, eventType, validFrom: eff, state: next, reason, idempotencyKey, prev, related })
-      return { tradeId: prev.tradeId, version: event.version, eventId: event.eventId, trade: event.state, ...(newTrade ? { novatedTo: newTrade.tradeId } : {}) }
+      for (const st of out.steps) if (st.validFrom && st.validFrom < prev.validFrom) throw new TradeRepoError('VALIDATION_FAILED', `effective date ${st.validFrom} precedes the trade's latest event (${prev.validFrom}); back-dated lifecycle events need a correction workflow`, [{ code: 'BACKDATED', path: 'effectiveDate', message: `must be on/after ${prev.validFrom}` }])
+      for (const st of out.steps) if (st.validFrom && st.validFrom < prev.tradeDate) throw new TradeRepoError('VALIDATION_FAILED', 'effective date precedes tradeDate', [{ code: 'DATE_ORDER', path: 'effectiveDate', message: 'must be on/after tradeDate' }])
+      // Each step (requested event + engine-derived consequences) is its own immutable version.
+      const written = []
+      let p = prev
+      for (const [k, st] of out.steps.entries()) {
+        const e = appendEvent(ctx, { tradeId: prev.tradeId, eventType: st.eventType, validFrom: st.validFrom ?? effectiveDate ?? now().slice(0, 10), state: st.state, reason: k === 0 ? reason : `${tpl.lifecycle.events[st.eventType]?.label ?? st.eventType} (derived from ${written[0]?.eventId})`, idempotencyKey: k === 0 ? idempotencyKey : idempotencyKey ? `${idempotencyKey}:${k}` : undefined, prev: p, detail: st.detail, causedBy: written[0]?.eventId ?? null })
+        written.push({ eventId: e.eventId, eventType: st.eventType, version: e.version, detail: st.detail })
+        p = e.state
+      }
+      const last = written.at(-1)
+      return { tradeId: prev.tradeId, version: last.version, eventId: written[0].eventId, events: written, trade: p }
     },
 
-    get(ctx, { tradeId, validAt, knownAt }) {
+    get(ctx, { tradeId, validAt, knownAt, version }) {
       const id = resolveId(tradeId)
-      const s = stateOf(id, { validAt, knownAt })
+      const s = version ? (byTrade.get(id).find((e) => e.version === version)?.state ?? null) : stateOf(id, { validAt, knownAt })
+      if (version && !s) throw new TradeRepoError('NOT_FOUND', `trade ${id} has no version ${version}`)
       if (!s) throw new TradeRepoError('NOT_FOUND', `trade ${tradeId} did not exist as of ${validAt ?? knownAt}`)
       if (!visible(ctx, s)) throw new TradeRepoError('FORBIDDEN', `not entitled to view ${id}`)
       const latest = stateOf(id)
-      return { trade: s, isLatest: s.version === latest.version, latestVersion: latest.version, allowedEvents: TRANSITIONS[s.status] ?? [] }
+      return { trade: { ...s, display: displayColumns(tplOf(s), s) }, isLatest: s.version === latest.version, latestVersion: latest.version, allowedEvents: allowedEvents(tplOf(s), s) }
     },
 
     history(ctx, { tradeId, knownAt }) {
@@ -387,7 +453,7 @@ export function createRepository({ reference, store, now = () => new Date().toIS
       let rows = []
       for (const id of byTrade.keys()) {
         const s = stateOf(id, { validAt, knownAt })
-        if (s && visible(ctx, s)) rows.push(s)
+        if (s && visible(ctx, s)) rows.push({ ...s, display: displayColumns(tplOf(s), s) })
       }
       const inList = (list, v) => !list || list.length === 0 || list.includes(v)
       const text = filter.text?.toLowerCase()
@@ -395,14 +461,14 @@ export function createRepository({ reference, store, now = () => new Date().toIS
         inList(filter.bookIds, t.bookId) && inList(filter.counterpartyIds, t.counterpartyId) &&
         inList(filter.productTypes, t.productType) && inList(filter.statuses, t.status) &&
         inList(filter.legalEntityIds, t.legalEntityId) && inList(filter.currencies, t.currency) &&
-        (includeTerminal || !TERMINAL.has(t.status)) &&
+        (includeTerminal || !isTerminal(tplOf(t), t.status)) &&
         (!filter.tradeDateFrom || t.tradeDate >= filter.tradeDateFrom) && (!filter.tradeDateTo || t.tradeDate <= filter.tradeDateTo) &&
         (!filter.maturityFrom || t.maturityDate >= filter.maturityFrom) && (!filter.maturityTo || t.maturityDate <= filter.maturityTo) &&
-        (!text || [t.tradeId, t.uti, t.externalId, t.underlying, t.trader, t.counterpartyId, t.bookId].some((v) => String(v ?? '').toLowerCase().includes(text))),
+        (!text || [t.tradeId, t.uti, t.externalId, t.underlying, t.trader, t.counterpartyId, t.bookId, t.terms?.isin, ...(t.terms?.underlyings ?? []).map((u) => u.symbol)].some((v) => String(v ?? '').toLowerCase().includes(text))),
       )
       rows.sort((a, b) => {
         for (const { field, dir } of sort) {
-          const av = a[field], bv = b[field]
+          const av = getPath(a, field), bv = getPath(b, field)
           if (av === bv) continue
           const c = av === undefined ? -1 : bv === undefined ? 1 : av < bv ? -1 : 1
           return dir === 'desc' ? -c : c
@@ -532,8 +598,10 @@ export function createRepository({ reference, store, now = () => new Date().toIS
       if (!Array.isArray(rows) || rows.length === 0) throw new TradeRepoError('VALIDATION_FAILED', 'rows must be a non-empty array')
       if (rows.length > 1000) throw new TradeRepoError('VALIDATION_FAILED', 'at most 1000 rows per import')
       const results = rows.map((row, i) => {
-        const trade = normaliseRow(row)
-        const v = validateTrade(trade, ref)
+        let trade = normaliseRow(row)
+        const tpl = trade.productType ? registry.get(trade.productType) : null
+        if (tpl) trade = prepareTrade(tpl, trade)
+        const v = validateTrade(trade, ref, registry)
         const dup = trade.externalId && [...byTrade.values()].some((e) => e[0].state.externalId === trade.externalId)
         if (dup) v.errors.push({ code: 'DUPLICATE', path: 'externalId', message: `externalId ${trade.externalId} already booked` })
         try { if (v.errors.length === 0) entitle(ctx, 'import', trade.bookId) } catch (e) { v.errors.push({ code: e.code, path: 'bookId', message: e.message }) }
@@ -563,20 +631,41 @@ export function createRepository({ reference, store, now = () => new Date().toIS
         cursor = page.nextCursor
       } while (cursor)
       if (format === 'json') return { format, count: all.length, content: JSON.stringify(all, null, 2) }
-      const cols = ['tradeId', 'uti', 'version', 'status', 'productType', 'side', 'notional', 'currency', 'underlying', 'tradeDate', 'effectiveDate', 'maturityDate', 'counterpartyId', 'bookId', 'legalEntityId', 'trader', 'externalId']
+      const cols = ['tradeId', 'uti', 'version', 'status', 'productType', 'side', 'notional', 'currency', 'underlying', 'tradeDate', 'effectiveDate', 'maturityDate', 'counterpartyId', 'bookId', 'legalEntityId', 'trader', 'externalId', 'terms.isin']
       const esc = (v) => (v === undefined || v === null ? '' : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v))
-      const content = [cols.join(','), ...all.map((t) => cols.map((c) => esc(t[c])).join(','))].join('\n')
+      const content = [cols.join(','), ...all.map((t) => cols.map((c) => esc(getPath(t, c))).join(','))].join('\n')
       return { format, count: all.length, content }
     },
   }
   return api
 }
 
+/** Dotted keys like `terms.coupon.barrier` or `terms.underlyings[0].symbol` become nested objects. */
+export function flattenPatch(obj, base = '', out = {}) {
+  for (const [k, v] of Object.entries(obj ?? {})) {
+    const p = base ? `${base}.${k}` : k
+    if (v && typeof v === 'object' && !Array.isArray(v)) flattenPatch(v, p, out)
+    else out[p] = v
+  }
+  return out
+}
+
 export function normaliseRow(row) {
-  const num = (v) => (v === undefined || v === '' || v === null ? undefined : Number(v))
-  const t = { ...row }
-  for (const f of ['notional', 'price', 'fixedRate', 'strike', 'quantity']) if (t[f] !== undefined) t[f] = num(t[f])
-  for (const k of Object.keys(t)) if (t[k] === '' || t[k] === undefined) delete t[k]
+  const t = {}
+  for (const [k, v] of Object.entries(row)) {
+    if (v === '' || v === undefined || v === null) continue
+    const path = k.replace(/\[(\d+)\]/g, '.$1')
+    setPath(t, path, v)
+  }
+  // `.0`, `.1` objects -> arrays
+  const arrays = (o) => {
+    if (!o || typeof o !== 'object') return o
+    for (const k of Object.keys(o)) o[k] = arrays(o[k])
+    const keys = Object.keys(o)
+    return keys.length && keys.every((k) => /^\d+$/.test(k)) ? keys.sort((a, b) => a - b).map((k) => o[k]) : o
+  }
+  arrays(t)
+  if (t.notional !== undefined) t.notional = Number(t.notional)
   if (t.side) t.side = String(t.side).toUpperCase()
   if (t.productType) t.productType = String(t.productType).toUpperCase()
   return t

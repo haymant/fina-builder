@@ -16,17 +16,29 @@ const PRODUCT_FIELDS: Record<ProductType, string[]> = {
 }
 const LABELS: Record<string, string> = { fixedRate: 'Fixed rate (decimal)', price: 'Price / forward rate / spread', underlying: 'Underlying / index / pair', optionType: 'Call / put', strike: 'Strike', quantity: 'Quantity' }
 
-export function TradeForm({ reference, trade, onClose, onDone }: { reference: Reference; trade?: Trade; onClose: () => void; onDone: (tradeId: string, message: string) => void }) {
+export function TradeForm({ reference, trade, onClose, onDone, initialDraft, initialReason, onDraft }: {
+  reference: Reference; trade?: Trade; onClose: () => void; onDone: (tradeId: string, message: string) => void
+  /** Amend only: unsaved edits restored from a document tab, and a callback to keep/clear them. */
+  initialDraft?: Partial<TradeInput>; initialReason?: string; onDraft?: (draft: Partial<TradeInput> | undefined, reason?: string) => void
+}) {
   const amend = !!trade
   const [form, setForm] = useState<Partial<TradeInput>>(() =>
-    trade ? { ...trade } : { productType: 'IRS', side: 'BUY', currency: 'USD', tradeDate: today(), bookId: reference.books[0]?.bookId, counterpartyId: reference.parties.find((p) => p.kind === 'COUNTERPARTY')?.partyId, venue: 'OTC' },
+    trade ? { ...trade, ...(initialDraft ?? {}) } : { productType: 'IRS', side: 'BUY', currency: 'USD', tradeDate: today(), bookId: reference.books[0]?.bookId, counterpartyId: reference.parties.find((p) => p.kind === 'COUNTERPARTY')?.partyId, venue: 'OTC' },
   )
-  const [reason, setReason] = useState('')
+  const [reason, setReason] = useState(initialReason ?? '')
   const [validation, setValidation] = useState<Validation | null>(null)
   const [serverIssues, setServerIssues] = useState<FieldIssue[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [idemKey] = useState(newIdempotencyKey)
+  // Amend drafts: changed fields vs the trade being amended (drives the tab dirty marker).
+  const draftChanges = (): Partial<TradeInput> | undefined => {
+    if (!trade) return undefined
+    const d: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(form)) if (JSON.stringify(v) !== JSON.stringify((trade as unknown as Record<string, unknown>)[k])) d[k] = v
+    return Object.keys(d).length ? (d as Partial<TradeInput>) : undefined
+  }
+  const close = () => { if (onDraft) onDraft(draftChanges(), reason || undefined); onClose() }
   const set = (k: keyof TradeInput, v: unknown) => setForm((f) => ({ ...f, [k]: v === '' ? undefined : v }))
   const num = (k: keyof TradeInput) => (e: React.ChangeEvent<HTMLInputElement>) => set(k, e.target.value === '' ? undefined : Number(e.target.value))
 
@@ -54,6 +66,7 @@ export function TradeForm({ reference, trade, onClose, onDone }: { reference: Re
       if (amend) {
         const changes = Object.fromEntries(changed.map((k) => [k, (form as Record<string, unknown>)[k]]))
         const out = await tradeRepo.call<{ tradeId: string; version: number; amendKind: string }>('tr_trade_amend', { tradeId: trade.tradeId, expectedVersion: trade.version, changes, reason, idempotencyKey: idemKey })
+        onDraft?.(undefined)
         onDone(out.tradeId, `${out.tradeId} amended (${out.amendKind.toLowerCase().replace('_', '-')}) → v${out.version}`)
       } else {
         const out = await tradeRepo.call<{ tradeId: string; trade: Trade }>('tr_trade_book', { trade: form, idempotencyKey: idemKey })
@@ -101,12 +114,12 @@ export function TradeForm({ reference, trade, onClose, onDone }: { reference: Re
       testId="trade-form"
       eyebrow={amend ? `Amend ${trade.tradeId} · v${trade.version}` : 'Trade capture'}
       title={amend ? 'Amend trade' : 'Book new trade'}
-      onClose={onClose}
+      onClose={close}
       wide
       footer={
         <>
           {amend && changed.length ? <span className="mr-auto self-center text-xs text-muted" data-testid="amend-kind">{changed.length} field(s) changed · <b>{economic ? 'Economic' : 'Non-economic'}</b> amendment</span> : null}
-          <button type="button" className="add-tile-button" onClick={onClose}>Cancel</button>
+          <button type="button" className="add-tile-button" onClick={close} data-testid="form-cancel">{amend && onDraft ? 'Close (keep draft)' : 'Cancel'}</button>
           <button type="button" data-testid="submit-trade" className="tr-primary" disabled={!canSubmit} onClick={submit}>{submitting ? 'Saving…' : amend ? 'Submit amendment' : 'Book trade'}</button>
         </>
       }

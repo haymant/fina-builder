@@ -22,13 +22,15 @@ export function toRow(rec, seq) {
   const payload = JSON.stringify(rec)
   switch (rec.kind) {
     case 'trade-event':
-      return ['tr_trade_event', 'event_id', { event_id: rec.eventId, seq, trade_id: rec.tradeId, uti: rec.uti, version: rec.version, event_type: rec.eventType, amend_kind: rec.amendKind, valid_from: rec.validFrom, recorded_at: rec.recordedAt, actor: rec.actor, idempotency_key: rec.idempotencyKey, status: rec.state.status, book_id: rec.state.bookId, payload }]
+      return ['tr_trade_event', 'event_id', { event_id: rec.eventId, seq, trade_id: rec.tradeId, uti: rec.uti, version: rec.version, event_type: rec.eventType, amend_kind: rec.amendKind, valid_from: rec.validFrom, recorded_at: rec.recordedAt, actor: rec.actor, idempotency_key: rec.idempotencyKey, status: rec.state.status, book_id: rec.state.bookId, product_id: rec.state.productTemplate?.id ?? null, product_version: rec.state.productTemplate?.version ?? null, caused_by: rec.causedBy ?? null, payload }]
     case 'audit':
       return ['tr_audit_event', 'audit_id', { audit_id: rec.auditId, seq, occurred_at: rec.occurredAt, actor: rec.actor, action: rec.action, target_id: rec.target?.id ?? null, payload }]
     case 'recon-run':
       return ['tr_recon_run', 'run_id', { run_id: rec.runId, seq, ran_at: rec.ranAt, source: rec.source, payload }]
     case 'break':
       return ['tr_recon_break', 'break_id', { break_id: rec.breakId, seq, run_id: rec.runId, status: rec.status, updated_at: rec.updatedAt, payload }]
+    case 'product-template':
+      return ['tr_product_template', 'template_key', { template_key: rec.key, seq, product_id: rec.id, version: rec.version, registered_at: rec.registeredAt, payload }]
     default:
       throw new Error(`unknown record kind ${rec.kind}`)
   }
@@ -36,7 +38,7 @@ export function toRow(rec, seq) {
 
 const LOAD_SQL = `SELECT payload, seq FROM (
   SELECT payload, seq FROM tr_trade_event UNION ALL SELECT payload, seq FROM tr_audit_event
-  UNION ALL SELECT payload, seq FROM tr_recon_run UNION ALL SELECT payload, seq FROM tr_recon_break) r ORDER BY seq`
+  UNION ALL SELECT payload, seq FROM tr_recon_run UNION ALL SELECT payload, seq FROM tr_recon_break UNION ALL SELECT payload, seq FROM tr_product_template) r ORDER BY seq`
 
 function upsertSql(table, key, cols, placeholder) {
   const names = Object.keys(cols)
@@ -62,7 +64,7 @@ export function createSqliteStore(file, { reset = false } = {}) {
     kind: 'sqlite', location: file,
     async init() {
       db.exec('CREATE TABLE IF NOT EXISTS tr_schema_migration (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)')
-      if (reset) db.exec('DROP TABLE IF EXISTS tr_recon_break; DROP TABLE IF EXISTS tr_recon_run; DROP TABLE IF EXISTS tr_audit_event; DROP TABLE IF EXISTS tr_trade_event; DELETE FROM tr_schema_migration;')
+      if (reset) db.exec('DROP TABLE IF EXISTS tr_product_template; DROP TABLE IF EXISTS tr_recon_break; DROP TABLE IF EXISTS tr_recon_run; DROP TABLE IF EXISTS tr_audit_event; DROP TABLE IF EXISTS tr_trade_event; DELETE FROM tr_schema_migration;')
       for (const m of migrations()) {
         if (db.prepare('SELECT 1 FROM tr_schema_migration WHERE version = ?').get(m.version)) continue
         db.exec(m.sql.replace(/ DEFERRABLE INITIALLY DEFERRED/g, ''))
@@ -98,7 +100,7 @@ export function createPostgresStore(url, { reset = false } = {}) {
     async init() {
       await client.connect()
       await client.query('CREATE TABLE IF NOT EXISTS tr_schema_migration (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)')
-      if (reset) await client.query('DROP TABLE IF EXISTS tr_recon_break, tr_recon_run, tr_audit_event, tr_trade_event; DELETE FROM tr_schema_migration;')
+      if (reset) await client.query('DROP TABLE IF EXISTS tr_product_template, tr_recon_break, tr_recon_run, tr_audit_event, tr_trade_event; DELETE FROM tr_schema_migration;')
       for (const m of migrations()) {
         const done = await client.query('SELECT 1 FROM tr_schema_migration WHERE version = $1', [m.version])
         if (done.rowCount) continue

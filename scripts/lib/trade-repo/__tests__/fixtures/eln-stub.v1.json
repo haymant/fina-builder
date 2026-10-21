@@ -1,0 +1,28 @@
+{
+  "$schema": "fina.product-template/v1",
+  "id": "ELN_STUB",
+  "version": 1,
+  "name": "Equity-linked note (stub, data only)",
+  "assetClass": "EQUITY_STRUCTURED",
+  "kernel": { "defaults": { "currency": "USD", "side": "SELL" }, "underlyingFrom": "terms.underlying" },
+  "terms": {
+    "fields": [
+      { "path": "underlying", "label": "Underlying", "type": "string", "required": true },
+      { "path": "strikePct", "label": "Strike", "type": "percent", "required": true, "min": 0.5, "max": 1.2 },
+      { "path": "discountPct", "label": "Issue discount", "type": "percent", "default": 0.05, "min": 0, "max": 0.5 }
+    ],
+    "constraints": [ { "expr": "terms.discountPct < 1 - terms.strikePct + 0.3", "path": "terms.discountPct", "code": "RANGE", "message": "discount too large for this strike" } ]
+  },
+  "state": { "initial": { "settled": false } },
+  "lifecycle": {
+    "initialStatus": "LIVE",
+    "statuses": { "LIVE": {}, "MATURED": { "terminal": true }, "CANCELLED": { "terminal": true } },
+    "events": {
+      "SETTLE": { "label": "Settle at maturity", "from": ["LIVE"], "params": [ { "path": "finalLevelPct", "type": "percent", "required": true } ],
+        "effectiveDate": "maturityDate",
+        "effects": [ { "set": "productState.settled", "expr": "true" }, { "set": "productState.payoutPct", "expr": "params.finalLevelPct >= terms.strikePct ? 1 : round(params.finalLevelPct / terms.strikePct, 6)" } ], "to": "MATURED" },
+      "CANCEL": { "from": ["LIVE"], "requiresReason": true, "effects": [ { "set": "status", "expr": "'CANCELLED'" } ] }
+    }
+  },
+  "ui": { "form": [ { "id": "main", "title": "ELN", "fields": ["underlying", "strikePct", "discountPct"] } ], "termSheet": [ { "title": "ELN", "rows": [["Underlying", "terms.underlying"], ["Strike", "pct(terms.strikePct)"]] } ], "blotterColumns": [ { "field": "strike", "header": "Strike", "expr": "pct(terms.strikePct)" } ] }
+}
