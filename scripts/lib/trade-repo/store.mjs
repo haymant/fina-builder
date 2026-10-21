@@ -90,7 +90,7 @@ export function createSqliteStore(file, { reset = false } = {}) {
 
 export function createPostgresStore(url, { reset = false } = {}) {
   const { Client } = require('pg')
-  const client = new Client({ connectionString: url, ssl: /localhost|127\.0\.0\.1/.test(url) ? false : { rejectUnauthorized: false } })
+  const client = new Client({ connectionString: url, ssl: /localhost|127\.0\.0\.1/.test(url) ? false : { rejectUnauthorized: false }, connectionTimeoutMillis: Number(process.env.TRADE_REPO_PG_CONNECT_TIMEOUT_MS ?? 15000) })
   let seq = 0
   let queue = Promise.resolve()
   let failure = null
@@ -135,7 +135,7 @@ export function createMemoryStore() {
 }
 
 export function createStoreFromUrl(url = process.env.DATABASE_URL, opts = {}) {
-  if (!url) return createSqliteStore(defaultSqlitePath(), opts)
+  if (!url || url === 'sqlite') return createSqliteStore(defaultSqlitePath(), opts)
   if (url.startsWith('memory:')) return createMemoryStore()
   if (url.startsWith('sqlite:')) return createSqliteStore(url.replace(/^sqlite:(\/\/)?/, '') || defaultSqlitePath(), opts)
   if (/^postgres(ql)?:\/\//.test(url)) return createPostgresStore(url, opts)
