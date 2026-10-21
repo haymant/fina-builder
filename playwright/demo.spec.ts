@@ -21,6 +21,8 @@ import { TAG } from './support/tags'
 test('creates a dashboard note for the narrated walkthrough', {
   tag: [TAG.demo.any, TAG.demo.dashboardNote, TAG.journey.dashboardSetup, TAG.journey.notebookCapture, TAG.feature.dashboards, TAG.feature.notebook],
 }, async ({ page, workspace }) => {
+  test.setTimeout(120_000) // Paced holds are intentional in demo recordings.
+
   await test.step('Open the empty workspace', async () => {
     await expectWorkspaceReady(workspace)
     await expectEmptyDashboard(workspace, 'Playwright Dashboard')
@@ -58,6 +60,8 @@ test.describe('visualization gallery demo', () => {
   test('adds a Payoff Petri Net from the visualization gallery', {
     tag: [TAG.demo.any, TAG.demo.visualizationAdd, TAG.journey.visualizationAdd, TAG.feature.visualizations, TAG.dependency.riga],
   }, async ({ page, workspace }) => {
+    test.setTimeout(120_000) // Paced holds are intentional in demo recordings.
+
     await test.step('Open the empty workspace', async () => {
       await expectWorkspaceReady(workspace)
       await expectEmptyDashboard(workspace, 'Playwright Dashboard')
