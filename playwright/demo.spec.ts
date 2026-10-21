@@ -1,46 +1,43 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures/test'
+import { NotebookPanel } from './components/NotebookPanel'
+import {
+  expectEmptyDashboard,
+  expectNotebookOpen,
+  expectSelectedNoteTitle,
+  expectWorkspaceReady,
+} from './assertions/workspace.assertions'
+import { TAG } from './support/tags'
 
-test('narrated demo: create a dashboard note', async ({ page }) => {
-  await page.addInitScript(() => {
-    if (sessionStorage.getItem('__playwright_demo_seeded') !== '1') {
-      localStorage.clear()
-      localStorage.setItem(
-        'fina-workspace',
-        JSON.stringify({
-          dashboards: [{ id: 'playwright-demo', name: 'Demo Dashboard', layout: [] }],
-          selectedDashboardId: 'playwright-demo',
-          theme: 'dark',
-        }),
-      )
-      sessionStorage.setItem('__playwright_demo_seeded', '1')
-    }
+test('creates a dashboard note for the narrated walkthrough', {
+  tag: [TAG.demo.any, TAG.demo.dashboardNote, TAG.journey.dashboardSetup, TAG.journey.notebookCapture, TAG.feature.dashboards, TAG.feature.notebook],
+}, async ({ page, workspace }) => {
+  await test.step('Open the empty workspace', async () => {
+    await expectWorkspaceReady(workspace)
+    await expectEmptyDashboard(workspace, 'Playwright Dashboard')
+    await page.waitForTimeout(4_000) // Deliberate capture hold for the opening narration.
   })
-  await page.route('**/riga/mcp**', (route) => route.abort())
-  await page.route('**/tac/mcp**', (route) => route.abort())
-  await page.goto('/')
 
-  await expect(page.getByRole('heading', { name: 'Structured Product Explorer' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Start building your dashboard' })).toBeVisible()
-  await page.waitForTimeout(4_000)
+  const templates = await workspace.openTemplates()
+  await test.step('Choose a blank dashboard', async () => {
+    await expect(templates.heading).toBeVisible()
+    await page.waitForTimeout(2_400) // Deliberate capture hold for narration.
+    await templates.createBlankDashboard()
+    await expectEmptyDashboard(workspace, 'Untitled Dashboard')
+  })
 
-  await page.getByRole('button', { name: 'New dashboard' }).click()
-  await expect(page.getByRole('heading', { name: 'Create Dashboard' })).toBeVisible()
-  await page.waitForTimeout(2_400)
+  const notebook = new NotebookPanel(page)
+  await test.step('Review the new dashboard notebook', async () => {
+    await expectNotebookOpen(notebook)
+    await page.waitForTimeout(5_500) // Deliberate capture hold for narration.
+  })
 
-  await page.getByRole('button', { name: 'Create empty dashboard' }).click()
-  await expect(page.getByText('Dashboard notebook')).toBeVisible()
-  await expect(page.getByLabel('Rename dashboard')).toHaveValue('Untitled Dashboard')
-  await page.waitForTimeout(5_500)
-
-  await page.getByRole('button', { name: 'New note' }).click()
-  const noteItem = page.locator('.notebook-note-item').filter({ hasText: 'New Note' })
-  await expect(noteItem).toBeVisible()
-  await page.waitForTimeout(1_500)
-  await noteItem.click()
-
-  const noteTitle = page.locator('input.notebook-title')
-  await expect(noteTitle).toHaveValue('New Note')
-  await noteTitle.fill('Analysis note')
-  await expect(noteTitle).toHaveValue('Analysis note')
-  await page.waitForTimeout(4_500)
+  await test.step('Add and rename a notebook note', async () => {
+    const note = await notebook.createNote()
+    await page.waitForTimeout(1_500) // Hold on the new note before selecting it.
+    await note.click()
+    await expectSelectedNoteTitle(notebook, 'New Note')
+    await notebook.renameSelectedNote('Analysis note')
+    await expectSelectedNoteTitle(notebook, 'Analysis note')
+    await page.waitForTimeout(4_500) // Hold on the completed note for the closing narration.
+  })
 })

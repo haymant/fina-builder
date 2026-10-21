@@ -190,6 +190,9 @@ npm run build          # type-check + production frontend bundle
 npm run lint           # oxlint
 npm run test:run       # Vitest frontend unit/integration suite
 npm run test:e2e       # Playwright browser E2E (starts an isolated Vite server)
+npm run test:e2e:smoke # tagged high-value smoke subset
+npm run test:e2e:demo  # records tests tagged @demo (forward --grep to pick one journey)
+npm run test:e2e -- --grep @feature-notebook # feature subset
 npm run test:coverage  # Vitest coverage
 npm run smoke          # live e2e: MCP handshake + a tool call against the running engines
                        #   (--web goes through the Vite proxy and checks the page HTML)
@@ -253,6 +256,8 @@ Notes:
 | --- | --- |
 | `npm run test:run` | Vitest frontend unit/integration suite: riga/tac tile rendering, the instrument store, the golden transcript, stores |
 | `npm run test:e2e` | Playwright Chromium browser flows; auto-starts Vite and does not require live engines |
+| `npm run test:e2e:smoke` / `npm run test:e2e -- --grep @journey-dashboard-setup` | Playwright `@smoke`, user-journey, and feature slices; see [test taxonomy](./playwright/README.md) |
+| `npm run test:e2e:demo -- --grep @demo-dashboard-note` | Records the selected tagged Playwright demo flow for narration |
 | `cargo test --workspace` | The Tauri shell (MCP client + engine resolution) |
 | `cargo test --manifest-path modules/riga-flow/Cargo.toml -p riga-engine -p riga-mcp` | The engine's own unit + tool-surface tests (the submodule's CI covers these too) |
 | `npm run smoke [-- --web]` | Live end-to-end: handshakes `riga-mcp` + `tac-engine` (directly or through the Vite proxy) and calls `price_put` |

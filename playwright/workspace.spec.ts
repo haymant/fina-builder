@@ -1,95 +1,82 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures/test'
+import {
+  expectEmptyDashboard,
+  expectNotebookOpen,
+  expectSelectedNoteTitle,
+  expectWorkspaceReady,
+} from './assertions/workspace.assertions'
+import { TAG } from './support/tags'
 
-const seededWorkspace = {
-  dashboards: [{ id: 'playwright-dashboard', name: 'Playwright Dashboard', layout: [] }],
-  selectedDashboardId: 'playwright-dashboard',
-  theme: 'dark',
-}
+const { journey, feature } = TAG
 
-test.beforeEach(async ({ page }) => {
-  await page.addInitScript((state) => {
-    if (sessionStorage.getItem('__playwright_seeded') !== '1') {
-      localStorage.clear()
-      localStorage.setItem('fina-workspace', JSON.stringify(state))
-      sessionStorage.setItem('__playwright_seeded', '1')
-    }
-  }, seededWorkspace)
-
-  // Browser-flow tests exercise UI behavior, not engine availability or market data.
-  await page.route('**/riga/mcp**', (route) => route.abort())
-  await page.route('**/tac/mcp**', (route) => route.abort())
-  await page.goto('/')
+test('renders the workspace shell and selected dashboard', {
+  tag: [TAG.smoke, journey.dashboardReview, feature.workspace],
+}, async ({ workspace }) => {
+  await expectWorkspaceReady(workspace)
+  await expectEmptyDashboard(workspace, 'Playwright Dashboard')
+  await expect(workspace.notebookToggle).toBeVisible()
 })
 
-test('renders the workspace shell and selected dashboard', async ({ page }) => {
-  await expect(page.getByRole('heading', { name: 'Structured Product Explorer' })).toBeVisible()
-  await expect(page.getByLabel('Rename dashboard')).toHaveValue('Playwright Dashboard')
-  await expect(page.getByRole('heading', { name: 'Start building your dashboard' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Add tile' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Notebook' })).toBeVisible()
-})
+test('creates a blank dashboard and restores it after reload', {
+  tag: [TAG.smoke, journey.dashboardSetup, feature.dashboards, feature.templates],
+}, async ({ page, workspace }) => {
+  const templates = await workspace.openTemplates()
+  await expect(templates.heading).toBeVisible()
+  await templates.createBlankDashboard()
 
-test('creates a blank dashboard and restores it after reload', async ({ page }) => {
-  await page.getByRole('button', { name: 'New dashboard' }).click()
-  await expect(page.getByRole('heading', { name: 'Create Dashboard' })).toBeVisible()
-  await page.getByRole('button', { name: 'Create empty dashboard' }).click()
-
-  const dashboardName = page.getByLabel('Rename dashboard')
-  await expect(dashboardName).toHaveValue('Untitled Dashboard')
-  await expect(page.getByRole('heading', { name: 'Start building your dashboard' })).toBeVisible()
-
+  await expectEmptyDashboard(workspace, 'Untitled Dashboard')
   await page.reload()
-  await expect(page.getByLabel('Rename dashboard')).toHaveValue('Untitled Dashboard')
-  await expect(page.getByRole('heading', { name: 'Start building your dashboard' })).toBeVisible()
+  await expectEmptyDashboard(workspace, 'Untitled Dashboard')
 })
 
-test('filters templates and creates the matching dashboard', async ({ page }) => {
-  await page.getByRole('button', { name: 'New dashboard' }).click()
-  await page.getByPlaceholder('Search templates').fill('Trade Structuring Workspace')
+test('filters templates and creates the matching dashboard', {
+  tag: [journey.dashboardSetup, feature.dashboards, feature.templates],
+}, async ({ page, workspace }) => {
+  const templates = await workspace.openTemplates()
+  await templates.search('Trade Structuring Workspace')
 
   await expect(page.getByRole('heading', { name: 'Trade Structuring Workspace' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Trader Workspace' })).toHaveCount(0)
+  await templates.createDashboardFromTemplate('Trade Structuring Workspace')
 
-  const template = page.locator('.template-card').filter({
-    has: page.getByRole('heading', { name: 'Trade Structuring Workspace' }),
-  })
-  await template.getByRole('button', { name: 'Create dashboard' }).click()
-  await expect(page.getByLabel('Rename dashboard')).toHaveValue('Trade Structuring Workspace')
+  await expect(workspace.dashboardName).toHaveValue('Trade Structuring Workspace')
   await expect(page.getByText('Dashboard notebook')).toBeVisible()
 })
 
-test('adds a visualization from the tile library', async ({ page }) => {
-  await page.getByRole('button', { name: 'Add tile' }).click()
-  await expect(page.getByRole('heading', { name: 'Add visualization' })).toBeVisible()
-  await page.getByPlaceholder('Search tiles...').fill('Payoff Petri Net')
-  await page
-    .locator('.gallery-item')
-    .filter({ has: page.getByText('Payoff Petri Net', { exact: true }) })
-    .click()
+test('adds an engine-backed visualization shell', {
+  tag: [journey.visualizationAdd, feature.visualizations, TAG.dependency.riga],
+}, async ({ page, workspace }) => {
+  const gallery = await workspace.openTileGallery()
+  await expect(gallery.heading).toBeVisible()
+  await gallery.search('Payoff Petri Net')
+  await gallery.addTile('Payoff Petri Net')
 
   await expect(page.getByRole('heading', { name: 'Payoff Petri Net' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Start building your dashboard' })).toHaveCount(0)
+  await expect(workspace.emptyDashboardMessage).toHaveCount(0)
+  // This suite aborts the RIGA endpoint; this asserts UI insertion, not engine calculation.
+  await expect(page.getByText(/could not reach MCP server|Failed to fetch/i)).toBeVisible()
 })
 
-test('creates and edits a notebook note', async ({ page }) => {
-  await page.getByRole('button', { name: 'Notebook' }).click()
-  await expect(page.getByText('Dashboard notebook')).toBeVisible()
+test('creates and edits a notebook note', {
+  tag: [journey.notebookCapture, feature.notebook],
+}, async ({ page, workspace }) => {
+  const notebook = await workspace.openNotebook()
+  await expectNotebookOpen(notebook)
   await expect(page.getByRole('heading', { name: '2. Notes' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'New note' }).click()
-  const noteItem = page.locator('.notebook-note-item').filter({ hasText: 'New Note' })
-  await expect(noteItem).toBeVisible()
-  await noteItem.click()
+  const note = await notebook.createNote()
+  await note.click()
+  await expectSelectedNoteTitle(notebook, 'New Note')
+  await notebook.renameSelectedNote('Playwright finding')
+  await expectSelectedNoteTitle(notebook, 'Playwright finding')
 
-  const title = page.locator('input.notebook-title')
-  await expect(title).toHaveValue('New Note')
-  await title.fill('Playwright finding')
-  await expect(title).toHaveValue('Playwright finding')
   await page.getByRole('button', { name: 'Collapse notebook' }).click()
-  await expect(page.getByText('Dashboard notebook')).toHaveCount(0)
+  await expect(notebook.heading).toHaveCount(0)
 })
 
-test('persists the selected theme after reload', async ({ page }) => {
+test('persists the selected theme after reload', {
+  tag: [journey.preferences, feature.theme],
+}, async ({ page, workspace }) => {
   const savedTheme = () => page.evaluate(() => {
     const saved = JSON.parse(localStorage.getItem('fina-workspace') ?? '{}') as { theme?: string }
     return saved.theme
@@ -99,5 +86,6 @@ test('persists the selected theme after reload', async ({ page }) => {
   await page.getByRole('button', { name: 'Toggle theme' }).click()
   await expect.poll(savedTheme).toBe('light')
   await page.reload()
+  await expectWorkspaceReady(workspace)
   await expect.poll(savedTheme).toBe('light')
 })

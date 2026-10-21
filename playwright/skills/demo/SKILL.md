@@ -1,35 +1,35 @@
 ---
 name: fina-playwright-demo
-description: Run fina-builder Playwright browser tests and turn a selected successful test flow into a reviewed, narrated demo video. Use when asked to screen-record browser automation, add time-aligned narration, mix/export a walkthrough, or prepare a YouTube upload.
+description: Select classified fina-builder Playwright journeys, capture a successful tagged flow, and produce a reviewed, time-synchronized narrated demo. Use for browser-test screen recordings, narrated walkthroughs, MP4 export, or YouTube preparation.
 ---
 
 # Fina Playwright Demo
 
-## Reliable workflow
+## Select a user journey
 
-1. Read `playwright/README.md`, `playwright.config.ts`, and the selected spec. Keep credentials, private account data, and unrelated desktop content out of recordings.
-2. Install the browser and Playwright's recording helper when needed, then run a successful deterministic flow:
+1. Read `playwright/README.md`, `playwright/support/tags.ts`, `playwright/support/workspaceState.ts`, `playwright.config.ts`, and the relevant spec. Choose one deterministic test tagged `@demo` plus a specific `@demo-*` classification. Use native `tag` metadata, not filename matching. Prefer a focused user journey/feature slice over recording the entire suite.
+2. Run only the selected flow and confirm it passes:
 
    ```bash
-   npx playwright install chromium
-   npx playwright install ffmpeg
-   PLAYWRIGHT_VIDEO=on npm run test:e2e -- --grep "narrated demo: create a dashboard note"
+   npm run test:e2e:demo -- --grep @demo-dashboard-note
    ```
 
-   `--video=on` is not a supported Playwright CLI option in this project; the config reads `PLAYWRIGHT_VIDEO=on`. Recording requires Playwright's FFmpeg helper, not just Chromium. The config explicitly sets video size to 1280×720; without a video size, Playwright recorded 800×450 despite the 1280×720 page viewport. If using a system Chromium, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to its executable path. Successful test videos appear under `playwright/test-results/`.
-3. Prefer `playwright/demo.spec.ts` for a narrated walkthrough. It creates a blank dashboard and renames a notebook note using only local UI state, with deliberate holds at each screen. The E2E suite aborts `/riga/mcp` and `/tac/mcp`; a tile that depends on RIGA can therefore show “Failed to fetch” even when the UI test itself passes. Do not use such a capture as a polished demo. If the requested demo needs an engine-backed tile, first start and verify that backend; never hide or fabricate an error state. Keep gallery locators specific to the exact title because accessible names can also match descriptions.
-4. Confirm the test passed, then inspect the actual video before writing narration. Check the opening, every major UI transition, and final state. Use the recorded duration and visible event times; do not infer timing from the test source alone.
-5. Draft narration that describes only visible actions. For synthetic speech, read `/home/ubuntu/skills/tts-prompter/SKILL.md` before calling `generate_speech`. Keep each `turns[].text` verbatim and separate from style. Split into sentence-sized clips when each thought needs its own cue point; use the same supported voice and language for all clips. Never clone, design, or imitate a real person's identifiable voice. A supplied voice sample may inform non-identity details such as pronunciation or pacing only; an authorized complete recording may be used as recorded, not extended in that voice.
-6. Measure every narration clip and the screen recording with `ffprobe` (or WAV frame counts). Place clips at the corresponding UI states and leave a short natural pause between them. For repeatable timing, the demo spec's intentional waits are part of the recording design; if those waits change, capture again and recalculate the cues.
-7. Use a two-stage audio/video export:
-   - First make an audio-only master WAV: delay each narration clip with `adelay=<milliseconds>:all=1`, combine clips with `amix`, and add the intended ending silence with `apad`. Verify the master duration and transcribe it.
-   - Then mux the screen WebM and master WAV in a separate FFmpeg command. Map the video and audio streams explicitly, set the target duration, and encode H.264 video plus AAC audio for a broadly playable MP4.
+   The runner sets `PLAYWRIGHT_VIDEO=on`. The config sets 1280×720; preserve that explicit video size. Install both browser and recording dependency if absent: `npx playwright install chromium` and `npx playwright install ffmpeg`. When using system Chromium, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE`. Do not pass `--video=on`: it is unsupported; the project uses the environment switch. The capture appears under `playwright/test-results/`.
+3. Inspect the captured video at the opening, each important state transition, and the end. Read the test's `test.step` names as the user-journey outline, but confirm actual video timing and state before drafting speech. Demo `waitForTimeout` calls are deliberate narration holds; ordinary tests should not add fixed sleeps.
+4. Check dependency tags and route policy. The shared UI fixture stubs `/riga/mcp` and `/tac/mcp` by default; integration scopes can opt out with `test.use({ stubEngines: false })`. A passing shell test may still show an engine connection error. Do not present that as a successful feature demo or hide the error. Choose a backend-independent journey, or provision and verify the required service before recording an engine-dependent flow.
 
-   Avoid mixing multiple delayed audio inputs directly in the same complex filter graph as the video while also using `-shortest`. That attempted approach produced a backward-timestamp warning and an invalid, tiny audio-only MP4. The separate master-WAV-then-mux sequence worked reliably.
-8. Verify the finished MP4 with `ffprobe`: require both video and audio streams, expected dimensions, codecs, and duration. Run `manus-speech-to-text` on the final file to check the spoken lines, and use `manus-analyze-video` or frame sampling to confirm narration/action synchronization and absence of visible errors. Listen to the complete mix where possible; correct clipping, abrupt cuts, wrong pronunciation, or mismatched narration before delivery.
-9. Keep raw WebM, intermediate WAVs, and analysis files in ignored working folders; provide the final MP4 download link rather than attaching intermediates. Do not add music unless requested.
-10. For YouTube, first check for an authorized connector or authenticated browser. Before uploading, show the exact file, title, description, channel, visibility, and thumbnail choice, and obtain explicit confirmation for that exact upload. Verify the final URL and visibility; never claim an upload succeeded without them.
+## Create narration and export
 
-## Current demo cue reference
+5. Draft narration only for visible, successful actions. For generated speech, read `/home/ubuntu/skills/tts-prompter/SKILL.md` before calling `generate_speech`; keep spoken text verbatim in `turns[].text`, style separate, and use one supported voice consistently. Do not clone or imitate a real person's identifiable voice. A sample may inform non-identity traits only; an authorized complete recording may be used as-is, not extended in that voice.
+6. Create one short audio clip per cue when timing matters. Measure the video and every WAV with `ffprobe` or WAV frame counts. Align clips to the actual UI state/action timestamps with short natural pauses. If the flow, test holds, or script changes, record again and recalculate cue times.
+7. Use a two-stage FFmpeg export:
+   - Build an audio-only master WAV: delay each voice clip with `adelay=<milliseconds>:all=1`, combine using `amix`, pad the intended tail with `apad`, and verify its duration/transcript.
+   - In a separate command, mux the WebM and WAV using explicit stream maps and target duration; encode H.264 video and AAC audio in MP4.
 
-The tested `playwright/demo.spec.ts` is a short frontend-only example: empty dashboard → blank-dashboard template → dashboard notebook → new note renamed “Analysis note.” Its narration cues were placed around the corresponding states, then checked against the final video transcript and visual timeline. Treat those cue times as a starting point only; remeasure after changing app behavior, test waits, or the narration.
+   Do not combine several independently delayed narration inputs directly into the video mux while also using `-shortest`. This caused backward timestamps and a tiny invalid audio-only MP4. Creating and validating the WAV master first avoided the issue.
+8. Validate the final MP4 with `ffprobe` for both streams, codecs, 1280×720 dimensions (or requested dimensions), and expected duration. Run `manus-speech-to-text` on the MP4 to verify every line and ordering. Use `manus-analyze-video` or timestamped frame checks to verify speech/action sync and check for errors; listen through the complete mix for clipping, abrupt cutoffs, bad pronunciation, and level balance. Fix defects before delivery.
+9. Keep WebM, narration clips, WAV master, transcripts, and analysis reports in ignored folders. Attach the final MP4 only; avoid delivering embedded intermediate assets separately. Do not add music unless requested. The classification runner records screen video only; narration synthesis and MP4 assembly remain explicit workflow steps.
+
+## YouTube
+
+10. Check for an authorized publishing connector or authenticated browser. Before upload, show the exact file, title, description, target channel, visibility, and thumbnail choice, and get confirmation for that exact upload. Verify the final URL and visibility. If no publishing route is authorized, deliver the downloadable MP4 and say it was not uploaded.
