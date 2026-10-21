@@ -89,3 +89,23 @@ textarea.tr-input { height: auto; padding: 6px 8px; }
 .tr-document { width: 100%; max-width: none; flex: 1 1 auto; box-shadow: none; }
 .tr-dirty { font-size: 11px; font-weight: 500; color: var(--theme-warning, #f59e0b); }
 .tr-menu-item { display: block; width: 100%; padding: 5px 10px; text-align: left; font-size: 12px; white-space: nowrap; border-radius: 5px; color: var(--theme-text); } .tr-menu-item:hover { background: color-mix(in oklab, var(--theme-primary) 12%, transparent); }
+
+/* Template-driven capture, term sheet, observation timeline (docs/53 §P) */
+.tr-capture { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; }
+.tr-preview { border-left: 1px solid var(--theme-grid); padding-left: 12px; max-height: 62vh; overflow: auto; font-size: 11px; }
+.tr-suffix { display: flex; align-items: center; gap: 4px; } .tr-suffix span { font-size: 11px; color: var(--theme-muted); }
+.tr-field-wide { grid-column: 1 / -1; }
+.tr-field-check { flex-direction: row; align-items: center; gap: 8px; }
+.tr-array .tr-table td { padding: 2px 4px; } .tr-array .tr-input { min-width: 70px; }
+.tr-map { display: grid; gap: 6px; }
+.tr-invalid { border-color: var(--theme-danger, #ef4444) !important; }
+.tr-chart { width: 100%; height: auto; background: color-mix(in oklab, var(--theme-panel) 92%, var(--theme-primary)); border-radius: 8px; }
+.tr-grid-line { stroke: var(--theme-grid); stroke-width: 1; }
+.tr-axis { fill: var(--theme-muted); font-size: 10px; }
+.tr-dot-paid { fill: var(--theme-success, #22c55e); } .tr-dot-miss { fill: var(--theme-warning, #f59e0b); }
+.tr-dot-call { fill: var(--theme-primary); stroke: var(--theme-text); stroke-width: 2; } .tr-dot-pending { fill: var(--theme-muted); }
+.tr-legend { display: inline-block; width: 14px; height: 3px; margin-right: 4px; vertical-align: middle; }
+.tr-termsheet { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.tr-termsheet section { border: 1px solid var(--theme-grid); border-radius: 8px; padding: 10px 12px; }
+.tr-termsheet h3 { margin-bottom: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--theme-muted); }
+.tr-document .tr-termsheet { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }

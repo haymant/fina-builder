@@ -5,7 +5,7 @@ import { tradeRepo, TradeRepoApiError } from '../api'
 import type { ImportResult } from '../types'
 import { Badge, gridTheme } from './common'
 
-export const IMPORT_TEMPLATE = 'productType,side,notional,currency,underlying,fixedRate,price,strike,optionType,tradeDate,maturityDate,counterpartyId,bookId,trader,externalId'
+export const IMPORT_TEMPLATE = 'productType,side,notional,currency,tradeDate,counterpartyId,bookId,trader,externalId,terms.isin,terms.underlyings[0].symbol,terms.underlyings[0].initialFixing,terms.underlyings[1].symbol,terms.underlyings[1].initialFixing,terms.strikeDate,terms.frequency,terms.numObservations,terms.coupon.ratePerPeriod,terms.coupon.barrier,terms.coupon.memory,terms.autocall.stepDown,terms.knockIn.barrier,terms.knockIn.observation'
 
 export function ImportView({ canWrite, onImported }: { canWrite: boolean; onImported: (msg: string) => void }) {
   const [csv, setCsv] = useState('')

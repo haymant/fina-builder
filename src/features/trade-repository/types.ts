@@ -1,22 +1,22 @@
-export type ProductType = 'IRS' | 'FX_FORWARD' | 'EQUITY_OPTION' | 'CDS' | 'PHOENIX_AUTOCALL'
-export type TradeStatus = 'LIVE' | 'CANCELLED' | 'TERMINATED' | 'EXERCISED' | 'MATURED' | 'NOVATED'
-export type LifecycleEvent = 'CANCEL' | 'NOVATE' | 'PARTIAL_TERMINATE' | 'EXERCISE' | 'MATURE' | 'BOOK_TRANSFER'
+/** Product template id (data-driven; PHOENIX_AUTOCALL is the first). */
+export type ProductType = string
+export type TradeStatus = string
+export type LifecycleEvent = string
 export type Role = 'viewer' | 'trader' | 'ops' | 'admin'
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type Terms = Record<string, any>
 
 export interface TradeInput {
   productType: ProductType
+  productTemplate?: { id: string; version: number }
   side: 'BUY' | 'SELL'
   notional: number
   currency: string
   underlying?: string
-  price?: number
-  fixedRate?: number
-  strike?: number
-  optionType?: 'CALL' | 'PUT'
-  quantity?: number
   tradeDate: string
   effectiveDate?: string
-  maturityDate: string
+  maturityDate?: string
   counterpartyId: string
   bookId: string
   trader?: string
@@ -24,6 +24,7 @@ export interface TradeInput {
   externalId?: string
   comment?: string
   tags?: Record<string, string>
+  terms?: Terms
 }
 
 export interface Trade extends TradeInput {
@@ -37,13 +38,66 @@ export interface Trade extends TradeInput {
   validFrom: string
   recordedAt: string
   contentHash: string
+  maturityDate: string
   originalNotional?: number
   terminatedNotional?: number
   novatedTo?: string
+  productTemplate: { id: string; version: number }
+  terms: Terms
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  productState: Record<string, any>
+  display?: Record<string, unknown>
 }
 
+/** fina.product-template/v1 field descriptor (terms and event params). */
+export interface FieldDef {
+  path: string
+  label?: string
+  type: 'string' | 'number' | 'integer' | 'percent' | 'boolean' | 'date' | 'enum' | 'ref' | 'array' | 'map'
+  required?: boolean
+  default?: unknown
+  values?: string[]
+  ref?: 'party' | 'book'
+  min?: number
+  max?: number
+  help?: string
+  items?: FieldDef[]
+  minItems?: number
+  maxItems?: number
+  keys?: string[]
+}
+export interface ProductTemplate {
+  id: string
+  version: number
+  name: string
+  description?: string
+  kernel?: { defaults?: Record<string, unknown>; sideLabels?: Record<string, string> }
+  terms: { fields: FieldDef[] }
+  lifecycle: { initialStatus: string; statuses: Record<string, { terminal?: boolean }>; events: Record<string, { label?: string; derived?: boolean; kernel?: boolean }> }
+  pricing?: { engine: string; tool: string; payoff: string; dashboard?: string }
+  ui?: { form?: { id: string; title: string; fields: string[] }[]; widgets?: string[]; blotterColumns?: { field: string; header: string; width?: number }[] }
+}
+export interface ProductSummary { id: string; version: number; name: string; status: string; description: string | null }
+export interface TermSheetSection { title: string; rows: (string | number)[][]; columns?: string[] }
+export interface TermSheet { tradeId: string; version: number; sections: TermSheetSection[]; widgets: string[] }
+export interface ScheduleRow {
+  n: number; observationDate: string; paymentDate: string; autocallLevel: number | null; couponBarrier: number | null; couponRate: number
+  fixing: { worst: number; worstSymbol: string; levels: Record<string, number>; performances: Record<string, number> } | null
+  coupon: { paid: boolean; amount: number; periods: number; memoryCatchUp: number } | null
+  autocalled: boolean; status: 'FIXED' | 'PENDING' | 'NOT_REACHED'
+}
+export interface Schedule {
+  tradeId: string; version: number; status: string
+  knockIn: { barrier: number | null; observation: string | null; knockedIn: boolean; date: string | null; worst: number | null }
+  underlyings: { symbol: string; name?: string; initialFixing: number }[]
+  rows: ScheduleRow[]; monitor: { date: string; worst: number }[]; corporateActions: Record<string, unknown>[]
+  redemption: { amount: number; pct: number; paymentDate: string; capitalLoss?: boolean; reason?: string } | null
+}
+export interface EventDef { name: string; label: string; derived: boolean; kernel: boolean; effectiveDateDerived: boolean; allowed: boolean; roles: string[] | null; requiresReason: boolean; params: FieldDef[] }
+export interface PricingBinding { engine: string; tool: string; payoff: string; dashboard: string | null; applicable: boolean; request: Record<string, unknown>; notes: string[] }
+
 export interface FieldIssue { code: string; path: string; message: string }
-export interface Validation { valid: boolean; errors: FieldIssue[]; warnings: FieldIssue[] }
+export interface Validation { valid: boolean; errors: FieldIssue[]; warnings: FieldIssue[]; preview?: { maturityDate: string | null; underlying: string | null; effectiveDate: string | null; schedule: ScheduleRow[]; terms: Terms } | null }
 export interface Page<T> { items: T[]; total: number; nextCursor: string | null }
 export interface Change { field: string; before: unknown; after: unknown; economic: boolean }
 
@@ -62,6 +116,8 @@ export interface TradeEvent {
   notional: number
   status: TradeStatus
   related: Record<string, string> | null
+  detail?: Record<string, unknown> | null
+  causedBy?: string | null
 }
 
 export interface PositionRow { key: Record<string, string | null>; netNotional: number; grossNotional: number; longNotional: number; shortNotional: number; tradeCount: number; tradeIds: string[] }

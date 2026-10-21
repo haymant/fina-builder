@@ -4,7 +4,7 @@ import { fmtNotional, tradeRepo } from '../api'
 import type { AsOf, PositionRow } from '../types'
 import { EmptyState, ErrorState, Loading, gridTheme } from './common'
 
-const DIMS = [['bookId', 'Book'], ['productType', 'Product'], ['underlying', 'Underlying'], ['currency', 'Currency'], ['counterpartyId', 'Counterparty'], ['legalEntityId', 'Legal entity']] as const
+const DIMS = [['bookId', 'Book'], ['productType', 'Product'], ['underlying', 'Basket'], ['currency', 'Currency'], ['counterpartyId', 'Counterparty'], ['legalEntityId', 'Legal entity']] as const
 
 export function PositionsView({ asOf, refreshKey, onDrill }: { asOf: AsOf; refreshKey: number; onDrill: (tradeIds: string[]) => void }) {
   const [groupBy, setGroupBy] = useState<string[]>(['bookId', 'underlying', 'currency'])

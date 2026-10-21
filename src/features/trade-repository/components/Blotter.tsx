@@ -6,14 +6,18 @@ import { fmtNotional, tradeRepo } from '../api'
 import { deleteView, groupRows, loadViews, saveView, type BlotterView, type GroupRow } from '../savedViews'
 import type { AsOf, Page, Reference, Trade } from '../types'
 import { Badge, EmptyState, ErrorState, Loading, gridTheme } from './common'
+import { useProducts } from '../products'
 
-const STATUSES = ['LIVE', 'CANCELLED', 'MATURED', 'NOVATED', 'EXERCISED', 'TERMINATED']
-const PRODUCTS = ['IRS', 'FX_FORWARD', 'EQUITY_OPTION', 'CDS', 'PHOENIX_AUTOCALL']
-const GROUPABLE = [['bookId', 'Book'], ['productType', 'Product'], ['counterpartyId', 'Counterparty'], ['status', 'Status'], ['currency', 'Currency'], ['legalEntityId', 'Legal entity']]
+const GROUPABLE = [['bookId', 'Book'], ['underlying', 'Basket'], ['counterpartyId', 'Counterparty'], ['status', 'Status'], ['currency', 'Currency'], ['productType', 'Product'], ['legalEntityId', 'Legal entity']]
 
 export interface BlotterHandle { focusSearch: () => void; reload: () => void }
 
 export const Blotter = forwardRef<BlotterHandle, { reference: Reference; asOf: AsOf; refreshKey: number; selectedId: string | null; onSelect: (id: string) => void; onOpen?: (id: string) => void; onNew: () => void; canWrite: boolean }>(function Blotter({ asOf, refreshKey, selectedId, onSelect, onOpen, onNew, canWrite }, ref) {
+  const { items: productList, templates } = useProducts()
+  // Statuses and product columns come from the registered product templates (data-driven).
+  const STATUSES = useMemo(() => [...new Set(templates.flatMap((t) => Object.keys(t.lifecycle.statuses)))], [templates])
+  const PRODUCTS = productList.map((p) => p.id)
+  const productCols = useMemo(() => templates.flatMap((t) => t.ui?.blotterColumns ?? []).filter((c, i, a) => a.findIndex((x) => x.field === c.field) === i), [templates])
   const [views, setViews] = useState<BlotterView[]>(() => loadViews())
   const [viewId, setViewId] = useState('all')
   const view = views.find((v) => v.id === viewId) ?? views[0]!
@@ -81,10 +85,8 @@ export const Blotter = forwardRef<BlotterHandle, { reference: Reference; asOf: A
       { field: 'side', width: 70 },
       { field: 'notional', width: 110, type: 'numericColumn', valueFormatter: (p) => (p.value === undefined ? '' : fmtNotional(p.value as number)) },
       { field: 'currency', headerName: 'Ccy', width: 66 },
-      { field: 'underlying', width: 130 },
-      { field: 'fixedRate', headerName: 'Rate', width: 80, valueFormatter: (p) => (p.value === undefined || p.value === null ? '' : `${((p.value as number) * 100).toFixed(3)}%`) },
-      { field: 'strike', width: 76 },
-      { field: 'optionType', headerName: 'C/P', width: 66 },
+      { field: 'underlying', headerName: 'Underlying', width: 130 },
+      ...productCols.filter((c) => c.field !== 'underlyingLabel').map((c): ColDef => ({ colId: `p_${c.field.replace(/\W/g, '_')}`, field: `p_${c.field.replace(/\W/g, '_')}`, headerName: c.header, width: c.width ?? 110, valueGetter: (p) => (p.data as Trade)?.display?.[c.field] ?? '' })),
       { field: 'tradeDate', width: 104 },
       { field: 'maturityDate', headerName: 'Maturity', width: 104 },
       { field: 'counterpartyId', headerName: 'Counterparty', width: 110 },
@@ -95,7 +97,7 @@ export const Blotter = forwardRef<BlotterHandle, { reference: Reference; asOf: A
       { field: 'lastEventType', headerName: 'Last event', width: 120 },
     ]
     return cols.map((c) => ({ ...c, hide: hidden.includes(c.field!), sortable: true, resizable: true, filter: c.field === 'tradeId' ? false : true }))
-  }, [hidden])
+  }, [hidden, productCols])
 
   const data = useMemo(() => (rows ? groupRows(rows as unknown as Record<string, unknown>[], groupBy, expanded) : []), [rows, groupBy, expanded])
 

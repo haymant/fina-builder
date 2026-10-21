@@ -152,7 +152,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
       {location.kind === 'trades' ? (
         <main className="workspace-canvas relative flex min-h-0 flex-1 flex-col overflow-hidden p-4">
           <Suspense fallback={null}>
-            <TradeRepository view={location.view} onViewChange={goTrades} newTradeSignal={newTradeSignal} />
+            <TradeRepository view={location.view} onViewChange={goTrades} newTradeSignal={newTradeSignal} onOpenDashboard={(id) => navigate({ kind: 'dashboard', dashboardId: dashboards.some((d) => d.id === id) ? id : dashboards[0]!.id })} />
           </Suspense>
         </main>
       ) : (

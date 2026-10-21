@@ -2,7 +2,9 @@ import { ArrowLeftRight, BookOpenCheck, ChevronDown, Clock, FileUp, History, Key
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Toaster, toast } from 'sonner'
 import { tradeRepo } from '../api'
-import type { AsOf, LifecycleEvent, Reference, Role, Trade } from '../types'
+import type { AsOf, EventDef, PricingBinding, Reference, Role, Trade } from '../types'
+import { toInstrumentDocument } from '../pricing'
+import { useInstrumentStore } from '@/store/instrumentStore'
 import { AuditView } from './AuditView'
 import { Blotter, type BlotterHandle } from './Blotter'
 import { ErrorState, Loading, Modal } from './common'
@@ -31,7 +33,9 @@ const isTyping = (e: KeyboardEvent) => {
   return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)
 }
 
-export function TradeRepository({ view, onViewChange, newTradeSignal = 0 }: { view: View; onViewChange: (v: View) => void; newTradeSignal?: number }) {
+export function TradeRepository({ view, onViewChange, newTradeSignal = 0, onOpenDashboard }: { view: View; onViewChange: (v: View) => void; newTradeSignal?: number; onOpenDashboard?: (id: string) => void }) {
+  const applyDocument = useInstrumentStore((s) => s.applyDocument)
+  const currentDoc = useInstrumentStore((s) => s.document)
   const setView = onViewChange
   const [tabs, setTabsState] = useState<Tabs.TabsState>(() => Tabs.loadTabs())
   const setTabs = useCallback((f: (s: Tabs.TabsState) => Tabs.TabsState) => setTabsState((s) => { const n = f(s); Tabs.saveTabs(n); return n }), [])
@@ -50,7 +54,7 @@ export function TradeRepository({ view, onViewChange, newTradeSignal = 0 }: { vi
   const [userId, setUserId] = useState('trash.box')
   const [selected, setSelected] = useState<string | null>(null)
   const [form, setForm] = useState<{ trade?: Trade; tab?: string } | null>(null)
-  const [lifecycle, setLifecycle] = useState<{ trade: Trade; event: LifecycleEvent } | null>(null)
+  const [lifecycle, setLifecycle] = useState<{ trade: Trade; event: EventDef } | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const [timeTravel, setTimeTravel] = useState(false)
   const [validAt, setValidAt] = useState('')
@@ -73,6 +77,15 @@ export function TradeRepository({ view, onViewChange, newTradeSignal = 0 }: { vi
   const asOf = useMemo<AsOf>(() => (timeTravel ? { validAt: validAt || undefined, knownAt: knownAt ? new Date(knownAt).toISOString() : undefined } : {}), [timeTravel, validAt, knownAt])
   const bump = (msg?: string) => { setRefreshKey((k) => k + 1); if (msg) toast.success(msg) }
 
+  const priceTrade = async (t: Trade) => {
+    try {
+      const b = await tradeRepo.call<PricingBinding>('tr_trade_pricing', { tradeId: t.tradeId, version: t.version })
+      if (!b.applicable) { toast.error(`${t.tradeId}: not priceable by ${b.engine} (${b.notes[0] ?? 'see template binding'})`); return }
+      applyDocument(toInstrumentDocument(t, b, currentDoc ?? undefined))
+      toast.success(`${t.tradeId} loaded into Payoff Explorer (${b.engine} ${b.tool})`)
+      onOpenDashboard?.(b.dashboard ?? 'payoff-explorer')
+    } catch (e) { toast.error(String((e as Error).message ?? e)) }
+  }
   const openTrade = (id: string) => { setSelected(id); goHome(); setView('blotter') }
   useEffect(() => { if (newTradeSignal) { goHome(); setForm({}) } }, [newTradeSignal]) // eslint-disable-line react-hooks/exhaustive-deps
   // Amend from a document tab carries its draft; from the inspector a tab is opened to hold it.
@@ -171,7 +184,7 @@ export function TradeRepository({ view, onViewChange, newTradeSignal = 0 }: { vi
           <TradeDrawer key={activeTab.tradeId} mode="document" tradeId={activeTab.tradeId} version={activeTab.version} onVersion={(v) => setTabs((s) => Tabs.setVersion(s, activeTab.id, v))}
             onOpenTab={(v) => openTab(activeTab.tradeId, v)} hasDraft={!!activeTab.draft}
             asOf={activeTab.version ? {} : asOf} refreshKey={refreshKey} canWrite={canWrite && !timeTravel} onClose={() => requestClose(activeTab.id)}
-            onAmend={(t) => amend(t, activeTab.id)} onLifecycle={(t, e) => setLifecycle({ trade: t, event: e })} onOpenTrade={(id) => openTab(id)} />
+            onAmend={(t) => amend(t, activeTab.id)} onLifecycle={(t, e) => setLifecycle({ trade: t, event: e })} onOpenTrade={(id) => openTab(id)} onPrice={onOpenDashboard ? (t) => void priceTrade(t) : undefined} />
         ) : null}
         {activeTab ? null : view === 'blotter' ? <Blotter ref={blotterRef} reference={reference} asOf={asOf} refreshKey={refreshKey} selectedId={selected} onSelect={setSelected} onOpen={(id) => openTab(id)} onNew={() => setForm({})} canWrite={canWrite && !timeTravel} /> : null}
         {!activeTab && view === 'positions' ? <PositionsView asOf={asOf} refreshKey={refreshKey} onDrill={(ids) => { setDrilled(ids); setView('blotter'); setSelected(ids[0] ?? null) }} /> : null}
@@ -179,7 +192,7 @@ export function TradeRepository({ view, onViewChange, newTradeSignal = 0 }: { vi
         {!activeTab && view === 'audit' ? <AuditView refreshKey={refreshKey} onOpenTrade={openTrade} /> : null}
         {!activeTab && view === 'import' ? <ImportView canWrite={canWrite} onImported={(m) => bump(m)} /> : null}
         {selected && !activeTab && view === 'blotter' ? (
-          <TradeDrawer tradeId={selected} asOf={asOf} refreshKey={refreshKey} canWrite={canWrite && !timeTravel} onClose={() => setSelected(null)} onAmend={(t) => amend(t)} onLifecycle={(t, e) => setLifecycle({ trade: t, event: e })} onOpenTrade={setSelected} onOpenTab={(v) => openTab(selected, v)} hasDraft={!!tabs.tabs.find((x) => x.id === Tabs.tabId(selected))?.draft} />
+          <TradeDrawer tradeId={selected} asOf={asOf} refreshKey={refreshKey} canWrite={canWrite && !timeTravel} onClose={() => setSelected(null)} onAmend={(t) => amend(t)} onLifecycle={(t, e) => setLifecycle({ trade: t, event: e })} onOpenTrade={setSelected} onPrice={onOpenDashboard ? (t) => void priceTrade(t) : undefined} onOpenTab={(v) => openTab(selected, v)} hasDraft={!!tabs.tabs.find((x) => x.id === Tabs.tabId(selected))?.draft} />
         ) : null}
       </div>
       {form ? (() => {
@@ -193,7 +206,7 @@ export function TradeRepository({ view, onViewChange, newTradeSignal = 0 }: { vi
           }) : undefined}
           onClose={() => setForm(null)} onDone={(id, msg) => { setForm(null); setSelected(id); bump(msg) }} />
       })() : null}
-      {lifecycle ? <LifecycleDialog reference={reference} trade={lifecycle.trade} eventType={lifecycle.event} onClose={() => setLifecycle(null)} onDone={(msg) => { setLifecycle(null); bump(msg) }} /> : null}
+      {lifecycle ? <LifecycleDialog reference={reference} trade={lifecycle.trade} event={lifecycle.event} onClose={() => setLifecycle(null)} onDone={(msg) => { setLifecycle(null); bump(msg) }} /> : null}
       {help ? (
         <Modal testId="shortcuts-dialog" title="Keyboard shortcuts" eyebrow="Trade repository" onClose={() => setHelp(false)}>
           <table className="tr-table"><tbody>{SHORTCUTS.map(([k, d]) => <tr key={k}><td><kbd>{k}</kbd></td><td>{d}</td></tr>)}</tbody></table>

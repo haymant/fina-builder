@@ -303,7 +303,11 @@ export function createRepository({ reference, store, now = () => new Date().toIS
       const sc = { ...s, terms: s.terms ?? {}, productState: s.productState ?? {} }
       const hint = (ex) => { try { return evaluate(ex, sc) } catch { return null } }
       const params = (ev) => (ev.params ?? []).map((f) => ({ ...f, ...(f.keysFrom ? { keys: hint(f.keysFrom) } : {}), ...(f.optionsFrom ? { values: hint(f.optionsFrom), type: 'enum' } : {}), ...(f.defaultFrom ? { default: hint(f.defaultFrom) } : {}) }))
-      return { tradeId: s.tradeId, status: s.status, events: Object.entries(tpl.lifecycle.events).map(([name, ev]) => ({ name, label: ev.label ?? name, derived: !!ev.derived, kernel: !!ev.kernel, allowed: allowed.includes(name) && (!ev.roles || ev.roles.includes(ctx?.role ?? 'viewer')) && (ctx?.role ?? 'viewer') !== 'viewer', roles: ev.roles ?? null, requiresReason: !!ev.requiresReason, params: params(ev) })) }
+      const KERNEL_PARAMS = {
+        BOOK_TRANSFER: { label: 'Book transfer', params: [{ path: 'toBookId', label: 'Destination book', type: 'enum', required: true, values: ref.books.map((b) => b.bookId).filter((b) => b !== s.bookId) }] },
+        NOVATE: { label: 'Novate to new counterparty', params: [{ path: 'transfereeId', label: 'Transferee', type: 'enum', required: true, values: ref.parties.filter((p) => p.kind === 'COUNTERPARTY' && p.partyId !== s.counterpartyId).map((p) => p.partyId) }] },
+      }
+      return { tradeId: s.tradeId, status: s.status, events: Object.entries(tpl.lifecycle.events).map(([name, ev0]) => [name, ev0.kernel ? { ...ev0, ...KERNEL_PARAMS[name] } : ev0]).map(([name, ev]) => ({ name, label: ev.label ?? name, derived: !!ev.derived, kernel: !!ev.kernel, effectiveDateDerived: !!ev.effectiveDate, allowed: allowed.includes(name) && (!ev.roles || ev.roles.includes(ctx?.role ?? 'viewer')) && (ctx?.role ?? 'viewer') !== 'viewer', roles: ev.roles ?? null, requiresReason: !!ev.requiresReason, params: params(ev) })) }
     },
 
     book(ctx, { trade, idempotencyKey, dryRun, validFrom }, internal = {}) {

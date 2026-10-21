@@ -14,7 +14,7 @@ export const BUILTIN_VIEWS: BlotterView[] = [
   { id: 'all', name: 'All trades', builtin: true, filter: {}, hiddenColumns: [], groupBy: null },
   { id: 'live', name: 'Live only', builtin: true, filter: { statuses: ['LIVE'] }, hiddenColumns: [], groupBy: null },
   { id: 'by-book', name: 'Live by book', builtin: true, filter: { statuses: ['LIVE'] }, hiddenColumns: ['legalEntityId'], groupBy: 'bookId' },
-  { id: 'rates', name: 'Rates desk', builtin: true, filter: { productTypes: ['IRS'] }, hiddenColumns: ['strike', 'optionType'], groupBy: null },
+  { id: 'redeemed', name: 'Autocalled & matured', builtin: true, filter: { statuses: ['AUTOCALLED', 'MATURED'] }, hiddenColumns: ['uti'], groupBy: 'status' },
 ]
 
 export function loadViews(storage: Pick<Storage, 'getItem'> = localStorage): BlotterView[] {

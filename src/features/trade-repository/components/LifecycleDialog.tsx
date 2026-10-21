@@ -1,33 +1,39 @@
+// Generic lifecycle event dialog: the parameter form, guards and effects all come from the
+// product template (tr_trade_events). Derived consequences come back as separate events.
 import { useState } from 'react'
-import { newIdempotencyKey, tradeRepo, TradeRepoApiError, fmtNotional } from '../api'
-import type { LifecycleEvent, Reference, Trade } from '../types'
+import { fmtNotional, newIdempotencyKey, tradeRepo, TradeRepoApiError } from '../api'
+import type { EventDef, Reference, Trade } from '../types'
 import { FieldErrors, Modal } from './common'
+import { TemplateFields } from './fields'
 
-const HELP: Record<LifecycleEvent, string> = {
-  CANCEL: 'Cancels the trade as booked in error. Terminal; the trade stays in history and the audit trail.',
-  NOVATE: 'Steps the trade out to a new counterparty: this trade becomes NOVATED and a linked new trade (new UTI) is booked with the transferee.',
-  PARTIAL_TERMINATE: 'Reduces the outstanding notional (unwind). Use Cancel for errors.',
-  EXERCISE: 'Exercises an option / early redemption right. Terminal.',
-  MATURE: 'Marks the trade as matured on or after its maturity date. Terminal.',
-  BOOK_TRANSFER: 'Moves the trade to another book (and possibly legal entity). Economics are unchanged.',
+export interface LifecycleOutcome { tradeId: string; version: number; novatedTo?: string; events: { eventId: string; eventType: string; version: number; detail?: Record<string, unknown> | null }[] }
+
+export function describeOutcome(out: LifecycleOutcome, ccy: string) {
+  const parts = out.events.map((e) => {
+    const d = (e.detail ?? {}) as Record<string, unknown>
+    if (e.eventType === 'COUPON') return d.paid ? `coupon paid ${fmtNotional(d.amount as number)} ${ccy}${(d.memoryCatchUp as number) > 0 ? ` (incl. ${d.memoryCatchUp} memory)` : ''}` : 'coupon missed'
+    if (e.eventType === 'FIXING') return `fixing #${d.n} worst-of ${Math.round((d.worst as number) * 1e4) / 100}%`
+    if (e.eventType === 'AUTOCALL') return `AUTOCALLED at ${Math.round((d.level as number) * 100)}%`
+    if (e.eventType === 'KNOCK_IN') return 'KNOCKED IN'
+    if (e.eventType === 'REDEMPTION') return `redeemed ${fmtNotional(d.amount as number)} ${ccy}`
+    return e.eventType.replace(/_/g, ' ').toLowerCase()
+  })
+  return `${out.tradeId}: ${parts.join(' → ')} · v${out.version}${out.novatedTo ? ` · new trade ${out.novatedTo}` : ''}`
 }
 
-export function LifecycleDialog({ trade, eventType, reference, onClose, onDone }: { trade: Trade; eventType: LifecycleEvent; reference: Reference; onClose: () => void; onDone: (msg: string) => void }) {
-  const [effectiveDate, setEffectiveDate] = useState(eventType === 'MATURE' ? trade.maturityDate : new Date().toISOString().slice(0, 10))
+export function LifecycleDialog({ trade, event, reference, onClose, onDone }: { trade: Trade; event: EventDef; reference: Reference; onClose: () => void; onDone: (msg: string, out: LifecycleOutcome) => void }) {
+  const [effectiveDate, setEffectiveDate] = useState(new Date().toISOString().slice(0, 10))
   const [reason, setReason] = useState('')
-  const [params, setParams] = useState<Record<string, string>>({})
+  const [params, setParams] = useState<Record<string, unknown>>(() => Object.fromEntries(event.params.filter((f) => f.default !== undefined && f.default !== null).map((f) => [f.path, f.default])))
   const [error, setError] = useState<TradeRepoApiError | null>(null)
   const [busy, setBusy] = useState(false)
   const [key] = useState(newIdempotencyKey)
-  const p = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setParams((x) => ({ ...x, [k]: e.target.value }))
   const submit = async () => {
     setBusy(true)
     setError(null)
     try {
-      const ps: Record<string, unknown> = { ...params }
-      if (ps.terminatedNotional) ps.terminatedNotional = Number(ps.terminatedNotional)
-      const out = await tradeRepo.call<{ tradeId: string; version: number; novatedTo?: string }>('tr_trade_lifecycle', { tradeId: trade.tradeId, eventType, expectedVersion: trade.version, effectiveDate, reason: reason || undefined, params: ps, idempotencyKey: key })
-      onDone(`${eventType.replace(/_/g, ' ').toLowerCase()} applied to ${out.tradeId} → v${out.version}${out.novatedTo ? ` · new trade ${out.novatedTo}` : ''}`)
+      const out = await tradeRepo.call<LifecycleOutcome>('tr_trade_lifecycle', { tradeId: trade.tradeId, eventType: event.name, expectedVersion: trade.version, effectiveDate: event.effectiveDateDerived ? undefined : effectiveDate, reason: reason || undefined, params, idempotencyKey: key })
+      onDone(describeOutcome(out, trade.currency), out)
     } catch (e) {
       setError(e as TradeRepoApiError)
     } finally {
@@ -35,32 +41,17 @@ export function LifecycleDialog({ trade, eventType, reference, onClose, onDone }
     }
   }
   const issues = error?.details ?? []
-  const title = eventType.replace(/_/g, ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase())
+  const danger = event.name === 'CANCEL'
   return (
-    <Modal testId="lifecycle-dialog" eyebrow={`${trade.tradeId} · v${trade.version} · ${trade.status}`} title={title} onClose={onClose}
-      footer={<><button type="button" className="add-tile-button" onClick={onClose}>Cancel</button><button type="button" data-testid="confirm-lifecycle" className={eventType === 'CANCEL' ? 'tr-danger' : 'tr-primary'} disabled={busy} onClick={submit}>{busy ? 'Applying…' : `Confirm ${title.toLowerCase()}`}</button></>}>
-      <p className="mb-3 text-xs text-muted">{HELP[eventType]}</p>
+    <Modal testId="lifecycle-dialog" eyebrow={`${trade.tradeId} · v${trade.version} · ${trade.status} · outstanding ${fmtNotional(trade.notional)} ${trade.currency}`} title={event.label} onClose={onClose}
+      footer={<><button type="button" className="add-tile-button" onClick={onClose}>Cancel</button><button type="button" data-testid="confirm-lifecycle" className={danger ? 'tr-danger' : 'tr-primary'} disabled={busy} onClick={submit}>{busy ? 'Applying…' : `Apply ${event.label.toLowerCase()}`}</button></>}>
       {error ? <div className="tr-alert" role="alert" data-testid="lifecycle-error">{error.code}: {error.message}</div> : null}
-      <div className="grid gap-3">
-        <label className="tr-field"><span>Effective date</span><input data-testid="l-effectiveDate" type="date" className="tr-input" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} /><FieldErrors issues={issues} path="effectiveDate" /></label>
-        {eventType === 'PARTIAL_TERMINATE' ? (
-          <label className="tr-field"><span>Notional to terminate (outstanding {fmtNotional(trade.notional)} {trade.currency})</span><input data-testid="l-terminatedNotional" type="number" className="tr-input" value={params.terminatedNotional ?? ''} onChange={p('terminatedNotional')} /><FieldErrors issues={issues} path="params.terminatedNotional" /></label>
-        ) : null}
-        {eventType === 'NOVATE' ? (
-          <label className="tr-field"><span>Transferee (new counterparty)</span>
-            <select data-testid="l-transfereeId" className="control-select w-full" value={params.transfereeId ?? ''} onChange={p('transfereeId')}>
-              <option value="">—</option>
-              {reference.parties.filter((x) => x.kind === 'COUNTERPARTY' && x.partyId !== trade.counterpartyId).map((x) => <option key={x.partyId} value={x.partyId}>{x.name}</option>)}
-            </select><FieldErrors issues={issues} path="params.transfereeId" /></label>
-        ) : null}
-        {eventType === 'BOOK_TRANSFER' ? (
-          <label className="tr-field"><span>Destination book</span>
-            <select data-testid="l-toBookId" className="control-select w-full" value={params.toBookId ?? ''} onChange={p('toBookId')}>
-              <option value="">—</option>
-              {reference.books.filter((b) => b.bookId !== trade.bookId).map((b) => <option key={b.bookId} value={b.bookId}>{b.bookId} — {b.name}</option>)}
-            </select><FieldErrors issues={issues} path="params.toBookId" /></label>
-        ) : null}
-        <label className="tr-field"><span>Reason {eventType === 'CANCEL' ? '(required)' : '(recommended)'}</span><input data-testid="l-reason" className="tr-input" value={reason} onChange={(e) => setReason(e.target.value)} /><FieldErrors issues={issues} path="reason" /></label>
+      <div className="grid gap-3" data-testid={`event-form-${event.name}`}>
+        {event.effectiveDateDerived ? <p className="text-[11px] text-muted">Effective date comes from the product schedule / parameters.</p> : (
+          <label className="tr-field"><span>Effective date</span><input data-testid="l-effectiveDate" type="date" className="tr-input" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} /><FieldErrors issues={issues} path="effectiveDate" /></label>
+        )}
+        <TemplateFields fields={event.params} value={params} onChange={setParams} issues={issues} base="params" tid="p" reference={reference} />
+        <label className="tr-field"><span>Reason {event.requiresReason ? '(required)' : '(recommended)'}</span><input data-testid="l-reason" className="tr-input" value={reason} onChange={(e) => setReason(e.target.value)} /><FieldErrors issues={issues} path="reason" /></label>
       </div>
     </Modal>
   )
