@@ -3,7 +3,7 @@ import type { WorkspacePage } from '../pages/WorkspacePage'
 import type { NotebookPanel } from '../components/NotebookPanel'
 
 export async function expectWorkspaceReady(workspace: WorkspacePage): Promise<void> {
-  await expect(workspace.heading).toBeVisible()
+  await expect(workspace.menubar).toBeVisible()
   await expect(workspace.dashboardName).toBeVisible()
   await expect(workspace.addTileButton).toBeVisible()
 }

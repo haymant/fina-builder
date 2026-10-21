@@ -42,6 +42,7 @@ lcov.info
 playwright/test-results/
 playwright/playwright-report/
 playwright/recordings/
+playwright/.data/
 
 # Local environment / secrets — never commit
 .env
@@ -57,3 +58,6 @@ playwright/recordings/
 
 # trade repository local store
 .trade-repo/
+
+# Local SQLite store created by `npm run mcp:http:trade-repo`
+book.db*

@@ -1,9 +1,11 @@
 import { test as base, expect } from '@playwright/test'
 import { WorkspacePage } from '../pages/WorkspacePage'
+import { TradeRepositoryPage } from '../pages/TradeRepositoryPage'
 import { createWorkspaceSeed, type WorkspaceSeed } from '../support/workspaceState'
 
 type Fixtures = {
   workspace: WorkspacePage
+  repository: TradeRepositoryPage
   workspaceSeed: WorkspaceSeed
   stubEngines: boolean
 }
@@ -31,6 +33,11 @@ export const test = base.extend<Fixtures>({
     // Playwright fixture lifecycle callback; this is not React's use hook.
     // oxlint-disable-next-line react-hooks/rules-of-hooks
     await use(workspace)
+  },
+  // Depends on `workspace`, so the app is already open when the page object is built.
+  repository: async ({ page, workspace }, use) => {
+    // oxlint-disable-next-line react-hooks/rules-of-hooks
+    await use(new TradeRepositoryPage(page))
   },
 })
 

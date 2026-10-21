@@ -39,6 +39,7 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:smoke": "playwright test --grep @smoke",
     "test:e2e:journey:dashboard": "playwright test --grep @journey-dashboard-setup",
+    "test:e2e:journey:trades": "playwright test --grep @journey-trade-navigation",
     "test:e2e:feature:notebook": "playwright test --grep @feature-notebook",
     "test:e2e:demo": "node playwright/skills/demo/scripts/playwright-demo.mjs",
     "demo:narrate": "node playwright/skills/demo/scripts/demo-narration.mjs",

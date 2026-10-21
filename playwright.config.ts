@@ -29,10 +29,24 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  webServer: {
-    command: 'npm run dev -- --host 127.0.0.1 --port 4173 --strictPort',
-    url: 'http://127.0.0.1:4173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  webServer: [
+    {
+      command: 'npm run dev -- --host 127.0.0.1 --port 4173 --strictPort',
+      url: 'http://127.0.0.1:4173',
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+    {
+      // The trade repository is a local Node MCP server, not a Rust engine. It is
+      // deterministic and seeded, so the UI suite can rely on it without credentials.
+      command: 'node scripts/trade-repo-mcp-http.mjs --reset --seed',
+      url: 'http://127.0.0.1:8792/health',
+      reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+      env: {
+        DATABASE_URL: 'sqlite:playwright/.data/trade-repo.sqlite',
+        TRADE_REPO_HTTP_PORT: '8792',
+      },
+    },
+  ],
 })

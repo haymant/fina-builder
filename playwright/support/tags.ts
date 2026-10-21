@@ -6,6 +6,10 @@ export const TAG = {
     notebookCapture: '@journey-notebook-capture',
     visualizationAdd: '@journey-visualization-add',
     preferences: '@journey-preferences',
+    tradeNavigation: '@journey-trade-navigation',
+    tradeBlotter: '@journey-trade-blotter',
+    tradePositions: '@journey-trade-positions',
+    tradeOperations: '@journey-trade-operations',
   },
   feature: {
     workspace: '@feature-workspace',
@@ -14,6 +18,12 @@ export const TAG = {
     visualizations: '@feature-visualizations',
     notebook: '@feature-notebook',
     theme: '@feature-theme',
+    tradeRepository: '@feature-trade-repository',
+    tradeBlotter: '@feature-trade-blotter',
+    tradePositions: '@feature-trade-positions',
+    tradeRecon: '@feature-trade-recon',
+    tradeAudit: '@feature-trade-audit',
+    tradeImport: '@feature-trade-import',
   },
   dependency: {
     riga: '@requires-riga',
@@ -22,5 +32,6 @@ export const TAG = {
     any: '@demo',
     dashboardNote: '@demo-dashboard-note',
     visualizationAdd: '@demo-visualization-add',
+    tradeRepository: '@demo-trade-repository',
   },
 } as const

@@ -1,6 +1,13 @@
 import { expect, test } from './fixtures/test'
 import { NotebookPanel } from './components/NotebookPanel'
 import {
+  expectAuditLoaded,
+  expectBlotterLoaded,
+  expectPositionsAggregated,
+  expectReconciliationLoaded,
+  expectTradeDrawerOpen,
+} from './assertions/tradeRepository.assertions'
+import {
   expectEmptyDashboard,
   expectNotebookOpen,
   expectSelectedNoteTitle,
@@ -85,5 +92,57 @@ test.describe('visualization gallery demo', () => {
       await expanded.getByRole('button', { name: 'Explain', exact: true }).click()
       await page.waitForTimeout(5_000) // Hold on the explain layer for the closing narration.
     })
+  })
+})
+
+test('walks the trade repository dashboards from the Trades menu', {
+  tag: [TAG.demo.any, TAG.demo.tradeRepository, TAG.journey.tradeNavigation, TAG.feature.tradeRepository],
+}, async ({ page, repository, workspace }) => {
+  test.setTimeout(120_000) // Paced holds are intentional in demo recordings.
+
+  await test.step('Open the trade blotter', async () => {
+    await repository.openView('blotter')
+    await expectBlotterLoaded(repository)
+    await page.waitForTimeout(4_000) // Deliberate capture hold for the opening narration.
+  })
+
+  await test.step('Find a Phoenix note and review its timeline', async () => {
+    await repository.search('PHX-')
+    await page.waitForTimeout(1_800) // Hold on the filtered blotter before opening a trade.
+    const tradeId = await repository.openFirstTrade()
+    await expectTradeDrawerOpen(repository, tradeId)
+    await page.waitForTimeout(2_200) // Hold on the trade economics.
+    await page.getByTestId('drawer-tab-timeline').click()
+    await page.waitForTimeout(4_500) // Hold on the immutable lifecycle timeline.
+  })
+
+  await test.step('Review positions by book, basket and currency', async () => {
+    await repository.openView('positions')
+    await expectPositionsAggregated(repository)
+    await page.waitForTimeout(6_500) // Hold on the aggregated positions grid.
+  })
+
+  await test.step('Review the latest reconciliation run', async () => {
+    await repository.openView('recon')
+    await expectReconciliationLoaded(repository)
+    await page.waitForTimeout(6_000) // Hold on the run KPIs and breaks.
+  })
+
+  await test.step('Review the append-only audit trail', async () => {
+    await repository.openView('audit')
+    await expectAuditLoaded(repository)
+    await page.waitForTimeout(6_000) // Hold on the newest-first audit grid.
+  })
+
+  await test.step('Review the bulk import workspace', async () => {
+    await repository.openView('import')
+    await expect(repository.bulkImport).toBeVisible()
+    await page.waitForTimeout(5_500) // Hold on the validate-then-commit import flow.
+  })
+
+  await test.step('Return to the dashboard workspace', async () => {
+    await workspace.openDashboard('Playwright Dashboard')
+    await expect(workspace.emptyDashboardMessage).toBeVisible()
+    await page.waitForTimeout(5_500) // Hold on the dashboards menu for the closing narration.
   })
 })
