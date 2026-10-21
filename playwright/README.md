@@ -82,7 +82,9 @@ That runs all `@demo` tests and sets `PLAYWRIGHT_VIDEO=on`. To record only one c
 npm run test:e2e:demo -- --grep @demo-dashboard-note
 ```
 
-The Playwright config explicitly records 1280×720. Successful recordings are under `playwright/test-results/`; generated test artifacts and finished videos under `playwright/recordings/` are ignored by Git. The runner only captures the selected browser flow; use [`skills/demo/SKILL.md`](./skills/demo/SKILL.md) to derive narration from its `test.step` names, synthesize and synchronize audio, export MP4, and verify the result. It does not automatically create speech or upload video. Speech generation does not clone or imitate a real person's voice.
+`@demo-visualization-add` is engine-backed; start `npm run mcp:http:riga` before recording it (the test opts out of the default `/riga/mcp` stub with `test.use({ stubEngines: false })`).
+
+The Playwright config explicitly records 1280×720. Successful recordings are under `playwright/test-results/`; generated test artifacts and finished videos under `playwright/recordings/` are ignored by Git. The runner only captures the selected browser flow; use [`skills/demo/SKILL.md`](./skills/demo/SKILL.md) to derive narration from its `test.step` names, synthesize and synchronize audio, export MP4, and verify the result. It does not automatically create speech or upload video. Narration uses the local `edge-tts` narrator selected with `npm run demo:narrate` — Andrew by default, with `steffan`, `thomas`, or `eric` as alternatives; speech generation does not clone or imitate a real person's voice.
 
 Install FFmpeg helper separately if recording fails:
 
@@ -90,7 +92,7 @@ Install FFmpeg helper separately if recording fails:
 npx playwright install ffmpeg
 ```
 
-The runner's video toggle is `PLAYWRIGHT_VIDEO=on`; `--video=on` is not a supported CLI flag here. Chromium's 1280×720 viewport alone does not guarantee output resolution, so retain the explicit `video.size` in `playwright.config.ts`. The demo is front-end-only. Engine-dependent UI can display a real connection error while its shell test passes; such a recording is not a polished demo. Do not conceal that error—use a backend-independent journey or start and verify the required service.
+The runner's video toggle is `PLAYWRIGHT_VIDEO=on`; `--video=on` is not a supported CLI flag here. Chromium's 1280×720 viewport alone does not guarantee output resolution, so retain the explicit `video.size` in `playwright.config.ts`. The default UI fixture is front-end-only; engine-dependent flows such as `@demo-visualization-add` opt out of the stub and need a verified engine. Without it, the recording shows a real connection error—do not present that as a successful demo.
 
 ## Reporting and maintenance
 

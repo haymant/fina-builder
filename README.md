@@ -258,6 +258,7 @@ Notes:
 | `npm run test:e2e` | Playwright Chromium browser flows; auto-starts Vite and does not require live engines |
 | `npm run test:e2e:smoke` / `npm run test:e2e -- --grep @journey-dashboard-setup` | Playwright `@smoke`, user-journey, and feature slices; see [test taxonomy](./playwright/README.md) |
 | `npm run test:e2e:demo -- --grep @demo-dashboard-note` | Records the selected tagged Playwright demo flow for narration |
+| `npm run demo:narrate -- --voice andrew --script <cues.txt>` | Generates one narrator clip per cue; Andrew default, `steffan` / `thomas` / `eric` optional |
 | `cargo test --workspace` | The Tauri shell (MCP client + engine resolution) |
 | `cargo test --manifest-path modules/riga-flow/Cargo.toml -p riga-engine -p riga-mcp` | The engine's own unit + tool-surface tests (the submodule's CI covers these too) |
 | `npm run smoke [-- --web]` | Live end-to-end: handshakes `riga-mcp` + `tac-engine` (directly or through the Vite proxy) and calls `price_put` |

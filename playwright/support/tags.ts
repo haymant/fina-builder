@@ -21,5 +21,6 @@ export const TAG = {
   demo: {
     any: '@demo',
     dashboardNote: '@demo-dashboard-note',
+    visualizationAdd: '@demo-visualization-add',
   },
 } as const
