@@ -17,6 +17,7 @@ drives them.
 | --- | --- |
 | **[FEATURES.md](./FEATURES.md)** | What is implemented: the engine surfaces, tiles, the chat panel and known gaps, followed by the migration specification and its completion record. |
 | **[AGENT-LOCAL.md](./AGENT-LOCAL.md)** | The RIGA assistant chat panel (desktop shell ↔ `riga-server`). |
+| **[docs/51-portfolio-risk-architecture.md](./docs/51-portfolio-risk-architecture.md)** | Proposed canonical portfolio/position/instrument/market/sensitivity/P&L/scenario/risk-matrix documents, the complete SQLite/PostgreSQL relational schema (ER diagram + table definitions) and the extension architecture (PROPOSAL — not implemented). |
 | [README.md](./README.md) (this file) | How to run it and how to release it. |
 
 ## Requirements
