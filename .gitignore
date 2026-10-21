@@ -39,6 +39,9 @@ src-tauri/binaries/
 # Frontend test coverage output
 coverage/
 lcov.info
+playwright/test-results/
+playwright/playwright-report/
+playwright/recordings/
 
 # Local environment / secrets — never commit
 .env
