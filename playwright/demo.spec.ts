@@ -10,6 +10,7 @@ import {
 import { expectTileLoaded } from './assertions/pricer.assertions'
 import { PricerPage } from './pages/PricerPage'
 import { isRigaEngineReady } from './support/engines'
+import { bookFixingFixture } from './support/tradeFixtures'
 import {
   expectEmptyDashboard,
   expectNotebookOpen,
@@ -158,6 +159,68 @@ test('walks the trade repository dashboards from the Trades menu', {
     await workspace.openDashboard('Playwright Dashboard')
     await expect(workspace.emptyDashboardMessage).toBeVisible()
     await page.waitForTimeout(5_500) // Hold on the dashboards menu for the closing narration.
+  })
+})
+
+test('captures a scheduled fixing with source provenance', {
+  tag: [
+    TAG.demo.any,
+    TAG.demo.tradeFixings,
+    TAG.journey.tradeFixingCapture,
+    TAG.feature.tradeRepository,
+    TAG.feature.tradeFixings,
+    TAG.feature.fixingDueQueue,
+  ],
+}, async ({ page, repository }) => {
+  test.setTimeout(120_000) // Paced holds are intentional in demo recordings.
+  const tradeId = await bookFixingFixture(page, 'demo')
+
+  await test.step('Open the scheduled fixing queue', async () => {
+    await repository.openView('fixings')
+    const dueCall = page.waitForResponse((response) => (response.request().postData() ?? '').includes('tr_fixing_due'))
+    await page.getByTestId('fixing-as-of-date').fill('2035-12-31')
+    await dueCall
+    const row = page.getByTestId(`due-fixing-${tradeId}`)
+    await expect(row).toBeVisible()
+    await row.scrollIntoViewIfNeeded()
+    await page.waitForTimeout(4_500) // Hold on the due observation and required levels.
+  })
+
+  await test.step('Open the trade and start the fixing event', async () => {
+    const row = page.getByTestId(`due-fixing-${tradeId}`)
+    const observation = await row.getAttribute('data-fixing-n')
+    const observationDate = await row.getAttribute('data-observation-date')
+    expect(observation).toBeTruthy()
+    expect(observationDate).toBeTruthy()
+
+    await page.getByTestId(`open-fixing-trade-${tradeId}`).click()
+    await expectTradeDrawerOpen(repository, tradeId)
+    await page.waitForTimeout(2_500) // Hold on the trade and its lifecycle actions.
+    await page.getByTestId('action-FIXING').click()
+    await expect(page.getByTestId('lifecycle-dialog')).toBeVisible()
+    await expect(page.getByTestId('p-n')).toHaveValue(observation!)
+    await page.waitForTimeout(2_500) // Hold on the fixing form before entering values.
+
+    for (const input of await page.locator('input[data-testid^="p-levels-"]').all()) await input.fill('100')
+    await page.getByTestId('p-source').fill('E2E official exchange close')
+    await page.getByTestId('p-sourceObservedAt').fill(`${observationDate}T20:00:00Z`)
+    await page.getByTestId('p-evidenceRef').fill(`demo-feed:${tradeId}:${observation}`)
+    await page.getByTestId('l-reason').fill('Verified against the close message')
+    await page.waitForTimeout(3_000) // Hold on the levels, source, timestamp and evidence.
+  })
+
+  await test.step('Apply the fixing and review the immutable event', async () => {
+    const fixingCall = page.waitForResponse((response) => {
+      const body = response.request().postData() ?? ''
+      return response.url().includes('/trade-repo/mcp') && body.includes('tr_trade_lifecycle') && body.includes('FIXING')
+    })
+    await page.getByTestId('confirm-lifecycle').click()
+    await fixingCall
+    await expect(page.getByTestId('lifecycle-dialog')).toHaveCount(0)
+    await page.getByTestId('drawer-tab-timeline').click()
+    await expect(page.getByTestId('timeline')).toContainText('FIXING')
+    await page.getByTestId('timeline-event').first().scrollIntoViewIfNeeded()
+    await page.waitForTimeout(5_000) // Hold on the append-only timeline and provenance.
   })
 })
 

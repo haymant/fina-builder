@@ -122,7 +122,11 @@ That runs all `@demo` tests and sets `PLAYWRIGHT_VIDEO=on`. To record only one c
 npm run test:e2e:demo -- --grep @demo-dashboard-note
 ```
 
-`@demo-visualization-add` is engine-backed; start `npm run mcp:http:riga` before recording it (the test opts out of the default `/riga/mcp` stub with `test.use({ stubEngines: false })`). `@demo-pricer-dashboards` uses the same live engine and tours the pricing, trade-design and risk dashboards; start `npm run mcp:http:riga` first. `@demo-trade-repository` is backed by the seeded SQLite trade-repo server that the config starts automatically, so no manual setup is needed.
+`@demo-visualization-add` is engine-backed; start `npm run mcp:http:riga` before recording it (the test opts out of the default `/riga/mcp` stub with `test.use({ stubEngines: false })`). `@demo-pricer-dashboards` uses the same live engine and tours the pricing, trade-design and risk dashboards; start `npm run mcp:http:riga` first. `@demo-trade-repository` and `@demo-trade-fixings` are backed by the seeded SQLite trade-repo server that the config starts automatically, so no manual setup is needed. The fixing demo books isolated Phoenix trades and captures one due observation with source provenance:
+
+```bash
+npm run test:e2e:demo -- --grep @demo-trade-fixings
+```
 
 The Playwright config explicitly records 1280×720. Successful recordings are under `playwright/test-results/`; generated test artifacts and finished videos under `playwright/recordings/` are ignored by Git. The runner only captures the selected browser flow; use [`skills/demo/SKILL.md`](./skills/demo/SKILL.md) to derive narration from its `test.step` names, synthesize and synchronize audio, export MP4, and verify the result. It does not automatically create speech or upload video. Narration uses the local `edge-tts` narrator selected with `npm run demo:narrate` — Andrew by default, with `steffan`, `thomas`, or `eric` as alternatives; speech generation does not clone or imitate a real person's voice.
 

@@ -63,6 +63,7 @@ export const TAG = {
     dashboardNote: '@demo-dashboard-note',
     visualizationAdd: '@demo-visualization-add',
     pricerDashboards: '@demo-pricer-dashboards',
+    tradeFixings: '@demo-trade-fixings',
     tradeRepository: '@demo-trade-repository',
   },
 } as const
