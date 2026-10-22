@@ -1,4 +1,5 @@
 import { expect, test } from './fixtures/test'
+import type { Page } from '@playwright/test'
 import {
   expectAuditLoaded,
   expectBlotterLoaded,
@@ -10,6 +11,23 @@ import {
 import { TAG } from './support/tags'
 
 const { journey, feature } = TAG
+
+async function bookFixingFixture(page: Page, suffix: string) {
+  const today = new Date().toISOString().slice(0, 10)
+  const externalId = `E2E-FIXING-${suffix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+  const response = await page.request.post('http://127.0.0.1:4173/trade-repo/mcp', { data: {
+    jsonrpc: '2.0', id: `book-${externalId}`, method: 'tools/call', params: { name: 'tr_trade_book', arguments: {
+      context: { actor: 'trash.box', role: 'admin' }, idempotencyKey: externalId,
+      trade: { productType: 'PHOENIX_AUTOCALL', side: 'SELL', notional: 1_000_000, currency: 'USD', tradeDate: today, maturityDate: today, counterpartyId: 'CP-DBS', bookId: 'PHX-ASIA', externalId,
+        terms: { isin: 'XS2960012347', underlyings: [{ symbol: 'AAPL', initialFixing: 200 }, { symbol: 'MSFT', initialFixing: 400 }], strikeDate: today, frequency: 'QUARTERLY', numObservations: 4, coupon: { ratePerPeriod: 0.02, barrier: 0.7, memory: true }, autocall: { initialLevel: 1, startObservation: 2, stepDown: 0.05, floor: 0.85 }, knockIn: { barrier: 0.6, observation: 'EUROPEAN' } },
+      },
+    } },
+  } })
+  const rpc = await response.json()
+  const result = rpc.result?.structuredContent as { tradeId?: string; trade?: { tradeId: string } } | undefined
+  if (!response.ok || rpc.result?.isError || !(result?.tradeId ?? result?.trade?.tradeId)) throw new Error(`Could not book fixing test fixture: ${JSON.stringify(rpc.result?.structuredContent ?? rpc.error)}`)
+  return result.tradeId ?? result.trade!.tradeId
+}
 
 test('navigates every trade repository dashboard from the Trades menu', {
   tag: [TAG.smoke, journey.tradeNavigation, feature.tradeRepository],
@@ -39,6 +57,12 @@ test('navigates every trade repository dashboard from the Trades menu', {
     await repository.openView('import')
     await expect(repository.bulkImport).toBeVisible()
     await expect(page.getByTestId('import-validate')).toBeDisabled()
+  })
+
+  await test.step('Open the scheduled fixing queue', async () => {
+    await repository.openView('fixings')
+    await expect(repository.fixings).toBeVisible()
+    await expect(page.getByTestId('fixing-as-of-date')).toBeVisible()
   })
 
   await test.step('Return to a tile dashboard from the Dashboards menu', async () => {
@@ -320,4 +344,86 @@ test('exports the filtered blotter and opens trade shortcuts from the keyboard',
   await page.getByTestId('shortcuts').click()
   await expect(page.getByTestId('shortcuts-dialog')).toContainText('Focus blotter search')
   await expect(page.getByTestId('shortcuts-dialog')).toContainText('Show shortcuts')
+})
+
+
+test('captures one due instrument fixing through the trade lifecycle dialog with source evidence', {
+  tag: [TAG.priority.p1, journey.tradeFixingCapture, feature.tradeRepository, feature.tradeFixings, feature.tradeLifecycle, feature.fixingDueQueue],
+}, async ({ page, repository }) => {
+  const tradeId = await bookFixingFixture(page, 'individual')
+  await repository.openView('fixings')
+  const dueCall = page.waitForResponse((response) => (response.request().postData() ?? '').includes('tr_fixing_due'))
+  await page.getByTestId('fixing-as-of-date').fill('2035-12-31')
+  await dueCall
+  await expect(repository.fixings.locator('[data-testid^="due-fixing-"]').first()).toBeVisible()
+
+  const candidate = await repository.fixings.locator(`[data-testid="due-fixing-${tradeId}"]`).evaluate((node) => {
+    const testId = node?.getAttribute('data-testid')
+    return node && testId ? { tradeId: testId.slice('due-fixing-'.length), n: Number(node.getAttribute('data-fixing-n')), date: node.getAttribute('data-observation-date') } : null
+  })
+  expect(candidate).toBeTruthy()
+  if (!candidate) throw new Error('No non-terminal due observation available for the individual fixing journey')
+
+  await page.getByTestId(`open-fixing-trade-${candidate.tradeId}`).click()
+  await expectTradeDrawerOpen(repository, candidate.tradeId)
+  await page.getByTestId('action-FIXING').click()
+  await expect(page.getByTestId('lifecycle-dialog')).toBeVisible()
+  await expect(page.getByTestId('p-n')).toHaveValue(String(candidate.n))
+  for (const input of await page.locator('input[data-testid^="p-levels-"]').all()) await input.fill('100')
+  await page.getByTestId('p-source').fill('E2E official exchange close')
+  await page.getByTestId('p-sourceObservedAt').fill(`${candidate.date}T20:00:00Z`)
+  await page.getByTestId('p-evidenceRef').fill(`e2e-feed:${candidate.tradeId}:${candidate.n}`)
+  await page.getByTestId('l-reason').fill('Verified against the close message in the fixing workflow test')
+
+  const fixingCall = page.waitForResponse((response) => {
+    const body = response.request().postData() ?? ''
+    return response.url().includes('/trade-repo/mcp') && body.includes('tr_trade_lifecycle') && body.includes('FIXING')
+  })
+  await page.getByTestId('confirm-lifecycle').click()
+  const response = await fixingCall
+  const rpc = await response.json()
+  const outcome = rpc.result.structuredContent as { events: { eventType: string; detail?: Record<string, unknown> }[]; replayed?: boolean }
+  expect(outcome.events.map((event) => event.eventType)).toContain('FIXING')
+  const fixing = outcome.events.find((event) => event.eventType === 'FIXING')!
+  expect(fixing.detail).toMatchObject({ source: 'E2E official exchange close', sourceObservedAt: `${candidate.date}T20:00:00Z`, evidenceRef: `e2e-feed:${candidate.tradeId}:${candidate.n}` })
+  await expect(repository.drawer).toBeVisible()
+})
+
+test('previews and atomically commits a bulk of scheduled observations with per-row provenance', {
+  tag: [TAG.priority.p1, journey.tradeFixingCapture, feature.tradeRepository, feature.tradeFixings, feature.fixingDueQueue],
+}, async ({ page, repository }) => {
+  const tradeIds = [await bookFixingFixture(page, 'bulk-a'), await bookFixingFixture(page, 'bulk-b')]
+  await repository.openView('fixings')
+  const dueCall = page.waitForResponse((response) => (response.request().postData() ?? '').includes('tr_fixing_due'))
+  await page.getByTestId('fixing-as-of-date').fill('2035-12-31')
+  await dueCall
+  const rows = repository.fixings.locator('[data-testid^="due-fixing-"]')
+  await expect(rows.first()).toBeVisible()
+  const trades = await Promise.all(tradeIds.map(async (tradeId) => ({ tradeId, date: await page.getByTestId(`due-fixing-${tradeId}`).getAttribute('data-observation-date') ?? '' })))
+  expect(trades.length).toBe(2)
+
+  for (const trade of trades) {
+    const row = page.getByTestId(`due-fixing-${trade.tradeId}`)
+    await page.getByTestId(`select-fixing-${trade.tradeId}`).check()
+    for (const input of await row.locator('input[data-testid^="fixing-level-"]').all()) await input.fill('100')
+    await page.getByTestId(`fixing-source-${trade.tradeId}`).fill('E2E official exchange close')
+    await page.getByTestId(`fixing-observed-at-${trade.tradeId}`).fill(`${trade.date}T20:00:00Z`)
+    await page.getByTestId(`fixing-evidence-${trade.tradeId}`).fill(`e2e-batch:${trade.tradeId}`)
+  }
+
+  await page.getByTestId('fixing-preview').click()
+  await expect(page.getByTestId('fixing-batch-summary')).toContainText('2 valid, 0 with errors')
+  await expect(page.getByTestId('fixing-commit')).toBeEnabled()
+  const commitCall = page.waitForResponse((response) => {
+    const body = response.request().postData() ?? ''
+    return body.includes('tr_fixings_bulk') && body.includes('"dryRun":false')
+  })
+  await page.getByTestId('fixing-commit').click()
+  const response = await commitCall
+  const rpc = await response.json()
+  const result = rpc.result.structuredContent as { committed: number; failed: number; results: { status: string; events: { eventType: string; detail?: Record<string, unknown> }[] }[] }
+  expect(result).toMatchObject({ committed: 2, failed: 0 })
+  expect(result.results.every((item) => item.status === 'COMMITTED')).toBe(true)
+  expect(result.results.every((item) => item.events.some((event) => event.eventType === 'FIXING' && event.detail?.source === 'E2E official exchange close'))).toBe(true)
+  await expect(page.getByTestId('fixing-batch-summary')).toContainText('2 committed')
 })

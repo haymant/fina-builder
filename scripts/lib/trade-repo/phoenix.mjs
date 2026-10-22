@@ -58,12 +58,13 @@ export const phoenixPlugins = {
   'phoenix.fixing': (trade, params) => {
     const t = trade.terms, ps = trade.productState
     const obs = t.observations[params.n - 1]
+    if (!Number.isFinite(Date.parse(params.sourceObservedAt))) return { errors: [{ code: 'FORMAT', path: 'params.sourceObservedAt', message: 'source observation timestamp must be a valid ISO-8601 timestamp' }] }
     const w = worstOf(t, params.levels)
     if (w.error) return { errors: [w.error] }
     const final = params.n === t.observations.length
     const memory = t.coupon.memory !== false
     const steps = []
-    const fixing = { n: params.n, date: obs.observationDate, levels: params.levels, performances: w.performances, worst: w.worst, worstSymbol: w.worstSymbol, source: params.source ?? null }
+    const fixing = { n: params.n, date: obs.observationDate, levels: params.levels, performances: w.performances, worst: w.worst, worstSymbol: w.worstSymbol, source: params.source, sourceObservedAt: params.sourceObservedAt, evidenceRef: params.evidenceRef ?? null }
     steps.push({ eventType: 'FIXING', validFrom: obs.observationDate, detail: fixing, apply: (s) => { s.productState.fixings.push(fixing); return s } })
     let knocked = ps.knockedIn
     const kiObserved = (t.knockIn.observation === 'EUROPEAN' && final) || t.knockIn.observation === 'AMERICAN'

@@ -1,6 +1,6 @@
 // App-level navigation model: the menu bar and the command palette are the primary way to
 // reach every dashboard and every trade repository view (tabs are for documents only).
-export type TradeView = 'blotter' | 'positions' | 'recon' | 'audit' | 'import'
+export type TradeView = 'blotter' | 'positions' | 'recon' | 'audit' | 'import' | 'fixings'
 
 export type Location =
   | { kind: 'dashboard'; dashboardId: string }
@@ -12,6 +12,7 @@ export const TRADE_VIEWS: { id: TradeView; label: string; accel: string }[] = [
   { id: 'recon', label: 'Reconciliation', accel: 'Alt+Shift+3' },
   { id: 'audit', label: 'Audit log', accel: 'Alt+Shift+4' },
   { id: 'import', label: 'Bulk import', accel: 'Alt+Shift+5' },
+  { id: 'fixings', label: 'Fixings', accel: 'Alt+Shift+6' },
 ]
 
 const KEY = 'fina.location.v1'
@@ -47,4 +48,3 @@ export function splitPrimary<T extends { i: string; x: number; y: number }>(layo
   const primary = new Set(ordered.slice(0, n).map((l) => l.i))
   return { primary: layout.filter((l) => primary.has(l.i)), secondary: layout.filter((l) => !primary.has(l.i)) }
 }
-

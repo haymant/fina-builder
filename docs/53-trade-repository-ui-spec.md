@@ -1,7 +1,7 @@
 # 53 — Trade repository UI specification
 
-**Status:** IMPLEMENTED (v1) in `src/features/trade-repository/**`, exercised end-to-end by
-`playwright/tests/trade-repository.spec.ts` and recorded by `walkthrough.spec.ts`.
+**Status:** IMPLEMENTED in `src/features/trade-repository/**`, exercised end-to-end by
+`playwright/trade-repository.spec.ts` and recorded by `walkthrough.spec.ts`.
 Backend contract: `docs/52-trade-repository-design.md`.
 
 ## 1. Principles
@@ -45,7 +45,7 @@ follow the app toggle.
 ┌ header (unchanged) ─────────────────────────────────────────────────────────────────────┐
 │ [dashboards…] [Trade Repository]                         [+Add tile] [Chat] [Notebook]  │
 ├──────────────────────────────────────────────────────────────────────────────────────────┤
-│ Blotter 1 | Positions 2 | Reconciliation 3 | Audit log 4 | Bulk import 5   [As-of] [User▾] [⌨] │
+│ Blotter 1 | Positions 2 | Reconciliation 3 | Audit log 4 | Bulk import 5 | Fixings 6 [As-of] [User▾] [⌨] │
 │ ⚠ time-travel banner (only when as-of is set)                                           │
 │ ┌ view body ───────────────────────────────────────────┐ ┌ trade drawer (440px) ───────┐ │
 │ │ toolbar / facets / grid                              │ │ header · actions · tabs     │ │
@@ -57,7 +57,7 @@ follow the app toggle.
 
 | Element | Behaviour |
 | --- | --- |
-| View tabs (Blotter, Positions, Reconciliation, Audit log, Bulk import) | ARIA `tablist`; shortcut digit shown as `<kbd>`. |
+| View tabs (Blotter, Positions, Reconciliation, Audit log, Bulk import, Fixings) | ARIA `tablist`; shortcut digit shown as `<kbd>`. |
 | **As-of** toggle | Reveals *Business date* (`validAt`, date) and *Known at* (`knownAt`, local datetime → UTC). Any value set ⇒ amber banner “Time travel: showing the repository as of … / as known at … Editing is disabled.”; New trade and all drawer actions are hidden. |
 | Acting user | Select of reference users with role (`admin`, `trader`, `ops`, `viewer`). Sets the MCP `context`; refreshes all views. (Demo affordance for entitlements; in production this is the signed-in user.) |
 | Shortcuts button | Opens the shortcuts dialog. |
@@ -156,6 +156,7 @@ One dialog per event with a one-line explanation of its semantics, effective dat
 | Exercise | — | Options / autocalls only. |
 | Mature | effective date ≥ maturity | |
 | Book transfer | destination book (excludes current) | |
+| Phoenix fixing | observation number, close level per underlying, market-data source, source observation timestamp with timezone, optional evidence reference and reason | Source and timestamp required; coupon/knock-in/autocall/redemption results are derived by the product lifecycle engine. |
 
 Errors (`INVALID_TRANSITION`, `VALIDATION_FAILED` with paths, `CONFLICT`) display inline;
 the dialog stays open.
@@ -200,14 +201,22 @@ there are no row errors. Right: summary (“Dry run: 2 valid, 1 with errors”, 
 “Committed … n booked”) and a per-row grid (row, OK/ERROR badge, external id, booked
 trade id, all issues with field paths).
 
-## 12. Keyboard shortcuts
+## 12. Fixings queue
+
+The **Fixings** destination exposes contractual observations due on/before a user-selected date for ops/admin review. It shows one next unresolved observation per trade, including trade version, book, observation/payment dates and required underlyings. It is a due-work queue only: opening or refreshing it does not fetch market data or post events.
+
+An operator may open one trade and use its ordinary **Capture fixing** lifecycle dialog, or select multiple due rows and enter per-underlying levels, source, source timestamp and optional evidence reference. **Validate batch** previews row-level issues and derived event outcomes. **All or nothing** is the default and disables commit if any row is invalid; **Best effort** permits valid rows to commit while reporting failures. Each commit is version-checked and idempotent per row. Time-travel mode and non-ops/admin roles are read-only. Fixing audit events are available through the `trade.fixing` audit filter.
+
+This view does not implement an unattended scheduler, market-data adapter, fixing correction/restate workflow or maker-checker approval; see [doc 54](./54-trade-fixing-workflows.md) for operational boundaries and remaining release gates.
+
+## 13. Keyboard shortcuts
 
 | Key | Action |
 | --- | --- |
 | `/` | Focus blotter search (switches to Blotter) |
 | `N` | New trade |
 | `A` | Amend the selected trade (if LIVE) |
-| `1`–`5` | Switch view |
+| `Alt+Shift+1`–`Alt+Shift+6` | Switch view |
 | `T` | Toggle as-of time travel |
 | `Enter` | Open the focused grid row |
 | `Esc` | Close dialog, else close drawer |
@@ -215,7 +224,7 @@ trade id, all issues with field paths).
 
 Shortcuts are ignored while typing in inputs and while a dialog is open (except Esc).
 
-## 13. States
+## 14. States
 
 | State | Treatment |
 | --- | --- |
@@ -226,13 +235,13 @@ Shortcuts are ignored while typing in inputs and while a dialog is open (except 
 | Time travel | Amber banner + read-only. |
 | Forbidden | Actions hidden; server errors shown inline if attempted. |
 
-## 14. Accessibility
+## 15. Accessibility
 
 Tabs use `role=tablist/tab` + `aria-selected`; chips use `aria-pressed`; dialogs
 `role=dialog` with `aria-label`; invalid inputs `aria-invalid`; alerts `role=alert`;
 every control has a label; colour is never the only signal (badges carry text).
 
-## 15. Test hooks
+## 16. Test hooks
 
 Stable `data-testid`s (`blotter-grid`, `trade-drawer`, `action-<EVENT>`, `f-<field>`,
 `l-<field>`, `facet-status-<S>`, `break-to-<S>`, …) are part of this spec; the Playwright

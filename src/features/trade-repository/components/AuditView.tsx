@@ -4,7 +4,7 @@ import { tradeRepo } from '../api'
 import type { AuditRow, Page } from '../types'
 import { EmptyState, ErrorState, Loading, fmtTs, gridTheme } from './common'
 
-const ACTIONS = ['', 'trade.book', 'trade.amend', 'trade.cancel', 'trade.novate', 'trade.partial_terminate', 'trade.mature', 'trade.book_transfer', 'trade.import', 'recon.run', 'recon.break.update']
+const ACTIONS = ['', 'trade.book', 'trade.amend', 'trade.fixing', 'trade.cancel', 'trade.novate', 'trade.partial_terminate', 'trade.mature', 'trade.book_transfer', 'trade.import', 'recon.run', 'recon.break.update']
 
 export function AuditView({ refreshKey, onOpenTrade }: { refreshKey: number; onOpenTrade: (id: string) => void }) {
   const [actor, setActor] = useState('')

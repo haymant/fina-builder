@@ -60,6 +60,8 @@ export interface FieldDef {
   ref?: 'party' | 'book'
   min?: number
   max?: number
+  minLength?: number
+  pattern?: string
   help?: string
   items?: FieldDef[]
   minItems?: number
@@ -82,7 +84,7 @@ export interface TermSheetSection { title: string; rows: (string | number)[][]; 
 export interface TermSheet { tradeId: string; version: number; sections: TermSheetSection[]; widgets: string[] }
 export interface ScheduleRow {
   n: number; observationDate: string; paymentDate: string; autocallLevel: number | null; couponBarrier: number | null; couponRate: number
-  fixing: { worst: number; worstSymbol: string; levels: Record<string, number>; performances: Record<string, number> } | null
+  fixing: { worst: number; worstSymbol: string; levels: Record<string, number>; performances: Record<string, number>; source?: string; sourceObservedAt?: string; evidenceRef?: string | null } | null
   coupon: { paid: boolean; amount: number; periods: number; memoryCatchUp: number } | null
   autocalled: boolean; status: 'FIXED' | 'PENDING' | 'NOT_REACHED'
 }
@@ -93,6 +95,9 @@ export interface Schedule {
   rows: ScheduleRow[]; monitor: { date: string; worst: number }[]; corporateActions: Record<string, unknown>[]
   redemption: { amount: number; pct: number; paymentDate: string; capitalLoss?: boolean; reason?: string } | null
 }
+export interface FixingDueItem { tradeId: string; version: number; bookId: string; productType: string; underlying?: string; n: number; observationCount: number; observationDate: string; paymentDate: string; levelsRequired: string[] }
+export interface FixingDue { asOfDate: string; total: number; items: FixingDueItem[]; truncated: boolean; reviewRequired: true }
+export interface FixingBatchResult { dryRun: boolean; mode: 'all-or-nothing' | 'best-effort'; total: number; valid: number; failed: number; committed: number; noWrites: boolean; results: { row: number; tradeId: string | null; n: number | null; status: 'READY' | 'ERROR' | 'COMMITTED'; errors: FieldIssue[]; message?: string; replayed?: boolean; version?: number; eventIds?: string[]; events: { eventType: string; detail?: Record<string, unknown> | null }[] }[] }
 export interface EventDef { name: string; label: string; derived: boolean; kernel: boolean; effectiveDateDerived: boolean; allowed: boolean; roles: string[] | null; requiresReason: boolean; params: FieldDef[] }
 export interface PricingBinding { engine: string; tool: string; payoff: string; dashboard: string | null; applicable: boolean; request: Record<string, unknown>; notes: string[] }
 

@@ -81,7 +81,9 @@
         "params": [
           { "path": "n", "label": "Observation #", "type": "integer", "required": true, "min": 1, "defaultFrom": "len(productState.fixings) + 1" },
           { "path": "levels", "label": "Closing levels by underlying", "type": "map", "required": true, "keysFrom": "pluck(terms.underlyings, 'symbol')" },
-          { "path": "source", "label": "Fixing source", "type": "string", "default": "Bloomberg close" }
+          { "path": "source", "label": "Market-data source", "type": "string", "required": true },
+          { "path": "sourceObservedAt", "label": "Source observation timestamp (ISO-8601 with timezone)", "type": "string", "required": true, "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$" },
+          { "path": "evidenceRef", "label": "Evidence / source record reference", "type": "string", "help": "Recommended: immutable vendor message, exchange notice, or operations case reference." }
         ],
         "guards": [
           { "expr": "params.n == len(productState.fixings) + 1", "code": "OUT_OF_ORDER", "message": "fixings must be captured in observation order" },

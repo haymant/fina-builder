@@ -1,7 +1,7 @@
 import { Command as Cmd } from 'cmdk'
 import {
   BookOpen, Columns3, Copy, Database, FilePlus2, FileUp, HelpCircle, History, Keyboard, LayoutGrid, Layers, ArrowLeftRight,
-  MessageSquare, Moon, Plus, Search, Sun, Trash2, BookOpenCheck, Activity,
+  MessageSquare, Moon, Plus, Search, Sun, Trash2, BookOpenCheck, Activity, CalendarClock,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/menubar'
 import { accelLabel, matchAccel, TRADE_VIEWS, type Location, type TradeView } from '../navigation'
 
-const TRADE_ICONS: Record<TradeView, typeof Layers> = { blotter: BookOpenCheck, positions: Layers, recon: ArrowLeftRight, audit: History, import: FileUp }
+const TRADE_ICONS: Record<TradeView, typeof Layers> = { blotter: BookOpenCheck, positions: Layers, recon: ArrowLeftRight, audit: History, import: FileUp, fixings: CalendarClock }
 
 export interface MenuCommand { id: string; group: string; label: string; icon: typeof Layers; accel?: string; run: () => void; keywords?: string }
 

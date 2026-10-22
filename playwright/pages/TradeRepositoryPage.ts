@@ -4,7 +4,7 @@ import { expect, type Page } from '@playwright/test'
  * Trade repository views are top-level destinations reached from the Trades menu, not
  * tabs. Document tabs inside the repository belong to individual trades.
  */
-export type TradeView = 'blotter' | 'positions' | 'recon' | 'audit' | 'import'
+export type TradeView = 'blotter' | 'positions' | 'recon' | 'audit' | 'import' | 'fixings'
 
 export const TRADE_VIEW_LABEL: Record<TradeView, string> = {
   blotter: 'Blotter',
@@ -12,6 +12,7 @@ export const TRADE_VIEW_LABEL: Record<TradeView, string> = {
   recon: 'Reconciliation',
   audit: 'Audit log',
   import: 'Bulk import',
+  fixings: 'Fixings',
 }
 const VIEW_LOAD_TIMEOUT_MS = 15_000
 
@@ -34,6 +35,7 @@ export class TradeRepositoryPage {
   readonly audit
   readonly auditCount
   readonly bulkImport
+  readonly fixings
 
   constructor(readonly page: Page) {
     this.root = page.getByTestId('trade-repository')
@@ -54,6 +56,7 @@ export class TradeRepositoryPage {
     this.audit = page.getByTestId('audit')
     this.auditCount = page.getByTestId('audit-count')
     this.bulkImport = page.getByTestId('import')
+    this.fixings = page.getByTestId('fixings')
   }
 
   viewRoot(view: TradeView) {
@@ -63,6 +66,7 @@ export class TradeRepositoryPage {
       case 'recon': return this.recon
       case 'audit': return this.audit
       case 'import': return this.bulkImport
+      case 'fixings': return this.fixings
     }
   }
 

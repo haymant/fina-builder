@@ -21,6 +21,7 @@ export const TAG = {
     tradeReconciliation: '@journey-trade-reconciliation',
     tradeGovernance: '@journey-trade-governance',
     tradeOperations: '@journey-trade-operations',
+    tradeFixingCapture: '@journey-trade-fixing-capture',
   },
   feature: {
     workspace: '@feature-workspace',
@@ -47,6 +48,8 @@ export const TAG = {
     tradeRecon: '@feature-trade-recon',
     tradeAudit: '@feature-trade-audit',
     tradeImport: '@feature-trade-import',
+    tradeFixings: '@feature-trade-fixings',
+    fixingDueQueue: '@feature-fixing-due-queue',
     bitemporal: '@feature-bitemporal',
     entitlements: '@feature-entitlements',
     savedViews: '@feature-saved-views',

@@ -48,6 +48,7 @@
     "test:e2e:journey:pricer": "playwright test --grep @journey-pricer-dashboards",
     "test:e2e:journey:trades": "playwright test --grep @journey-trade-navigation",
     "test:e2e:journey:trade-risk": "playwright test --grep @journey-portfolio-risk-handoff",
+    "test:e2e:journey:trade-fixings": "playwright test --grep @journey-trade-fixing-capture",
     "test:e2e:feature:trade-repository": "playwright test --grep @feature-trade-repository",
     "test:e2e:feature:notebook": "playwright test --grep @feature-notebook",
     "test:e2e:demo": "node playwright/skills/demo/scripts/playwright-demo.mjs",

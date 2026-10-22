@@ -56,7 +56,7 @@ PLAYWRIGHT_CHROMIUM_EXECUTABLE=/usr/bin/chromium npm run test:e2e
 
 Use Playwright's native `tag` metadata with canonical tags from `support/tags.ts`. Give each test at least one `@journey-*` tag and one `@feature-*` tag. Add `@smoke` only to the fast, high-value release checks; use `@requires-*` to identify tests whose meaningful behavior depends on a live engine or external service. Apply `@demo` and a specific `@demo-*` tag only to deterministic flows suitable for screen recording. Use test titles for readable intent; tags are classification metadata, not a substitute for meaningful names.
 
-The canonical vocabulary in `support/tags.ts` covers dashboard, pricer/risk-review, trade navigation/blotter/positions/history/reconciliation/governance, and the booking-to-risk snapshot handoff. Features distinguish trade lifecycle, audit, import, bitemporal reads, entitlements, saved views, market data, sensitivities, scenarios, and the `fina.position-snapshot/v1` portfolio-risk handoff. Use `@priority-p0`, `@priority-p1`, or `@priority-p2` for execution triage. Apply only classifications a test actually exercises; doc 51's later canonical valuation/P&L/risk-matrix documents are not implemented by the current UI suite.
+The canonical vocabulary in `support/tags.ts` covers dashboard, pricer/risk-review, trade navigation/blotter/positions/history/reconciliation/governance/fixing capture, and the booking-to-risk snapshot handoff. Features distinguish trade lifecycle, fixing due queue and bulk capture, audit, import, bitemporal reads, entitlements, saved views, market data, sensitivities, scenarios, and the `fina.position-snapshot/v1` portfolio-risk handoff. Use `@priority-p0`, `@priority-p1`, or `@priority-p2` for execution triage. Apply only classifications a test actually exercises; doc 51's later canonical valuation/P&L/risk-matrix documents are not implemented by the current UI suite.
 
 ```bash
 npm run test:e2e:smoke
@@ -64,6 +64,7 @@ npm run test:e2e:journey:dashboard
 npm run test:e2e:journey:pricer
 npm run test:e2e:journey:trades
 npm run test:e2e:journey:trade-risk
+npm run test:e2e:journey:trade-fixings
 npm run test:e2e:feature:trade-repository
 npm run test:e2e:feature:notebook
 npm run test:e2e -- --grep @feature-dashboards

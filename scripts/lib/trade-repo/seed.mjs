@@ -139,7 +139,7 @@ export function seedRepository(repo, { count = 32 } = {}) {
           }
         }
       }
-      safe(() => repo.lifecycle(ops(obs.observationDate), { tradeId: id, eventType: 'FIXING', params: { n: obs.n, levels: Object.fromEntries(syms.map((sym) => [sym, close(sym, obs.observationDate)])), source: 'Bloomberg official close' }, reason: `Observation ${obs.n} fixing`, idempotencyKey: `seed:fix:${id}:${obs.n}` }))
+      safe(() => repo.lifecycle(ops(obs.observationDate), { tradeId: id, eventType: 'FIXING', params: { n: obs.n, levels: Object.fromEntries(syms.map((sym) => [sym, close(sym, obs.observationDate)])), source: 'Synthetic seeded market data', sourceObservedAt: `${obs.observationDate}T21:00:00Z`, evidenceRef: `demo-seed:${id}:${obs.n}` }, reason: `Observation ${obs.n} fixing`, idempotencyKey: `seed:fix:${id}:${obs.n}` }))
       lastDate = obs.observationDate
     }
   }

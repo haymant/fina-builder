@@ -28,7 +28,10 @@ let clock = 0
 const now = () => new Date(Date.UTC(2026, 9, 1) + (clock++) * 1000).toISOString()
 const err = (fn) => { try { fn() } catch (e) { return e } throw new Error('expected throw') }
 const mk = (store = createMemoryStore(), templates = TEMPLATES) => createRepository({ reference: REFERENCE, store, now, templates })
-const fix = (repo, tradeId, n, AAPL, MSFT) => repo.lifecycle(ops, { tradeId, eventType: 'FIXING', params: { n, levels: { AAPL, MSFT } } })
+const fix = (repo, tradeId, n, AAPL, MSFT) => {
+  const obs = repo.get(admin, { tradeId }).trade.terms.observations[n - 1]
+  return repo.lifecycle(ops, { tradeId, eventType: 'FIXING', params: { n, levels: { AAPL, MSFT }, source: 'Synthetic unit-test source', sourceObservedAt: `${obs.observationDate}T20:00:00Z`, evidenceRef: `unit-test:${tradeId}:${n}` } })
+}
 
 describe('expression language + calendars', () => {
   it('evaluates safely', () => {
@@ -213,6 +216,30 @@ describe('Phoenix trade repository', () => {
     expect(ts.sections[1].rows[0]).toEqual(['AAPL', '', 200, 120, 140])
     const pr = repo.pricing(admin, { tradeId })
     expect(pr).toMatchObject({ engine: 'riga', tool: 'price_trade', applicable: true, request: { initialSpots: [200, 400], steps: 4, knockInBarrier: 0.6, couponBarrier: 0.7, memoryCoupon: true, callStartStep: 2 } })
+  })
+
+  it('queues due observations and supports atomic/best-effort bulk fixing with immutable provenance and replay', () => {
+    const a = repo.book(admin, { trade: phx({ externalId: 'FIX-BULK-A' }) })
+    const b = repo.book(admin, { trade: phx({ externalId: 'FIX-BULK-B' }) })
+    const due = repo.fixingDue(ops, { asOfDate: '2026-04-20' })
+    expect(due).toMatchObject({ asOfDate: '2026-04-20', reviewRequired: true })
+    expect(due.items.map((item) => item.tradeId)).toEqual([a.tradeId, b.tradeId])
+    expect(due.items[0]).toMatchObject({ version: 1, n: 1, observationDate: '2026-04-20', levelsRequired: ['AAPL', 'MSFT'] })
+    const valid = { tradeId: a.tradeId, expectedVersion: 1, n: 1, levels: { AAPL: 190, MSFT: 420 }, source: 'NYSE official close', sourceObservedAt: '2026-04-20T20:00:00-04:00', evidenceRef: 'feed:NYSE:close:2026-04-20:AAPL-MSFT', reason: 'Regular scheduled close', idempotencyKey: 'fix-batch-a-1' }
+    const invalid = { ...valid, tradeId: b.tradeId, n: 99, idempotencyKey: 'fix-batch-b-99' }
+
+    const atomic = repo.bulkFixings(ops, { rows: [valid, invalid], dryRun: false, mode: 'all-or-nothing' })
+    expect(atomic).toMatchObject({ committed: 0, failed: 1, noWrites: true })
+    expect(repo.get(admin, { tradeId: a.tradeId }).trade.productState.fixings).toHaveLength(0)
+
+    const partial = repo.bulkFixings(ops, { rows: [valid, invalid], dryRun: false, mode: 'best-effort' })
+    expect(partial).toMatchObject({ committed: 1, failed: 1, noWrites: false })
+    expect(partial.results[0]).toMatchObject({ status: 'COMMITTED', tradeId: a.tradeId, n: 1 })
+    expect(repo.get(admin, { tradeId: a.tradeId }).trade.productState.fixings[0]).toMatchObject({ source: valid.source, sourceObservedAt: valid.sourceObservedAt, evidenceRef: valid.evidenceRef })
+    const replay = repo.lifecycle(ops, { tradeId: valid.tradeId, eventType: 'FIXING', expectedVersion: valid.expectedVersion, params: { n: valid.n, levels: valid.levels, source: valid.source, sourceObservedAt: valid.sourceObservedAt, evidenceRef: valid.evidenceRef }, reason: valid.reason, idempotencyKey: valid.idempotencyKey })
+    expect(replay).toMatchObject({ replayed: true, events: [{ eventType: 'FIXING' }, { eventType: 'COUPON' }] })
+    expect(replay.version).toBe(partial.results[0].version)
+    expect(err(() => repo.lifecycle(ops, { tradeId: valid.tradeId, eventType: 'FIXING', expectedVersion: valid.expectedVersion, params: { n: valid.n, levels: { AAPL: 191, MSFT: 420 }, source: valid.source, sourceObservedAt: valid.sourceObservedAt, evidenceRef: valid.evidenceRef }, reason: valid.reason, idempotencyKey: valid.idempotencyKey })).code).toBe('IDEMPOTENCY_CONFLICT')
   })
 
   it('answers bitemporal as-of queries and enforces entitlements', () => {

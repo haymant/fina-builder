@@ -1,4 +1,4 @@
-import { ArrowLeftRight, BookOpenCheck, ChevronDown, Clock, FileUp, History, Keyboard, Layers, Pin, PinOff, ShieldCheck, X } from 'lucide-react'
+import { ArrowLeftRight, BookOpenCheck, CalendarClock, ChevronDown, Clock, FileUp, History, Keyboard, Layers, Pin, PinOff, ShieldCheck, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Toaster, toast } from 'sonner'
 import { tradeRepo } from '../api'
@@ -8,6 +8,7 @@ import { useInstrumentStore } from '@/store/instrumentStore'
 import { AuditView } from './AuditView'
 import { Blotter, type BlotterHandle } from './Blotter'
 import { ErrorState, Loading, Modal } from './common'
+import { FixingsView } from './FixingsView'
 import { ImportView } from './ImportView'
 import { LifecycleDialog } from './LifecycleDialog'
 import { PositionsView } from './PositionsView'
@@ -18,15 +19,16 @@ import * as Tabs from '../docTabs'
 import type { TradeInput } from '../types'
 import '../trade-repo.css'
 
-export type View = 'blotter' | 'positions' | 'recon' | 'audit' | 'import'
+export type View = 'blotter' | 'positions' | 'recon' | 'audit' | 'import' | 'fixings'
 const VIEWS: { id: View; label: string; icon: typeof Layers; key: string }[] = [
   { id: 'blotter', label: 'Blotter', icon: BookOpenCheck, key: '1' },
   { id: 'positions', label: 'Positions', icon: Layers, key: '2' },
   { id: 'recon', label: 'Reconciliation', icon: ArrowLeftRight, key: '3' },
   { id: 'audit', label: 'Audit log', icon: History, key: '4' },
   { id: 'import', label: 'Bulk import', icon: FileUp, key: '5' },
+  { id: 'fixings', label: 'Fixings', icon: CalendarClock, key: '6' },
 ]
-const SHORTCUTS: [string, string][] = [['/', 'Focus blotter search'], ['N', 'New trade'], ['A', 'Amend selected trade'], ['Alt Shift 1 – 5', 'Switch view (menu Trades)'], ['Double-click row', 'Open trade in a document tab'], ['Alt W', 'Close active tab'], ['Alt [ / Alt ]', 'Previous / next tab'], ['T', 'Toggle as-of time travel'], ['Esc', 'Close drawer / dialog'], ['Enter', 'Open focused row'], ['?', 'Show shortcuts']]
+const SHORTCUTS: [string, string][] = [['/', 'Focus blotter search'], ['N', 'New trade'], ['A', 'Amend selected trade'], ['Alt Shift 1 – 6', 'Switch view (menu Trades)'], ['Double-click row', 'Open trade in a document tab'], ['Alt W', 'Close active tab'], ['Alt [ / Alt ]', 'Previous / next tab'], ['T', 'Toggle as-of time travel'], ['Esc', 'Close drawer / dialog'], ['Enter', 'Open focused row'], ['?', 'Show shortcuts']]
 
 const isTyping = (e: KeyboardEvent) => {
   const t = e.target as HTMLElement | null
@@ -191,6 +193,7 @@ export function TradeRepository({ view, onViewChange, newTradeSignal = 0, onOpen
         {!activeTab && view === 'recon' ? <ReconView refreshKey={refreshKey} canManage={role === 'ops' || role === 'admin'} actor={userId} onOpenTrade={openTrade} onChanged={(m) => bump(m)} /> : null}
         {!activeTab && view === 'audit' ? <AuditView refreshKey={refreshKey} onOpenTrade={openTrade} /> : null}
         {!activeTab && view === 'import' ? <ImportView canWrite={canWrite} onImported={(m) => bump(m)} /> : null}
+        {!activeTab && view === 'fixings' ? <FixingsView canManage={!timeTravel && (role === 'ops' || role === 'admin')} onOpenTrade={openTrade} onCommitted={(m) => bump(m)} /> : null}
         {selected && !activeTab && view === 'blotter' ? (
           <TradeDrawer tradeId={selected} asOf={asOf} refreshKey={refreshKey} canWrite={canWrite && !timeTravel} onClose={() => setSelected(null)} onAmend={(t) => amend(t)} onLifecycle={(t, e) => setLifecycle({ trade: t, event: e })} onOpenTrade={setSelected} onPrice={onOpenDashboard ? (t) => void priceTrade(t) : undefined} onOpenTab={(v) => openTab(selected, v)} hasDraft={!!tabs.tabs.find((x) => x.id === Tabs.tabId(selected))?.draft} />
         ) : null}

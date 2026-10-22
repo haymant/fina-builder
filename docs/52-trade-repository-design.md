@@ -226,7 +226,7 @@ Detail codes: `REQUIRED`, `ENUM`, `RANGE`, `FORMAT`, `DATE_ORDER`, `UNKNOWN_REF`
 
 ## 9. MCP tool catalog
 
-Server `fina-trade-repo` 1.0.0, protocol `2025-11-25`, `tools/list` returns exactly these. The JSON Schemas below are generated from `scripts/lib/trade-repo/tools.mjs`.
+Server `fina-trade-repo` 1.0.0, protocol `2025-11-25`; the catalog includes the following tools. The JSON Schemas below are generated from `scripts/lib/trade-repo/tools.mjs`.
 
 | Tool | Purpose |
 | --- | --- |
@@ -235,7 +235,9 @@ Server `fina-trade-repo` 1.0.0, protocol `2025-11-25`, `tools/list` returns exac
 | `tr_trade_validate` | Validate a trade without booking it. Returns errors and warnings (fat-finger, off-market). |
 | `tr_trade_book` | Book a NEW trade. Idempotent on idempotencyKey; assigns tradeId and UTI; version 1. |
 | `tr_trade_amend` | Amend a LIVE trade. Optimistic concurrency via expectedVersion; classifies the amend as ECONOMIC or NON_ECONOMIC; reason mandatory. |
-| `tr_trade_lifecycle` | Apply a lifecycle event: CANCEL, NOVATE, PARTIAL_TERMINATE, EXERCISE, MATURE, BOOK_TRANSFER. params: PARTIAL_TERMINATE {terminatedNotional, fee?}; NOVATE {transfereeId}; BOOK_TRANSFER {toBookId}; EXERCISE {settlement?}. |
+| `tr_trade_lifecycle` | Apply a kernel or product-template lifecycle event. Phoenix `FIXING` captures observation number, levels, required source and timezone-qualified source timestamp, with optional evidence reference; derived coupon/knock-in/autocall/redemption events remain immutable. |
+| `tr_fixing_due` | Read-only ops/admin queue of the next unresolved scheduled observation due on/before an explicit business date. Does not fetch or post market data. |
+| `tr_fixings_bulk` | Preview or commit up to 500 distinct-trade Phoenix fixings with expected versions and per-row idempotency; `all-or-nothing` default or `best-effort`. |
 | `tr_trade_get` | Get one trade, optionally bitemporally as of validAt (business date) and knownAt (system time). |
 | `tr_trade_query` | Query trades with filters, multi-field sort and cursor pagination, optionally as of a point in (bi)time. |
 | `tr_trade_history` | Immutable event history (all versions) of a trade with per-event field changes. |
@@ -660,7 +662,7 @@ Amend a LIVE trade. Optimistic concurrency via expectedVersion; classifies the a
 
 ### `tr_trade_lifecycle`
 
-Apply a lifecycle event: CANCEL, NOVATE, PARTIAL_TERMINATE, EXERCISE, MATURE, BOOK_TRANSFER. params: PARTIAL_TERMINATE {terminatedNotional, fee?}; NOVATE {transfereeId}; BOOK_TRANSFER {toBookId}; EXERCISE {settlement?}.
+Apply a kernel or product-template lifecycle event. For Phoenix `FIXING`, params include `{n, levels, source, sourceObservedAt, evidenceRef?}`; source and ISO-8601 timestamp with timezone are required. The same lifecycle engine records the fixing and any derived coupon/knock-in/autocall/redemption events. Identical idempotent retries return the original event group; a reused key with a different payload is rejected.
 
 ```json
 {
@@ -691,14 +693,8 @@ Apply a lifecycle event: CANCEL, NOVATE, PARTIAL_TERMINATE, EXERCISE, MATURE, BO
       "description": "tradeId, UTI or externalId"
     },
     "eventType": {
-      "enum": [
-        "CANCEL",
-        "NOVATE",
-        "PARTIAL_TERMINATE",
-        "EXERCISE",
-        "MATURE",
-        "BOOK_TRANSFER"
-      ]
+      "type": "string",
+      "description": "Kernel event or lifecycle event declared by the trade's product template (e.g. Phoenix FIXING)"
     },
     "expectedVersion": {
       "type": "integer"
@@ -726,6 +722,14 @@ Apply a lifecycle event: CANCEL, NOVATE, PARTIAL_TERMINATE, EXERCISE, MATURE, BO
   "additionalProperties": false
 }
 ```
+
+### `tr_fixing_due`
+
+Requires `asOfDate` (`YYYY-MM-DD`); optional `limit` is 1–500 and optional `bookIds` restricts the queue. Returns ops/admin-visible LIVE trades with the next pending product observation at/before `asOfDate`, expected version, observation/payment dates and required underlying symbols. It is a query, not an automation or market-data feed.
+
+### `tr_fixings_bulk`
+
+`rows` contains 1–500 rows with distinct `tradeId`s and required `expectedVersion`, `n`, `levels`, `source`, `sourceObservedAt` and row `idempotencyKey`; `evidenceRef` and `reason` are optional. `dryRun` defaults to true. `mode` is `all-or-nothing` (default) or `best-effort`. Preview returns per-row errors and derived event types. Any invalid row prevents every write in all-or-nothing commit mode; best-effort commits only valid rows. Only one pending observation per trade may appear in a batch.
 
 ### `tr_trade_get`
 
@@ -1646,7 +1650,9 @@ Export trades matching a query as CSV or JSON.
 | --- | --- |
 | `tr_trade_book` | `{tradeId, version, eventId, warnings[], trade}` (or `{tradeId, version, eventId, replayed: true, trade}`; `dryRun` → `{dryRun, validation}`) |
 | `tr_trade_amend` | `{tradeId, version, eventId, amendKind, changes[], warnings[], trade}` |
-| `tr_trade_lifecycle` | `{tradeId, version, eventId, trade, novatedTo?}` |
+| `tr_trade_lifecycle` | `{tradeId, version, eventId, events: [{eventId, eventType, version, detail}], trade, replayed?, novatedTo?}` |
+| `tr_fixing_due` | `{asOfDate, total, items: [{tradeId, version, bookId, n, observationCount, observationDate, paymentDate, levelsRequired}], truncated, reviewRequired}` |
+| `tr_fixings_bulk` | `{dryRun, mode, total, valid, failed, committed, noWrites, results: [{row, tradeId, n, status, errors, events, eventIds?}]}` |
 | `tr_trade_get` | `{trade, isLatest, latestVersion, allowedEvents[]}` |
 | `tr_trade_query` | `{items: Trade[], total, nextCursor, asOf}` |
 | `tr_trade_history` | `{tradeId, uti, events: TradeEvent[]}` |
@@ -1661,6 +1667,7 @@ Export trades matching a query as CSV or JSON.
 
 ## 10. Known gaps and next steps
 
+* **Fixing corrections / restatements and maker-checker.** Fixing events are immutable and duplicate observations are rejected, but there is no correction request/approval flow, safe replay of dependent events or independent approval. Source name/time are captured, but no authorized market-data feed or retrievable evidence payload is integrated; see [doc 54](./54-trade-fixing-workflows.md).
 * **Tauri packaging.** The server is a Node process. The desktop webview reaches it at
   `http://127.0.0.1:8792` (CORS enabled, `VITE_TRADE_REPO_MCP_URL` override), and SQLite
   lives beside it, but `src-tauri` does not yet spawn it as a sidecar (the riga/tac

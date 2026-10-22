@@ -18,6 +18,7 @@ drives them.
 | **[FEATURES.md](./FEATURES.md)** | What is implemented: the engine surfaces, tiles, the chat panel and known gaps, followed by the migration specification and its completion record. |
 | **[AGENT-LOCAL.md](./AGENT-LOCAL.md)** | The RIGA assistant chat panel (desktop shell ↔ `riga-server`). |
 | **[docs/51-portfolio-risk-architecture.md](./docs/51-portfolio-risk-architecture.md)** | Proposed canonical portfolio/position/instrument/market/sensitivity/P&L/scenario/risk-matrix documents, the complete SQLite/PostgreSQL relational schema (ER diagram + table definitions) and the extension architecture (PROPOSAL — not implemented). |
+| **[docs/54-trade-fixing-workflows.md](./docs/54-trade-fixing-workflows.md)** | Individual and bulk Phoenix fixing capture, the due-observation queue, operational best practices and remaining correction/automation gaps. |
 | [README.md](./README.md) (this file) | How to run it and how to release it. |
 
 ## Requirements
@@ -195,6 +196,7 @@ npm run lint           # oxlint
 npm run test:run       # Vitest frontend unit/integration suite
 npm run test:e2e       # Playwright browser E2E (starts an isolated Vite server)
 npm run test:e2e:smoke # tagged high-value smoke subset
+npm run test:e2e:journey:trade-fixings # individual and bulk fixing operations
 npm run test:e2e:demo  # records tests tagged @demo (forward --grep to pick one journey)
 npm run test:e2e -- --grep @feature-notebook # feature subset
 npm run test:coverage  # Vitest coverage
