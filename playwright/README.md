@@ -56,16 +56,19 @@ PLAYWRIGHT_CHROMIUM_EXECUTABLE=/usr/bin/chromium npm run test:e2e
 
 Use Playwright's native `tag` metadata with canonical tags from `support/tags.ts`. Give each test at least one `@journey-*` tag and one `@feature-*` tag. Add `@smoke` only to the fast, high-value release checks; use `@requires-*` to identify tests whose meaningful behavior depends on a live engine or external service. Apply `@demo` and a specific `@demo-*` tag only to deterministic flows suitable for screen recording. Use test titles for readable intent; tags are classification metadata, not a substitute for meaningful names.
 
-Current vocabulary includes `@journey-dashboard-setup`, `@journey-dashboard-review`, `@journey-notebook-capture`, `@journey-visualization-add`, `@journey-pricer-dashboards`, `@journey-preferences`, `@journey-trade-navigation`, `@journey-trade-blotter`, `@journey-trade-positions`, `@journey-trade-operations`, and features such as `@feature-dashboards`, `@feature-templates`, `@feature-notebook`, `@feature-visualizations`, `@feature-pricer`, `@feature-risk`, `@feature-theme`, `@feature-trade-repository`, `@feature-trade-blotter`, `@feature-trade-positions`, `@feature-trade-recon`, `@feature-trade-audit`, and `@feature-trade-import`.
+The canonical vocabulary in `support/tags.ts` covers dashboard, pricer/risk-review, trade navigation/blotter/positions/history/reconciliation/governance, and the booking-to-risk snapshot handoff. Features distinguish trade lifecycle, audit, import, bitemporal reads, entitlements, saved views, market data, sensitivities, scenarios, and the `fina.position-snapshot/v1` portfolio-risk handoff. Use `@priority-p0`, `@priority-p1`, or `@priority-p2` for execution triage. Apply only classifications a test actually exercises; doc 51's later canonical valuation/P&L/risk-matrix documents are not implemented by the current UI suite.
 
 ```bash
 npm run test:e2e:smoke
 npm run test:e2e:journey:dashboard
 npm run test:e2e:journey:pricer
 npm run test:e2e:journey:trades
+npm run test:e2e:journey:trade-risk
+npm run test:e2e:feature:trade-repository
 npm run test:e2e:feature:notebook
 npm run test:e2e -- --grep @feature-dashboards
 npm run test:e2e -- --grep '(?=.*@journey-dashboard-setup)(?=.*@feature-templates)'
+npm run test:e2e -- --grep '(?=.*@journey-trade-positions)(?=.*@feature-position-snapshot)'
 ```
 
 The pricer suites drive the default tile dashboards through the `Dashboards` menu and read live `riga-flow` output. Start the engine first:
@@ -79,7 +82,30 @@ They are classified `@requires-riga` and skip with a clear message when `127.0.0
 
 The trade repository suites are integration tests: the config starts `npm run mcp:http:trade-repo` (SQLite, seeded, port 8792) as a second `webServer`, so they do not use the default engine stubs and require the `better-sqlite3` native module.
 
-Playwright `--grep` treats tag values as regular expressions. Use `|` for OR and lookaheads for intersections. Keep tag spelling in `support/tags.ts`; use tags, not brittle file-name conventions or duplicated scripts, to select future test slices.
+Playwright `--grep` treats tag values as regular expressions. Use `|` for OR within a classification and lookaheads for AND across classifications. For example, journeys `trade-positions OR portfolio-risk-handoff` AND feature `position-snapshot OR trade-positions`:
+
+```bash
+npx playwright test --grep '(?=.*@journey-(trade-positions|portfolio-risk-handoff))(?=.*@feature-(position-snapshot|trade-positions))'
+npx playwright test --grep '@journey-trade-navigation' --grep-invert '@wip'
+```
+
+Before executing a slice, use `--list` to review exactly which cases match; listing does not run them:
+
+```bash
+npx playwright test --grep '(?=.*@journey-trade-positions)(?=.*@feature-position-snapshot)' --list
+```
+
+To trace final outcomes and produce a shareable snapshot, save the JSON reporter output and pass it to the result summarizer. Keep the raw report in `/tmp` (or another ignored location), not in source control:
+
+```bash
+set +e
+npx playwright test --grep '@journey-portfolio-risk-handoff' --reporter=json > /tmp/fina-playwright-results.json
+playwright_status=$?
+node scripts/playwright-result-snapshot.mjs /tmp/fina-playwright-results.json
+exit "$playwright_status"
+```
+
+The snapshot lists each final test status (`passed`, `failed`, `timedOut`, `skipped`, or `interrupted`), journey/feature counts, and failing error summaries. The Playwright exit code remains authoritative for CI. For a readable live console trace, use `--reporter=list`; for discovery only, use `--list`.
 
 ## Record and narrate a classified flow
 

@@ -45,6 +45,28 @@ Skill scripts live in `playwright/skills/demo/scripts/`: `playwright-demo.mjs` r
 8. Validate the final MP4 with `ffprobe` for both streams, codecs, 1280×720 dimensions (or requested dimensions), and expected duration. Transcribe the MP4 with speech-to-text (Manus `manus-speech-to-text` when available, otherwise a local Whisper build) to verify every line and ordering. Use `manus-analyze-video` or timestamped frame checks to verify speech/action sync and check for errors; listen through the complete mix for clipping, abrupt cutoffs, bad pronunciation, and level balance. Fix defects before delivery.
 9. Keep WebM, narration clips, WAV master, transcripts, and analysis reports in ignored folders. Attach the final MP4 only; avoid delivering embedded intermediate assets separately. Do not add music unless requested. The classification runner records screen video only; narration synthesis and MP4 assembly remain explicit workflow steps.
 
+## Classify, inventory, and report Playwright test cases
+
+Use native Playwright `tag` metadata from `playwright/support/tags.ts`. Every E2E case should have at least one `@journey-*` and one `@feature-*`; add `@priority-p0|p1|p2`, `@requires-*`, and `@demo`/`@demo-*` only when they accurately describe that test. Keep the human-readable test title focused on the user outcome. Trade-repository and portfolio-risk tags identify shipped trade UI behavior and the doc-51 position-snapshot handoff; do not tag future valuation, P&L, or risk-matrix proposals as implemented coverage.
+
+Playwright `--grep` matches tags as regular expressions. Use `|` for OR choices within a dimension and positive-lookahead assertions for AND across dimensions. Preview the exact inventory without running it:
+
+```bash
+npx playwright test --grep '(?=.*@journey-(trade-positions|portfolio-risk-handoff))(?=.*@feature-(position-snapshot|trade-positions))' --list
+```
+
+Use `--grep-invert` for exclusions. For a readable execution trace, run the selected slice with `--reporter=list`; for machine-readable final statuses, capture the JSON reporter and generate the final snapshot:
+
+```bash
+set +e
+npx playwright test --grep '(?=.*@journey-trade-history)(?=.*@feature-trade-lifecycle)' --reporter=json > /tmp/fina-playwright-results.json
+playwright_status=$?
+node scripts/playwright-result-snapshot.mjs /tmp/fina-playwright-results.json
+exit "$playwright_status"
+```
+
+The snapshot groups tests by journey/feature and shows the final attempt status (`passed`, `failed`, `timedOut`, `skipped`, or `interrupted`) plus error summaries. Preserve the Playwright command's exit status as the CI result; skipped tests are visible and must not be reported as passes. Keep raw JSON and HTML/trace artifacts out of tracked source files. See [`playwright/README.md`](../../README.md) for the complete taxonomy and examples.
+
 ## YouTube
 
 10. Check for an authorized publishing connector or authenticated browser. Before upload, show the exact file, title, description, target channel, visibility, and thumbnail choice, and get confirmation for that exact upload. Verify the final URL and visibility. If no publishing route is authorized, deliver the downloadable MP4 and say it was not uploaded.

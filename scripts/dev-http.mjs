@@ -14,7 +14,7 @@ let stopping = false
 function usage() {
   console.log(`Usage: npm run dev:http [-- --cpu|--cuda] [--public]
 
-Builds the riga-mcp and tac-engine HTTP backends, then starts them with Vite.
+Builds riga-mcp and tac-engine, then starts both HTTP engines, the trade-repo MCP server, and Vite.
   --cpu      Build the portable CPU backend (default)
   --cuda     Build riga-mcp with its CUDA GPU feature; requires CUDA 13+ and an NVIDIA GPU
   --public   Bind Vite to 0.0.0.0 for a forwarded/public preview; backends stay on loopback
@@ -133,7 +133,7 @@ function portReachable(port) {
 }
 
 async function assertPortsFree() {
-  for (const [label, port] of [['Vite', 5173], ['riga-mcp', 8788], ['tac-engine HTTP bridge', Number(process.env.TAC_MCP_HTTP_PORT ?? 8790)]]) {
+  for (const [label, port] of [['Vite', 5173], ['riga-mcp', 8788], ['tac-engine HTTP bridge', Number(process.env.TAC_MCP_HTTP_PORT ?? 8790)], ['trade-repo MCP', Number(process.env.TRADE_REPO_HTTP_PORT ?? 8792)]]) {
     if (await portReachable(port)) {
       throw new Error(`${label} port ${port} is already in use. Stop the existing process or free the port before starting dev:http.`)
     }
@@ -242,16 +242,19 @@ async function main() {
     '--transport', 'http', '--bind', '127.0.0.1:8788', '--allowed-host', 'localhost', '--allowed-host', '127.0.0.1',
   ])
   startService('tac-engine HTTP bridge', process.execPath, [resolve(root, 'scripts/tac-mcp-http.mjs')])
+  startService('trade-repo MCP', process.execPath, [resolve(root, 'scripts/trade-repo-mcp-http.mjs'), '--seed'])
   const viteArgs = [resolve(root, 'node_modules/vite/bin/vite.js'), '--host', options.publicHost ? '0.0.0.0' : '127.0.0.1']
   startService('Vite', process.execPath, viteArgs)
 
   await Promise.all([
     waitForPort('riga-mcp', 8788),
     waitForPort('tac-engine HTTP bridge', Number(process.env.TAC_MCP_HTTP_PORT ?? 8790)),
+    waitForPort('trade-repo MCP', Number(process.env.TRADE_REPO_HTTP_PORT ?? 8792)),
     waitForPort('Vite', 5173),
   ])
   console.log(`\n[dev:http] Ready: http://127.0.0.1:5173/${options.publicHost ? ' (Vite bound to 0.0.0.0)' : ''}`)
-  console.log('[dev:http] Press Ctrl+C to stop all three services.')
+  console.log('[dev:http] Ready: trade-repo MCP at http://127.0.0.1:8792/mcp.')
+  console.log('[dev:http] Press Ctrl+C to stop all four services.')
 }
 
 process.once('SIGINT', () => shutdown(130))

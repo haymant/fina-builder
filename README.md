@@ -48,7 +48,7 @@ drives them.
 
 ## Run it
 
-### 1. Web mode (browser + HTTP engines) — three processes
+### 1. Web mode (browser + HTTP engines) — four processes
 
 Alpaca credentials are optional. Without them, `tac-engine` serves Yahoo Finance daily stock
 history and free Yahoo/ECB daily FX rates; account/order tools and Alpaca-only data (such as
@@ -61,7 +61,7 @@ placeholder credentials or synthetic market data.
 
 ```bash
 npm ci
-npm run dev:http          # builds both Rust backends, then starts them with Vite (CPU default)
+npm run dev:http          # builds both Rust backends, then starts them, trade-repo MCP, and Vite (CPU default)
 # Optional: enable CUDA for riga-mcp; requires CUDA Toolkit 13+ and a visible NVIDIA GPU.
 npm run dev:http -- --cuda
 # Optional: bind Vite to 0.0.0.0 for a forwarded/public preview; backend ports remain local.
@@ -69,8 +69,8 @@ npm run dev:http -- --public
 ```
 
 `npm run dev:all` remains available when both backend binaries have already been built. The
-`dev:http` command builds `riga-mcp` and `tac-engine` before launching all three services,
-checks that ports 5173/8788/8790 are free, and stops the other processes if one exits. CPU is
+`dev:http` command builds `riga-mcp` and `tac-engine` before launching all four services,
+checks that ports 5173/8788/8790/8792 are free, and stops the other processes if one exits. CPU is
 the default. The first build may take several minutes because `tac-engine` bundles DuckDB;
 subsequent runs reuse the compiled artifacts. `--cuda` adds the `riga-mcp` `gpu` Cargo feature (CUDA 13+); `tac-engine` remains
 CPU-only. The CUDA option is explicit and fails early when the toolkit or NVIDIA GPU is not
@@ -82,6 +82,7 @@ RIGA's local GGUF inference in the desktop shell.
 | Frontend | Vite on <http://127.0.0.1:5173> |
 | `riga-mcp` | MCP over HTTP on <http://127.0.0.1:8788> |
 | `tac-engine` | MCP over HTTP on <http://127.0.0.1:8790> |
+| Trade repository | MCP over HTTP on <http://127.0.0.1:8792> |
 
 The webview calls the same-origin paths `/riga/mcp` and `/tac/mcp`, which Vite proxies to
 the two engines (see `vite.config.ts`). To run the pieces separately:
@@ -89,12 +90,14 @@ the two engines (see `vite.config.ts`). To run the pieces separately:
 ```bash
 npm run backend:dev      # npm run mcp:http:riga   (riga-mcp --transport http)
 npm run mcp:http:tac     # the tac-engine HTTP bridge
-npm run dev              # vite
+npm run mcp:http:trade-repo # seeded local trade repository MCP server
+npm run dev:web          # frontend-only Vite process
 ```
 
-> Starting only `npm run dev` gives you a frontend with **no** engines; the tiles then show
-> their unavailable/error state (they never fall back to fake data). Use `npm run dev:http`
-> to build and start the HTTP backends with the frontend.
+`npm run dev` starts Vite plus the local trade-repository MCP server. Use `npm run dev:web`
+when you intentionally need only the frontend (for example, Playwright starts its own isolated
+trade-repository instance). To start the pricing/market-data engines as well, use
+`npm run dev:http` or `npm run dev:all`.
 
 Configuration: `VITE_RIGA_UPSTREAM` / `VITE_TAC_UPSTREAM` override the proxy targets, and
 `VITE_RIGA_TRANSPORT=tauri|http` / `VITE_TAC_TRANSPORT=tauri|http` force a transport
@@ -103,7 +106,7 @@ Configuration: `VITE_RIGA_UPSTREAM` / `VITE_TAC_UPSTREAM` override the proxy tar
 ### 2. Desktop mode (Tauri IPC + stdio engines)
 
 ```bash
-npm run tauri:dev      # window with IPC; the shell spawns the engines over stdio
+npm run tauri:dev      # window with IPC; starts trade-repo MCP + Vite and spawns engines over stdio
 npm run tauri:build    # native bundles for the current platform
 ```
 

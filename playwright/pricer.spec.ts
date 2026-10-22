@@ -101,7 +101,7 @@ test('reprices the note after applying a trade-design preset', {
 })
 
 test('reviews greeks and scenario bumps in Market & Risk', {
-  tag: [journey.pricerDashboards, feature.pricer, feature.risk, TAG.dependency.riga],
+  tag: [journey.riskReview, journey.pricerDashboards, feature.pricer, feature.marketData, feature.sensitivities, feature.scenarios, feature.risk, TAG.dependency.riga],
 }, async ({ page, workspace }) => {
   test.setTimeout(120_000)
   const pricer = new PricerPage(page)
