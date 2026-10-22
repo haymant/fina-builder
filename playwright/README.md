@@ -107,6 +107,30 @@ npx playwright install ffmpeg
 
 The runner's video toggle is `PLAYWRIGHT_VIDEO=on`; `--video=on` is not a supported CLI flag here. Chromium's 1280×720 viewport alone does not guarantee output resolution, so retain the explicit `video.size` in `playwright.config.ts`. The default UI fixture is front-end-only; engine-dependent flows such as `@demo-visualization-add` opt out of the stub and need a verified engine. Without it, the recording shows a real connection error—do not present that as a successful demo.
 
+## Code coverage
+
+Run the full UI coverage pipeline with:
+
+```bash
+npm run test:coverage:ui
+```
+
+This runs Vitest/jsdom with the Istanbul provider, then runs the browser suite with `vite-plugin-istanbul`. Coverage-only Playwright defaults to two workers to reduce CPU contention; override with `PLAYWRIGHT_COVERAGE_WORKERS=1` or a forwarded Playwright option. Each worker writes a separate raw Istanbul JSON file to `.nyc_output/`, avoiding concurrent writes to a shared report. NYC merges those counters with Vitest's counters and writes the combined UI LCOV report to `coverage/ui/lcov.info`; the standalone Vitest report is in `coverage/vitest/`. Browser-only coverage can be captured with `npm run test:e2e:coverage`; optional Playwright arguments still work, for example `npm run test:e2e:coverage -- --grep @smoke`.
+
+Rust coverage uses `cargo-llvm-cov` for the Tauri app and every standalone Rust dependency workspace (`modules/riga`, `modules/riga-flow`, and `modules/tac-engine`). Initialize all submodules and both pinned toolchains first:
+
+```bash
+git submodule update --init --recursive
+rustup component add llvm-tools-preview --toolchain 1.99.0
+rustup component add llvm-tools-preview --toolchain stable
+cargo install cargo-llvm-cov --locked
+npm run test:coverage:rust
+python3 scripts/gate-coverage.py coverage/rust/lcov.info
+npm run coverage:combine
+```
+
+The Rust runner emits `coverage/rust/lcov.info` for `payoff-explorer`, plus `coverage/rust/{riga,riga-flow,tac-engine}/lcov.info` for the dependency modules. `npm run coverage:combine` creates `coverage/rust/combined/lcov.info` and the all-source `coverage/combined/lcov.info`, and prints a line-coverage row for each workspace. The existing 75% Rust gate still applies to `payoff-explorer`; dependency-module reports are surfaced separately without silently applying a new threshold. GitHub Actions checks out submodules recursively, runs the same local Rust command, and uploads the per-workspace and combined reports.
+
 ## Reporting and maintenance
 
 ```bash

@@ -22,6 +22,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -43,6 +45,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: clippy, rustfmt
@@ -86,11 +90,13 @@ jobs:
       - run: cargo test -p payoff-explorer
 
   coverage:
-    name: Coverage gates
+    name: UI and Rust coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@1.99.0
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
@@ -98,9 +104,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run test:coverage
-      - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --locked
+      - name: Install Playwright Chromium and system dependencies
+        run: npx playwright install --with-deps chromium
+      - name: UI coverage (Vitest and Playwright)
+        id: ui_coverage
+        run: npm run test:coverage:ui
+        continue-on-error: true
+      - name: Install cargo-llvm-cov and LLVM tools for all module toolchains
+        run: |
+          rustup component add llvm-tools-preview --toolchain 1.99.0
+          rustup toolchain install stable --profile minimal
+          rustup component add llvm-tools-preview --toolchain stable
+          cargo install cargo-llvm-cov --locked
       # `cargo llvm-cov --workspace` compiles every member, including the Tauri
       # shell, so this job needs the same system libraries as the adapters job.
       - name: Install Tauri Linux prerequisites
@@ -114,15 +129,39 @@ jobs:
           mkdir -p src-tauri/binaries
           : > "src-tauri/binaries/riga-mcp-$triple"
           : > "src-tauri/binaries/tac-engine-$triple"
-      - name: Rust coverage
-        run: |
-          cargo llvm-cov --workspace --lcov --output-path lcov.info
-      - name: Enforce coverage gates
-        run: python3 scripts/gate-coverage.py lcov.info
+      - name: Rust coverage (app and dependency modules)
+        id: rust_coverage
+        run: npm run test:coverage:rust
+        continue-on-error: true
+      - name: Enforce Rust coverage gate
+        id: rust_gate
+        if: always()
+        run: python3 scripts/gate-coverage.py coverage/rust/lcov.info
+        continue-on-error: true
+      - name: Combine LCOV reports and write coverage summary
+        id: coverage_summary
+        if: always()
+        run: node scripts/coverage-summary.mjs
+        continue-on-error: true
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: coverage
-          path: |
-            lcov.info
-            coverage/
+          path: coverage/
           if-no-files-found: ignore
+      - name: Fail if tests or coverage gates failed
+        if: always()
+        env:
+          UI_OUTCOME: ${{ steps.ui_coverage.outcome }}
+          RUST_OUTCOME: ${{ steps.rust_coverage.outcome }}
+          GATE_OUTCOME: ${{ steps.rust_gate.outcome }}
+          SUMMARY_OUTCOME: ${{ steps.coverage_summary.outcome }}
+        run: |
+          failed=0
+          for outcome in "$UI_OUTCOME" "$RUST_OUTCOME" "$GATE_OUTCOME" "$SUMMARY_OUTCOME"; do
+            if [ "$outcome" != "success" ]; then failed=1; fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "Coverage tests, report generation, or a coverage gate failed. See the preceding steps and uploaded reports."
+            exit 1
+          fi

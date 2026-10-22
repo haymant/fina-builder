@@ -57,6 +57,13 @@ test('creates a dashboard note for the narrated walkthrough', {
 test.describe('visualization gallery demo', () => {
   test.use({ stubEngines: false })
 
+  test.beforeEach(async ({ request }) => {
+    test.skip(
+      !(await isRigaEngineReady(request)),
+      'riga-mcp is not reachable on 127.0.0.1:8788; start it with `npm run mcp:http:riga`',
+    )
+  })
+
   test('adds a Payoff Petri Net from the visualization gallery', {
     tag: [TAG.demo.any, TAG.demo.visualizationAdd, TAG.journey.visualizationAdd, TAG.feature.visualizations, TAG.dependency.riga],
   }, async ({ page, workspace }) => {

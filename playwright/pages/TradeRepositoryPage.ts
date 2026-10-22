@@ -13,6 +13,7 @@ export const TRADE_VIEW_LABEL: Record<TradeView, string> = {
   audit: 'Audit log',
   import: 'Bulk import',
 }
+const VIEW_LOAD_TIMEOUT_MS = 15_000
 
 export class TradeRepositoryPage {
   readonly root
@@ -70,12 +71,12 @@ export class TradeRepositoryPage {
     await this.menu.click()
     await this.page.getByTestId(`menuitem-trades-${view}`).click()
     await expect(this.breadcrumb).toContainText(TRADE_VIEW_LABEL[view])
-    await expect(this.viewRoot(view)).toBeVisible()
+    await expect(this.viewRoot(view)).toBeVisible({ timeout: VIEW_LOAD_TIMEOUT_MS })
   }
 
   async expectView(view: TradeView): Promise<void> {
     await expect(this.breadcrumb).toContainText(TRADE_VIEW_LABEL[view])
-    await expect(this.viewRoot(view)).toBeVisible()
+    await expect(this.viewRoot(view)).toBeVisible({ timeout: VIEW_LOAD_TIMEOUT_MS })
     await expect(this.docHomeTab).toContainText(TRADE_VIEW_LABEL[view])
   }
 

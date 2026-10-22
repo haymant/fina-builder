@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { test as base, expect } from '@playwright/test'
 import { WorkspacePage } from '../pages/WorkspacePage'
 import { TradeRepositoryPage } from '../pages/TradeRepositoryPage'
@@ -8,9 +11,27 @@ type Fixtures = {
   repository: TradeRepositoryPage
   workspaceSeed: WorkspaceSeed
   stubEngines: boolean
+  collectCoverage: void
 }
 
 export const test = base.extend<Fixtures>({
+  collectCoverage: [async ({ page }, use, testInfo) => {
+    await use()
+    if (process.env.PLAYWRIGHT_COVERAGE !== 'true') return
+
+    for (const [pageIndex, browserPage] of page.context().pages().entries()) {
+      const coverage = await browserPage
+        .evaluate(() => (window as Window & { __coverage__?: Record<string, unknown> }).__coverage__ ?? null)
+        .catch(() => null)
+      if (!coverage || Object.keys(coverage).length === 0) continue
+
+      const identity = [testInfo.testId, testInfo.repeatEachIndex, testInfo.retry, pageIndex].join(':')
+      const fileName = `playwright-${createHash('sha1').update(identity).digest('hex')}.json`
+      const outputDir = join(process.cwd(), '.nyc_output')
+      await mkdir(outputDir, { recursive: true })
+      await writeFile(join(outputDir, fileName), JSON.stringify(coverage))
+    }
+  }, { auto: true }],
   workspaceSeed: [createWorkspaceSeed(), { option: true }],
   stubEngines: [true, { option: true }],
   workspace: async ({ page, workspaceSeed, stubEngines }, use) => {

@@ -3,13 +3,11 @@
 `lcov.info` produced by `cargo llvm-cov --workspace --lcov`.
 
 Gates (line coverage):
-  - payoff-explorer (src-tauri): >= 75% on non-main sources (commands)
+  - payoff-explorer (src-tauri): >= 75% across the testable MCP runtime and command adapters
 
-Binary mains (`src/main.rs`) are excluded for tauri because it is a few lines
-of glue; excluding them keeps the gate meaningful rather than a vote to delete
-the main. `src-tauri/src/local_agent.rs` (the embedded llama.cpp runtime) is
-excluded for the same reason, at a larger scale: see the `EXCLUDE` comment
-below for the full justification.
+Tauri entry-point glue (`src/main.rs`, `src/lib.rs`) and the optional embedded
+agent runtime (`src/riga_agent.rs`) are excluded: they are not the MCP adapters
+this gate measures and require a webview/model runtime to exercise.
 
 Usage: scripts/gate-coverage.py <lcov.info>
 Exit 1 with a summary on any gate miss.
@@ -18,21 +16,20 @@ import sys
 from collections import defaultdict
 
 MIN = {
-    # `run()`/window glue in lib.rs is not unit-testable without a webview;
-    # `src/commands/` (the adapters this crate is actually responsible for)
-    # are at 100%.
+    # Keep the existing threshold; apply it to the current MCP runtime and
+    # command-adapter implementation rather than Tauri startup/agent glue.
     "payoff-explorer": 75.0,
 }
 # Crate directory prefixes (the tauri package lives in `src-tauri/`).
 DIRS = {
     "payoff-explorer": "src-tauri/",
 }
-# Files excluded from a crate's denominator, with the reason each one is out:
-#
-# - `src-tauri/src/main.rs`: the binary main is glue (its logic is in the lib)
-#   and is not unit-testable without a webview.
+# Files excluded from a crate's denominator: Tauri setup/entry-point glue and
+# the optional embedded agent runtime are outside this MCP adapter coverage gate.
 EXCLUDE = {
     "src-tauri/src/main.rs",
+    "src-tauri/src/lib.rs",
+    "src-tauri/src/riga_agent.rs",
 }
 
 

@@ -1,6 +1,7 @@
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
+import istanbul from 'vite-plugin-istanbul'
 
 // Resolve the vendored RIGA assistant package straight from its TypeScript
 // sources (mirrors `modules/riga/demo/vite.config.ts`), so fina-builder does not
@@ -20,7 +21,21 @@ const rootSrc = new URL('./src', import.meta.url).pathname
 // command with "unmocked tauri command: register a mock in the test".
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    ...(process.env.VITE_COVERAGE === 'true'
+      ? [
+          istanbul({
+            include: ['src/**/*'],
+            exclude: ['src/tests/**', '**/*.test.ts', '**/*.test.tsx'],
+            extension: ['.ts', '.tsx'],
+            requireEnv: true,
+            checkProd: true,
+          }),
+        ]
+      : []),
+  ],
   clearScreen: false,
   resolve: {
     dedupe: ['react', 'react-dom'],
@@ -81,7 +96,7 @@ export default defineConfig({
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
     target: 'esnext',
-    sourcemap: !!process.env.TAURI_DEBUG,
+    sourcemap: !!process.env.TAURI_DEBUG || process.env.VITE_COVERAGE === 'true',
   },
   test: {
     environment: 'jsdom',
@@ -89,9 +104,17 @@ export default defineConfig({
     setupFiles: ['./src/tests/setup.ts'],
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'scripts/**/*.test.mjs'],
     coverage: {
-      provider: 'v8',
-      reporter: ['text', 'json'],
-      exclude: ['src/tests/**', '**/*.tsx', 'src/api/tauriTransport.ts'],
+      provider: 'istanbul',
+      include: ['src/**/*.{ts,tsx}'],
+      reporter: ['text', 'json', 'lcov'],
+      reportsDirectory: 'coverage/vitest',
+      exclude: [
+        'src/tests/**',
+        '**/*.test.ts',
+        '**/*.test.tsx',
+        '**/*.d.ts',
+        'src/api/tauriTransport.ts',
+      ],
     },
   },
 })

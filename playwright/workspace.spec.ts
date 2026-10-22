@@ -77,10 +77,17 @@ test('creates and edits a notebook note', {
 test('persists the selected theme after reload', {
   tag: [journey.preferences, feature.theme],
 }, async ({ page, workspace }) => {
-  const savedTheme = () => page.evaluate(() => {
-    const saved = JSON.parse(localStorage.getItem('fina-workspace') ?? '{}') as { theme?: string }
-    return saved.theme
-  })
+  const savedTheme = async () => {
+    try {
+      return await page.evaluate(() => {
+        const saved = JSON.parse(localStorage.getItem('fina-workspace') ?? '{}') as { theme?: string }
+        return saved.theme
+      })
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Execution context was destroyed')) return undefined
+      throw error
+    }
+  }
 
   await expect.poll(savedTheme).toBe('dark')
   await page.getByRole('button', { name: 'Toggle theme' }).click()

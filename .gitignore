@@ -38,6 +38,7 @@ src-tauri/binaries/
 
 # Frontend test coverage output
 coverage/
+.nyc_output/
 lcov.info
 playwright/test-results/
 playwright/playwright-report/
