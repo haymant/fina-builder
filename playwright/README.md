@@ -14,7 +14,8 @@ playwright/
 ├── pages/               # page-level locators and user actions
 ├── support/             # canonical tags and fresh test-data factories
 ├── workspace.spec.ts    # short independent tests
-└── demo.spec.ts         # paced, tagged recording journey
+├── demo.spec.ts         # focused paced recording journeys
+└── tour-demo.spec.ts    # one paced end-to-end tour of every journey
 ```
 
 Prefer accessible role, label, and placeholder locators. Keep unavoidable CSS selectors scoped in page/component objects; tests should not repeat selector details. Keep domain assertions in `assertions/`, test-data setup in fixtures or typed data factories, and specs readable as arrange/act/assert user stories. Avoid giant page objects, global mutable state, arbitrary sleeps in normal tests, and abstraction that only wraps one Playwright call. The demo spec is the exception for deliberate `waitForTimeout` holds; those create readable capture time for narration and are not needed by ordinary tests.
@@ -122,7 +123,14 @@ That runs all `@demo` tests and sets `PLAYWRIGHT_VIDEO=on`. To record only one c
 npm run test:e2e:demo -- --grep @demo-dashboard-note
 ```
 
-`@demo-visualization-add` is engine-backed; start `npm run mcp:http:riga` before recording it (the test opts out of the default `/riga/mcp` stub with `test.use({ stubEngines: false })`). `@demo-pricer-dashboards` uses the same live engine and tours the pricing, trade-design and risk dashboards; start `npm run mcp:http:riga` first. `@demo-trade-repository` and `@demo-trade-fixings` are backed by the seeded SQLite trade-repo server that the config starts automatically, so no manual setup is needed. The fixing demo books isolated Phoenix trades and captures one due observation with source provenance:
+To record the single full-product tour — workspace, notebook, visualization, pricer/risk, and every trade-repository journey — in one video:
+
+```bash
+npm run mcp:http:riga
+npm run test:e2e:demo:tour
+```
+
+The tour writes the relative start time of every narration cue to `playwright/recordings/tour/cues.json` so the narration can be aligned to the captured video. `@demo-tour` is engine-backed and tagged with every journey/feature it exercises; the narrow `@demo-*` flows remain available when a shorter clip is preferable. `@demo-visualization-add` is engine-backed; start `npm run mcp:http:riga` before recording it (the test opts out of the default `/riga/mcp` stub with `test.use({ stubEngines: false })`). `@demo-pricer-dashboards` uses the same live engine and tours the pricing, trade-design and risk dashboards; start `npm run mcp:http:riga` first. `@demo-trade-repository` and `@demo-trade-fixings` are backed by the seeded SQLite trade-repo server that the config starts automatically, so no manual setup is needed. The fixing demo books isolated Phoenix trades and captures one due observation with source provenance:
 
 ```bash
 npm run test:e2e:demo -- --grep @demo-trade-fixings

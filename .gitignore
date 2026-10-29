@@ -64,3 +64,6 @@ playwright/.data/
 
 # Local SQLite store created by `npm run mcp:http:trade-repo`
 book.db*
+
+# Local TTS tooling for demo narration
+.venv-tts/

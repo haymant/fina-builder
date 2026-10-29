@@ -9,7 +9,7 @@ Skill scripts live in `playwright/skills/demo/scripts/`: `playwright-demo.mjs` r
 
 ## Select a user journey
 
-1. Read `playwright/README.md`, `playwright/support/tags.ts`, `playwright/support/workspaceState.ts`, `playwright.config.ts`, and the relevant spec. Choose one deterministic test tagged `@demo` plus a specific `@demo-*` classification. Use native `tag` metadata, not filename matching. Prefer a focused user journey/feature slice over recording the entire suite.
+1. Read `playwright/README.md`, `playwright/support/tags.ts`, `playwright/support/workspaceState.ts`, `playwright.config.ts`, and the relevant spec. Choose one deterministic test tagged `@demo` plus a specific `@demo-*` classification. Use native `tag` metadata, not filename matching. Prefer a focused user journey/feature slice over recording the entire suite. For a single video that goes through every journey, use `@demo-tour` (`playwright/tour-demo.spec.ts`); it tags all journeys/features it exercises and writes narration cue marks to `playwright/recordings/tour/cues.json`.
 2. Run only the selected flow and confirm it passes:
 
    ```bash
@@ -36,7 +36,7 @@ Skill scripts live in `playwright/skills/demo/scripts/`: `playwright-demo.mjs` r
    ```
 
    Write the cue script one line per cue; blank lines and `#` comments are ignored. The script writes `cue-01.mp3` … and `narration.json` with measured durations. Use `--list` to print the voice table and `--rate`/`--pitch` only when a cue must be tightened. Install `edge-tts` once (`python3 -m venv .venv-tts && .venv-tts/bin/pip install edge-tts`) and point `EDGE_TTS_BIN` at the binary, or use any existing `edge-tts` on `PATH`. Keep the spoken text verbatim in the cue file; keep style in the surrounding direction, not in the audio. Use one voice consistently for the whole video. Do not clone or imitate a real person's identifiable voice. A sample may inform non-identity traits only; an authorized complete recording may be used as-is, not extended in that voice.
-6. Create one short audio clip per cue when timing matters. Read the durations from `narration.json`, and confirm the video and each clip with `ffprobe`. Align clips to the actual UI state/action timestamps with short natural pauses. If a cue does not fit its hold, tighten the wording or adjust the demo holds and record again; do not let a line describe an action that has already left the screen. If the flow, test holds, script, or voice changes, recalculate cue times.
+6. Create one short audio clip per cue when timing matters. Read the durations from `narration.json`, and confirm the video and each clip with `ffprobe`. Align clips to the actual UI state/action timestamps with short natural pauses. For `@demo-tour`, use the relative marks in `playwright/recordings/tour/cues.json`; add the measured video preroll (context creation before the test body) to each mark, then verify the first and last cues against frames. If a cue does not fit its hold, tighten the wording or adjust the demo holds and record again; do not let a line describe an action that has already left the screen. If the flow, test holds, script, or voice changes, recalculate cue times.
 7. Use a two-stage FFmpeg export:
    - Build an audio-only master WAV: delay each voice clip with `adelay=<milliseconds>:all=1`, combine using `amix`, pad the intended tail with `apad`, and verify its duration/transcript.
    - In a separate command, mux the WebM and WAV using explicit stream maps and target duration; encode H.264 video and AAC audio in MP4.
