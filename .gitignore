@@ -53,6 +53,8 @@ playwright/.data/
 .riga
 # Local TAC lake data downloaded/generated during development.
 .lake/
+# Local NIP development database and exports.
+.nip-data/
 # RIGA MCP registry written at runtime
 .riga-mcp-registry.json
 .draft

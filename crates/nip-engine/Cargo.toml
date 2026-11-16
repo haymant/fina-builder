@@ -1,0 +1,19 @@
+[package]
+name = "nip-engine"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Narrative Intelligence service foundation for fina-builder"
+
+[dependencies]
+nip-domain = { path = "../nip-domain" }
+nip-store = { path = "../nip-store" }
+serde_json = "1"
+thiserror = "2"
+
+[[bin]]
+name = "nip-engine"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3"
