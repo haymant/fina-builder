@@ -19,6 +19,10 @@ drives them.
 | **[AGENT-LOCAL.md](./AGENT-LOCAL.md)** | The RIGA assistant chat panel (desktop shell ↔ `riga-server`). |
 | **[docs/51-portfolio-risk-architecture.md](./docs/51-portfolio-risk-architecture.md)** | Proposed canonical portfolio/position/instrument/market/sensitivity/P&L/scenario/risk-matrix documents, the complete SQLite/PostgreSQL relational schema (ER diagram + table definitions) and the extension architecture (PROPOSAL — not implemented). |
 | **[docs/54-trade-fixing-workflows.md](./docs/54-trade-fixing-workflows.md)** | Individual and bulk Phoenix fixing capture, the due-observation queue, operational best practices and remaining correction/automation gaps. |
+| **[docs/55-narrative-intelligence-aligned-brd.md](./docs/55-narrative-intelligence-aligned-brd.md)** | Narrative Intelligence BRD review and requirements aligned to current repository practice. |
+| **[docs/56-narrative-intelligence-implementation-plan.md](./docs/56-narrative-intelligence-implementation-plan.md)** | Phased NIP architecture and implementation sequence; proposed work, not existing product behavior. |
+| **[docs/57-narrative-intelligence-testing-plan.md](./docs/57-narrative-intelligence-testing-plan.md)** | User-journey, regression, storage/quality-gate and narrated Playwright demonstration plan. |
+| **[docs/58-narrative-intelligence-phase-0-decisions.md](./docs/58-narrative-intelligence-phase-0-decisions.md)** | Closed local-first Phase 0 baseline, including one-time approved podcast RSS subscriptions, local transcription, and analysis using the RIGA-configured model; no NIP feature code, feed or services are configured. |
 | [README.md](./README.md) (this file) | How to run it and how to release it. |
 
 ## Requirements
