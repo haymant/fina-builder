@@ -7,3 +7,6 @@
 [submodule "modules/riga"]
 	path = modules/riga
 	url = https://github.com/haymant/riga
+[submodule "modules/comfy"]
+	path = modules/comfy
+	url = https://github.com/haymant/comfyui-flows.git

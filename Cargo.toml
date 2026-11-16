@@ -2,6 +2,9 @@
 resolver = "2"
 members = [
     "src-tauri",
+    "crates/nip-domain",
+    "crates/nip-store",
+    "crates/nip-engine",
 ]
 # The vendored engine submodules are standalone workspaces (§3.10): keep them
 # out of fina-builder's workspace so each resolves its own `Cargo.lock` and can

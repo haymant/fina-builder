@@ -1,0 +1,13 @@
+[package]
+name = "nip-domain"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Domain contracts for fina-builder Narrative Intelligence"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

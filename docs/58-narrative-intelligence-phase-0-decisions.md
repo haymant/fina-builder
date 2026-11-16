@@ -1,0 +1,122 @@
+# 58 — Narrative Intelligence Platform: Phase 0 decision record
+
+**Status:** Phase 0 is closed for the local-first MVP design baseline. Decision 2 selected podcast RSS discovery with local transcription as the primary ingestion workflow. On 2026-11-16, [ADR 59](./59-comfyui-media-processing-architecture.md) superseded only the ASR execution-host detail: ComfyUI is an optional local media worker, not an owner of source access, feed scheduling, retention policy, or NIP records. The Phase 1 service foundation and RSS discovery backend are implemented; no feed, ComfyUI instance, ASR node/model, Qdrant service, provider credential, or live source has been configured. The decisions below do not grant source licenses or approve remote transmission of episode audio/transcripts; each feed still requires source-specific approval.
+
+**Decision date:** 2026-11-16. **Basis:** the attached BRD, the `fina-builder` repository at `main` commit `5795ee464707bb55b55cc2c19f7b27f71f257df1`, and a conservative local-first interpretation of the user's Phase 0 request.
+
+Related documents: [aligned BRD](./55-narrative-intelligence-aligned-brd.md), [implementation plan](./56-narrative-intelligence-implementation-plan.md), [user-journey testing and narrated Playwright plan](./57-narrative-intelligence-testing-plan.md), and [ComfyUI media-processing boundary](./59-comfyui-media-processing-architecture.md).
+
+## Decision 1 — Product boundary
+
+NIP will be a separate workspace inside `fina-builder`. The existing structured-product/pricing surfaces, RIGA assistant, TAC market-data surfaces, and trade-repository workflows remain available and keep their current domain contracts. NIP may reuse shared React components, dashboard patterns, Tauri process management and typed MCP transport patterns. It will not put narrative events into the trade-repository schema or treat the TAC market-data lake as a narrative source-of-truth store.
+
+A product rename, replacement of the current landing surface, or merge of NIP into the pricing dashboard is outside this decision and needs a separate product change.
+
+## Decision 2 — Initial source access and retention
+
+The first production source is **podcast episodes from user-subscribed RSS feeds**, not per-episode manual file import. A user adds a show once by selecting a reviewed feed catalog entry or entering a feed URL; an optional show lookup may resolve a candidate RSS URL, but the user confirms the exact feed. The single subscribe confirmation explains that NIP will sync that feed immediately, then discover new entries automatically, download eligible audio enclosures, transcribe them locally and ingest transcripts without another per-episode import action. Refresh again at application start and every six hours while the app is running, honoring longer server `Retry-After` delays and bounded backoff; send conditional HTTP requests when validators are available. Do not add an always-on background service in this increment. The user can pause or remove a subscription. A local document/transcript import remains an optional fallback for user-owned material or unsupported feeds, not the routine workflow.
+
+No feed is enabled by default. Before subscription, show the feed identity and available source terms, and require the user/operator to confirm that this source may be fetched, locally processed and retained under their rights and the feed's applicable terms. Public RSS visibility alone is not permission to download, transcribe or retain an episode. Disable feeds whose access/retention status is unknown or disallows the workflow. Do not use browser automation, authenticated paywall downloads, platform transcript scraping, or other means to bypass access restrictions or rate limits. Apple Podcasts' app transcripts are not an ingestion API; use the RSS enclosure and local ASR when the feed permits it. Do not add Reddit, X/Twitter, corporate-site or other source connectors in this increment.
+
+Run speech-to-text locally; never silently send episode audio or transcripts to a remote ASR/LLM provider. If a supported local ASR engine is unavailable or transcription fails, keep a visible failed/retryable ingestion run and do not mark the episode successfully imported. Downloaded audio is transient working data: delete it after transcription succeeds and after a failed/cancelled attempt; retry by downloading it again. Retain the resulting transcript only where the user's rights and source terms allow it, until user deletion unless a stricter source term or policy requires earlier purge. Do not delete a stored event merely because a rolling RSS feed later omits it; process an explicit correction, withdrawal or deletion request under the source-specific policy. No automatic cloud backup or third-party replication is in scope.
+
+Deletion is an explicit exception to ordinary append-only immutability. A purge removes source text and content-bearing derived records from the active DuckDB store, NIP-managed Parquet exports and any configured vector index. NIP records a tombstone containing only the event identifier, purge time and minimal reason/reference fields that the applicable policy permits. If even those fields must be deleted, purge them too. A user-created copy exported outside NIP cannot be recalled by the application; the export action must disclose that it may contain source content.
+
+Each podcast feed requires a source-specific access/retention record before it can be enabled; Phase 0 approves the RSS-plus-local-ASR workflow, not any particular show's rights or feed. Store the RSS item GUID as `source_native_id` where available, keep the episode URL and source attribution, honor feed/server rate limits and bounded retries, and surface feed/transcription errors without fabricating a transcript. Use synthetic local RSS/audio fixtures in tests and demos; never connect those tests to real feeds.
+
+The linked [rehab-video-maker README](https://github.com/rehabvid/rehab-video-maker), [podcast-content-agent instructions](https://github.com/rehabvid/rehab-video-maker/blob/main/skills/podcast-content-agent/SKILL.md) and [`investment_sources.py`](https://github.com/rehabvid/rehab-video-maker/blob/main/skills/podcast-content-agent/scripts/investment_sources.py) demonstrate curated-feed discovery, optional iTunes Search resolution of a show to a candidate RSS URL, RSS episode metadata/enclosures, local Whisper/MLX transcription, and an investment-podcast workflow. NIP adopts the source-discovery → audio-enclosure → local-ASR pattern, then automates per-feed refresh and ingestion to remove repeated manual imports. The show lookup is only a convenience for finding a candidate feed; the user confirms it before subscription. The reference is not a rights grant or a dependency; its MLX path is not assumed to be portable to all `fina-builder` desktop platforms.
+
+## Decision 3 — Canonical storage, Parquet location and process configuration
+
+The canonical NIP ledger is one local DuckDB database under `NIP_DATA_DIR`. DuckDB owns event identity, retained event content, provenance, ingestion records and derivation-run history. Derived tables are reproducible projections. Parquet is a controlled export/archive format only, not a second independently writable truth store.
+
+Use these path rules:
+
+1. `NIP_DATA_DIR` explicitly selects the canonical DuckDB directory. Packaged Tauri defaults to the platform application-data directory under `fina-builder/NIP`. Local development defaults to the repository's ignored `.nip-data/`. Automated tests set a unique disposable directory under `playwright/.data/`.
+2. `NIP_LAKE_DIR` explicitly selects the NIP Parquet export directory. If it is unset and `TAC_LAKE_DIR` is available, default to `$TAC_LAKE_DIR/nip/`. In the current `dev:http` launcher, an unset TAC root resolves to the absolute workspace `.lake/`, so the corresponding NIP Parquet default is `.lake/nip/`. In packaged desktop mode with no TAC root, default to `${NIP_DATA_DIR}/lake/`.
+3. Never change `TAC_LAKE_DIR` itself to point at the NIP child. Never write NIP Parquet into TAC's root-level metadata or `market=*`/`features/` partitions. Reject a resolved NIP lake path equal to the TAC root. An explicit `NIP_LAKE_DIR` overrides the derived default.
+4. The Tauri/web launcher constructs a child environment per service. NIP-specific paths and optional integrations are passed only to the NIP service.
+
+The existing TAC lake uses `TAC_LAKE_DIR` as the market lake root; see the [TAC lake implementation](../modules/tac-engine/src/lake.rs), [lake skill](../modules/tac-engine/skills/tradeac-lake/SKILL.md) and [development launcher](../scripts/dev-http.mjs).
+
+## Decision 4 — Optional relational store and `DATABASE_URL`
+
+The NIP MVP does **not** require a second relational database. DuckDB remains the only required NIP store. Keep a future relational-storage port available for records that genuinely need relational control-plane behavior, such as connector configuration or multi-user review workflow, but do not mirror raw event truth into SQLite/PostgreSQL.
+
+When a relational feature is approved, configure it at the app/launcher boundary with `NIP_DATABASE_URL`. The launcher maps that value to `DATABASE_URL` only inside the NIP child process. The current trade-repository process already consumes `DATABASE_URL` for its own SQLite/PostgreSQL store, so a shared parent-level `DATABASE_URL` must never be passed to both services. Standalone NIP process execution may use its process-local `DATABASE_URL` directly.
+
+Use the existing URL convention as the starting contract: `sqlite:<absolute-path>` locally and `postgres://` or `postgresql://` for a PostgreSQL adapter. SQLite is the first adapter if a real relational use case appears. PostgreSQL is a later release gate when multi-user or remote deployment requires it. Reject unsupported schemes clearly; do not silently fall back to SQLite. Do not log credentials. Until a relational feature is approved and the adapter has migrations and tests, leave `NIP_DATABASE_URL` unset.
+
+## Decision 5 — Optional vector index and `VECTOR_DB_URL`
+
+Qdrant is not part of the MVP. `VECTOR_DB_URL` is an optional, NIP-process-only HTTP(S) endpoint for a future Qdrant semantic-search index. If unset, semantic search is disabled; event import, evidence review, lexical/metadata search and signal calculations continue from DuckDB. If set later, keep the index rebuildable from DuckDB and store canonical event/claim references, embedding model/version and content hash with each point. Keep `VECTOR_DB_API_KEY` separate from the URL and out of logs.
+
+Enable Qdrant only after representative task tests show a material retrieval improvement over DuckDB-backed text/time/metadata search and after an embedding/data-sharing decision is approved. Qdrant downtime must not prevent core NIP use.
+
+## Decision 6 — Time semantics and event identity
+
+Use four distinct time concepts; none may be substituted for another:
+
+- `published_at` is the original source publication time, optional and unmodified. A manual importer may accept it as user-supplied metadata, but must not infer it from filesystem modification time.
+- `source_updated_at` is an optional update time supplied by the source for a correction or changed version.
+- `captured_at` is the UTC time NIP first captured the bytes from a feed or local import action.
+- `ingested_at` is the UTC transaction-commit time for the canonical DuckDB ledger. It defines when that record became queryable in NIP and is the point-in-time “known as of” cutoff.
+
+Store instants with timezone awareness; store and calculate in UTC. API output uses ISO-8601 with `Z` or an explicit offset. Time-window boundaries are half-open (`[start, end)`). For weekly signals, use completed Monday 00:00 UTC to Monday 00:00 UTC calendar weeks. A point-in-time query at `as_of` excludes any event with `ingested_at > as_of`, even if its `published_at` is earlier. An event with no trustworthy `published_at` remains undated, appears in an explicit undated group, and is excluded from dated-window metrics.
+
+Deduplication is scoped to a source, never globally across sources:
+
+1. Prefer `(source_id, source_native_id)` as the source item identity. For podcast feeds, use the RSS item GUID when present. Replaying the same identity and same content hash is a no-op, including when metadata differs; metadata is not silently overwritten and requires an explicit versioned correction. The same source identity with changed content hash creates a new linked revision; it does not overwrite the prior record.
+2. Without a native ID, use `(source_id, canonical_url)` when a source URL exists. Canonicalize scheme/host case and remove the fragment only; preserve path and query parameters to avoid merging distinct source records.
+3. For a local file with no source URL/native ID, use `(manual_import_scope, SHA-256 of exact file bytes)`. The persistent scope identifies the user-selected original source, not an import attempt; retrying from that source reuses its scope, while a different source uses a different scope. Do not normalize away text or punctuation before hashing. A repeated import of the same bytes in the same scope is idempotent.
+4. Identical text from two distinct sources remains two events so cross-source diffusion is not erased.
+
+Every idempotency decision records the key type and existing event ID. Corrections, source retractions and content purges use explicit revision/tombstone behavior from Decision 2.
+
+## Decision 7 — Initial descriptive signal contract
+
+Signal versions are derived from the source ledger and carry the formula version, exact window boundaries, `as_of`, input counts, coverage state and run ID. This contract applies when the Phase 2 signal engine and Radar/Timeline are introduced; there is no composite “narrative strength” score in that initial signal release.
+
+- **Windowing:** use completed UTC calendar weeks from Monday 00:00 to the next Monday 00:00. The current window is the most recent complete week ending at or before `as_of`; the comparison window is the immediately preceding week. Metrics only claim a comparable complete window when the configured source coverage manifest is complete for both windows. With manual imports or incomplete source coverage, show observed counts and mark coverage `unknown` or `partial`; do not label a low count a true zero.
+- **Velocity:** show current-week count, prior-week count, mentions/day in each window, delta mentions/day, and percent change only when prior count is greater than zero. With a zero prior count, the percent change is null and the UI says “no comparable baseline”; do not display infinity or rank the narrative as automatically dominant by a ratio. The default Radar order is current-week mention count descending, then distinct source-category count descending, then stable `narrative_id`; users can choose velocity delta as a separate sort.
+- **Diffusion:** show the distinct source-category count and each category's raw mention count for the selected complete window. Version-1 categories are `podcast`, `news`, `corporate`, `community`, and `other`. Multiple feeds in one category count as one category for diffusion. There is no source-authority weight.
+- **Persistence:** show the number of consecutive complete UTC weeks with at least one mention. A complete zero-mention week ends the run. An incomplete/unknown-coverage week returns a coverage warning instead of asserting the narrative stopped.
+- **Novelty:** no scalar novelty score in the initial signal release. Show `first_published_at` (earliest non-null `published_at` among included evidence), `first_ingested_at` (earliest `ingested_at` among evidence known by the selected `as_of`), the available historical range and raw prior-period counts. These describe the represented corpus and system knowledge; neither is a novelty score. If all included evidence lacks `published_at`, `first_published_at` is null. Add a score only after a methodology and labeled review set are approved.
+- **Influence weighting:** no speaker/source influence weighting in the initial signal release. Do not encode subjective authority in a hidden default.
+
+All metrics are descriptive. They are not probability of return, forecasts, or investment recommendations.
+
+## Decision 8 — Model and privacy mode
+
+NIP model-assisted extraction follows the **provider and model currently configured by the user for the RIGA assistant**. Do not impose a local-only LLM default or create a second, conflicting NIP model setting. The existing RIGA configuration supports local GGUF inference and saved remote provider profiles. A narrow typed bridge from the NIP service to the RIGA provider boundary must resolve the user's selected provider/model; do not copy provider keys into NIP configuration, environment variables, logs or the frontend. If the selected provider/model cannot be resolved or is unavailable, report extraction as unavailable. Never silently switch to a local or remote fallback. Record the exact provider kind/profile, model, reasoning setting, prompt/schema version and run time with each derivation.
+
+Speech-to-text is a separate capability from LLM extraction. Keep episode-audio transcription local as specified in Decision 2; the configured LLM model setting does not authorize sending audio to a remote transcription service. After local transcription, a selected remote LLM may process transcript text only after the user gives **NIP-specific consent** for that remote provider/model. Explain which transcript text or excerpts and prompt will leave the device, identify the provider/model, and make clear that the provider's own retention terms may apply. Remember consent only for that NIP provider profile/model selection, allow revocation, and ask again if the selected remote profile/model changes. Declining leaves the transcript local and extraction pending/blocked; the user may choose a configured local model instead. Do not ask again for every episode while the same consent remains active. A selected local model needs no remote-content consent but still must show model/provider status.
+
+The current repository boundary is documented in [AGENT-LOCAL.md](../AGENT-LOCAL.md) and implemented through [`riga_agent.rs`](../src-tauri/src/riga_agent.rs), [`riga-server` provider IPC](../modules/riga/crates/riga-server/src/ipc.rs) and [`ProviderKind`](../modules/riga/crates/riga-server/src/ws.rs). Those interfaces distinguish local and remote runs, persist remote provider profiles in the RIGA secure store, and omit API keys from read summaries. NIP should reuse that host-managed configuration/provider boundary rather than inventing a separate credential store. If a runtime cannot reach the selected RIGA provider through a secure typed bridge, report the capability unavailable instead of silently choosing a different model. Deterministic fake providers remain test/demo-only and must be labeled as such.
+
+Never include provider secrets or raw source content in diagnostic logs, screenshots or demo recordings. Remote-model tests use only an in-process or loopback mock provider and assert that no request occurs until NIP-specific consent is present.
+
+## Decision 9 — Functional fixtures, benchmark and performance claims
+
+Use `nip-fixture-v1`, a synthetic-only deterministic corpus, for unit/E2E/demo behavior. It contains at least three source categories, two narratives, records in two adjacent complete UTC weeks, a zero-prior-baseline narrative, one late-ingested older publication, one undated observation, an identical retry case, and at least one claim supported by two event IDs. Expected outputs are stored as reviewed fixture oracles and are not computed by the implementation under test. The fixture is labeled illustrative and cannot be used as real market or source research.
+
+Do not accept the BRD's 100-million-event, 10–50 GB, startup, search-latency or ranking-latency figures as Phase 1 SLAs. They remain hypotheses until a licensed representative source corpus and benchmark hardware are available. After a schema exists, a deterministic generator may run 1M/10M/100M scale profiles; report measured p50/p95, data-size distribution, hardware and warm/cold conditions. Phase 1's release gate is correctness, idempotency, evidence provenance, restart/recovery and transparent coverage—not an unmeasured capacity claim.
+
+## Decision 10 — ETF mappings, backtests and remaining gates
+
+Manual ETF-theme mapping and human-reviewed editorial topic suggestions may be considered after the core event/evidence slice. Do not ship an investment-performance backtest in Phase 1. The app must not show a return series until a separate ADR approves aligned point-in-time total-return data, corporate actions, mapping snapshots, timing/execution/cost rules, benchmark convention and an out-of-sample evaluation protocol. No excess-return or 7–30-day discovery claim is accepted from an in-sample example.
+
+The following are **future feature gates, not blockers to Phase 1**: additional source connectors beyond individually approved podcast RSS feeds; SQLite control-store introduction; PostgreSQL adapter; Qdrant and embedding governance; source-backed performance benchmarks; ETF backtest data and methodology; always-on background scheduling/graph rebuild. Following the configured RIGA model and implementing NIP-specific remote-content consent are Phase 1 requirements, not later opt-ins.
+
+## Phase 1 entry decision
+
+Phase 1 may proceed with this bounded scope: separate NIP workspace; user-configured podcast RSS subscriptions; bounded feed refresh and automatic discovery while the app runs; transient episode-audio download; local ASR and source-linked transcript ingestion; optional local-file import fallback; canonical DuckDB event ledger; Parquet export/restore under the resolved `NIP_LAKE_DIR`; deterministic fake extraction in tests; evidence-linked claim/narrative review; use of the user's configured RIGA local or remote model for analysis with NIP-specific consent before remote transcript processing; local text/metadata search; and explicit offline/provider-unavailable states. No feed is pre-enabled, and no remote ASR, unconfigured model/provider, other network source, relational database, Qdrant index, automated backtest or performance claim is required to start Phase 1.
+
+Changing one of these decisions requires a short superseding ADR before implementation work expands into that scope. This document records design decisions only; no services, environment variables or user data have been configured by writing it.
+
+## Repository evidence
+
+- [TAC lake implementation](../modules/tac-engine/src/lake.rs), [TAC lake skill](../modules/tac-engine/skills/tradeac-lake/SKILL.md) and [dev:http launcher](../scripts/dev-http.mjs) define the existing lake-root behavior.
+- [Trade-repository storage adapter](../scripts/lib/trade-repo/store.mjs) and [HTTP launcher](../scripts/trade-repo-mcp-http.mjs) show that the existing trade service consumes `DATABASE_URL` and supports its own SQLite/PostgreSQL adapters.
+- [rehab-video-maker podcast workflow](https://github.com/rehabvid/rehab-video-maker), its [podcast-content-agent instructions](https://github.com/rehabvid/rehab-video-maker/blob/main/skills/podcast-content-agent/SKILL.md) and [`investment_sources.py`](https://github.com/rehabvid/rehab-video-maker/blob/main/skills/podcast-content-agent/scripts/investment_sources.py) are the referenced RSS discovery and local-ASR pattern; they do not establish source rights for NIP.
+- [Aligned BRD](./55-narrative-intelligence-aligned-brd.md), [implementation plan](./56-narrative-intelligence-implementation-plan.md) and [testing plan](./57-narrative-intelligence-testing-plan.md) contain the corresponding product, system and verification requirements.

@@ -1,0 +1,16 @@
+[package]
+name = "nip-store"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "DuckDB schema and persistence foundation for fina-builder Narrative Intelligence"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+duckdb = { version = "=1.10505.0", features = ["bundled", "chrono"] }
+nip-domain = { path = "../nip-domain" }
+sha2 = "0.10"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

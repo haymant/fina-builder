@@ -19,6 +19,12 @@ drives them.
 | **[AGENT-LOCAL.md](./AGENT-LOCAL.md)** | The RIGA assistant chat panel (desktop shell ↔ `riga-server`). |
 | **[docs/51-portfolio-risk-architecture.md](./docs/51-portfolio-risk-architecture.md)** | Proposed canonical portfolio/position/instrument/market/sensitivity/P&L/scenario/risk-matrix documents, the complete SQLite/PostgreSQL relational schema (ER diagram + table definitions) and the extension architecture (PROPOSAL — not implemented). |
 | **[docs/54-trade-fixing-workflows.md](./docs/54-trade-fixing-workflows.md)** | Individual and bulk Phoenix fixing capture, the due-observation queue, operational best practices and remaining correction/automation gaps. |
+| **[docs/55-narrative-intelligence-aligned-brd.md](./docs/55-narrative-intelligence-aligned-brd.md)** | Narrative Intelligence requirements, including NIP-owned source/retention lifecycle and optional local ComfyUI inference behind a provider boundary. |
+| **[docs/56-narrative-intelligence-implementation-plan.md](./docs/56-narrative-intelligence-implementation-plan.md)** | Phased NIP architecture and implementation sequence; consented RSS discovery backend is implemented, but UI, host scheduling, audio download/transcription and the ComfyUI adapter remain pending. |
+| **[docs/57-narrative-intelligence-testing-plan.md](./docs/57-narrative-intelligence-testing-plan.md)** | User-journey, regression, storage/quality-gate and narrated Playwright plan; browser tests use fake ASR, with ComfyUI runtime smoke explicitly separate and opt-in. |
+| **[docs/58-narrative-intelligence-phase-0-decisions.md](./docs/58-narrative-intelligence-phase-0-decisions.md)** | Closed local-first Phase 0 baseline for approved podcast RSS, local transcription and RIGA-configured analysis, with the narrow ASR-host amendment in ADR 59; no feed, worker, model, UI or live source is configured. |
+| **[docs/59-comfyui-media-processing-architecture.md](./docs/59-comfyui-media-processing-architecture.md)** | Accepted boundary decision: optional local ComfyUI ASR/media execution, NIP-owned source lifecycle and purge, loopback-only integration gates, and the companion workflow's unverified runtime status. |
+| **[docs/60-narrative-intelligence-comfyui-handoff.md](./docs/60-narrative-intelligence-comfyui-handoff.md)** | Copy-ready handoff prompt for the next agent to implement and validate the optional local ASR adapter without crossing the NIP/ComfyUI ownership boundary. |
 | [README.md](./README.md) (this file) | How to run it and how to release it. |
 
 ## Requirements
