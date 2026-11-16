@@ -165,6 +165,64 @@ pub struct IngestionRunRecord {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum PodcastSubscriptionState {
+    Active,
+    Paused,
+    Removed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PodcastEpisodeState {
+    AwaitingLocalTranscription,
+    TranscriptionUnavailable,
+    Transcribed,
+    Failed,
+}
+
+/// A feed can only be persisted as an active subscription after the user has
+/// explicitly confirmed the supplied rights/access statement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PodcastSubscription {
+    pub source_id: SourceId,
+    pub feed_url: String,
+    pub show_name: String,
+    pub rights_statement: String,
+    pub rights_confirmed_at: DateTime<Utc>,
+    pub state: PodcastSubscriptionState,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub last_checked_at: Option<DateTime<Utc>>,
+    pub next_poll_at: Option<DateTime<Utc>>,
+    pub last_error_code: Option<String>,
+    pub consecutive_failures: u32,
+}
+
+/// RSS metadata only. This is not a transcript and does not imply that audio
+/// was downloaded or transcribed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PodcastEpisode {
+    pub source_id: SourceId,
+    pub source_native_id: Option<String>,
+    pub canonical_url: Option<String>,
+    pub title: Option<String>,
+    pub enclosure_url: Option<String>,
+    pub published_at: Option<DateTime<Utc>>,
+    pub discovered_at: DateTime<Utc>,
+    pub state: PodcastEpisodeState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PodcastRefreshReport {
+    pub source_id: SourceId,
+    pub not_modified: bool,
+    pub discovered_count: u32,
+    pub total_episode_count: u32,
+    pub next_poll_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Readiness {
     Ready,
 }
