@@ -1,10 +1,10 @@
 # 58 — Narrative Intelligence Platform: Phase 0 decision record
 
-**Status:** Phase 0 is closed for the local-first MVP design baseline; Decision 2 was amended on 2026-11-16 to select podcast RSS discovery with local transcription as the primary ingestion workflow. At Phase 0 closure, no NIP feature code or services had been configured. The initial Phase 1 foundation now defines typed domain contracts, safe path resolution, and DuckDB schema version 1; no feed subscription, Qdrant service, provider credential, or live source has been configured. The decisions below authorize Phase 1 implementation under the stated scope. They do not grant source licenses, approve remote transmission of episode audio/transcripts, or claim PostgreSQL/Qdrant support before those adapters are implemented and tested; each feed still requires source-specific approval.
+**Status:** Phase 0 is closed for the local-first MVP design baseline. Decision 2 selected podcast RSS discovery with local transcription as the primary ingestion workflow. On 2026-11-16, [ADR 59](./59-comfyui-media-processing-architecture.md) superseded only the ASR execution-host detail: ComfyUI is an optional local media worker, not an owner of source access, feed scheduling, retention policy, or NIP records. The Phase 1 service foundation and RSS discovery backend are implemented; no feed, ComfyUI instance, ASR node/model, Qdrant service, provider credential, or live source has been configured. The decisions below do not grant source licenses or approve remote transmission of episode audio/transcripts; each feed still requires source-specific approval.
 
 **Decision date:** 2026-11-16. **Basis:** the attached BRD, the `fina-builder` repository at `main` commit `5795ee464707bb55b55cc2c19f7b27f71f257df1`, and a conservative local-first interpretation of the user's Phase 0 request.
 
-Related documents: [aligned BRD](./55-narrative-intelligence-aligned-brd.md), [implementation plan](./56-narrative-intelligence-implementation-plan.md), and [user-journey testing and narrated Playwright plan](./57-narrative-intelligence-testing-plan.md).
+Related documents: [aligned BRD](./55-narrative-intelligence-aligned-brd.md), [implementation plan](./56-narrative-intelligence-implementation-plan.md), [user-journey testing and narrated Playwright plan](./57-narrative-intelligence-testing-plan.md), and [ComfyUI media-processing boundary](./59-comfyui-media-processing-architecture.md).
 
 ## Decision 1 — Product boundary
 
