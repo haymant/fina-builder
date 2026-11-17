@@ -9,6 +9,7 @@
 pub mod mcp;
 pub mod mcp_commands;
 pub mod nip_bridge;
+pub mod nip_http;
 pub mod riga_agent;
 
 use riga_kernel::Agent;
@@ -28,7 +29,7 @@ fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(mcp_commands::McpState::default())
         .manage(Agent::new())
@@ -41,25 +42,38 @@ pub fn run() {
                 .runtime
                 .configure_env(engine_env);
             // The RIGA agent host: one IpcService powering the chat panel.
-            riga_agent::install(app);
+            let ipc = riga_agent::install(app);
             // The NIP sidecar may use the user's configured RIGA provider only
             // through this loopback bridge. Inject its URL/token and NIP-owned
             // app-data paths into the NIP child alone.
-            let nip_service = app
-                .state::<riga_server::ipc::IpcService>()
-                .inner()
-                .clone();
-            match nip_bridge::start(nip_service) {
-                Ok(bridge) => {
-                    let nip_env = mcp_commands::nip_engine_env(app.handle(), &bridge);
-                    app.state::<mcp_commands::McpState>()
-                        .runtime
-                        .configure_server_env("nip", nip_env);
-                }
+            let bridge = match nip_bridge::start(ipc) {
+                Ok(bridge) => Some(bridge),
                 Err(error) => {
                     eprintln!("NIP: provider bridge unavailable; remote extraction stays disabled: {error}");
+                    None
                 }
-            }
+            };
+            // One NIP process, shared by the Narrative tab (Tauri commands) and
+            // the RIGA chat (HTTP MCP). A second stdio child would contend for
+            // the single-writer DuckDB file.
+            let nip_state = nip_http::NipServiceState::default();
+            let nip_url = match nip_http::start(app.handle(), bridge.as_ref()) {
+                Ok(service) => {
+                    let url = service.url().to_owned();
+                    nip_state.set(service);
+                    Some(url)
+                }
+                Err(error) => {
+                    eprintln!("NIP: service unavailable: {error}");
+                    nip_state.set_error(error);
+                    None
+                }
+            };
+            app.manage(nip_state);
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                riga_agent::register_engines(handle, nip_url).await;
+            });
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -123,6 +137,11 @@ pub fn run() {
             riga_agent::riga_local_model_action,
             riga_agent::riga_upload_attachment,
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while building tauri application");
+    app.run(|handle, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            handle.state::<nip_http::NipServiceState>().stop();
+        }
+    });
 }

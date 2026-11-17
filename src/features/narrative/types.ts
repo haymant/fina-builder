@@ -5,6 +5,21 @@ export interface NipHealth {
   schema_version: number
 }
 
+export interface NipCapabilities {
+  service: string
+  service_version: string
+  api_version: number
+  schema_version: number
+  features: {
+    duckdb_store: boolean
+    podcast_rss_subscriptions: boolean
+    local_audio_transcription: boolean
+    claim_extraction: boolean
+    parquet_export: boolean
+    semantic_search: boolean
+  }
+}
+
 export interface NipEventTimes {
   published_at: string | null
   source_updated_at: string | null
@@ -120,6 +135,14 @@ export interface NipPodcastEpisode {
   published_at: string | null
   discovered_at: string
   state: string
+}
+
+export interface NipEpisodePage {
+  episodes: NipPodcastEpisode[]
+  total: number
+  limit: number
+  offset: number
+  next_offset: number | null
 }
 
 export interface NipSemanticResult {
@@ -281,4 +304,27 @@ export interface NipEditorialCandidate {
   reviewer: string | null
   reviewed_at: string | null
   created_at: string
+}
+
+export type NipSourceKind = 'podcast' | 'company_meeting' | 'filing' | 'reddit' | 'x' | 'web' | 'local_document' | 'other'
+
+export type NipSourceState = 'active' | 'paused' | 'removed'
+
+/** Registry view of a source, independent of the fetch adapter. */
+export interface NipSource {
+  source_id: string
+  kind: NipSourceKind
+  display_name: string
+  locator: string | null
+  rights_status: string
+  rights_statement: string | null
+  topics: string[]
+  state: NipSourceState
+  poll_interval_minutes: number
+  per_scan_limit: number
+  notes: string | null
+  created_at: string
+  updated_at: string
+  event_count: number
+  episode_count: number
 }

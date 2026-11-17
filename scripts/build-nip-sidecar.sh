@@ -14,5 +14,8 @@ src="target/release/$out"
 dest="src-tauri/binaries/nip-engine-$triple$suffix"
 if [[ ! -f "$src" ]]; then echo "nip-engine sidecar: missing $src" >&2; exit 0; fi
 mkdir -p src-tauri/binaries
-cp "$src" "$dest"
+if ! cp "$src" "$dest"; then
+  echo "$bin sidecar: could not stage $dest (a running process may hold it); runtime will use the workspace path" >&2
+  exit 0
+fi
 echo "nip-engine sidecar: staged $dest"

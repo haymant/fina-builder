@@ -408,6 +408,17 @@ pub struct PodcastEpisode {
     pub state: PodcastEpisodeState,
 }
 
+/// One stable page of discovered RSS metadata. `next_offset` is `None` when the
+/// page reaches the end of the filtered result set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PodcastEpisodePage {
+    pub episodes: Vec<PodcastEpisode>,
+    pub total: u64,
+    pub limit: u32,
+    pub offset: u32,
+    pub next_offset: Option<u32>,
+}
+
 /// A validated transcript is stored separately from RSS metadata and is only
 /// created after an ASR provider returns a non-empty result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -606,4 +617,116 @@ mod tests {
         assert_eq!(serde_json::to_string(&event_id).unwrap(), "\"evt-1\"");
         assert_eq!(event_id.as_str(), "evt-1");
     }
+}
+
+/// Registry kind for a source. This is deliberately independent of the fetch
+/// adapter: a new adapter never needs a schema migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceKind {
+    Podcast,
+    CompanyMeeting,
+    Filing,
+    Reddit,
+    X,
+    Web,
+    LocalDocument,
+    Other,
+}
+
+impl SourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Podcast => "podcast",
+            Self::CompanyMeeting => "company_meeting",
+            Self::Filing => "filing",
+            Self::Reddit => "reddit",
+            Self::X => "x",
+            Self::Web => "web",
+            Self::LocalDocument => "local_document",
+            Self::Other => "other",
+        }
+    }
+
+    /// Coarse class stored in `nip_sources.source_type` for event queries.
+    pub fn coarse_type(self) -> &'static str {
+        match self {
+            Self::Podcast => "podcast",
+            Self::LocalDocument => "local_document",
+            _ => "other",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "podcast" => Self::Podcast,
+            "company_meeting" => Self::CompanyMeeting,
+            "filing" => Self::Filing,
+            "reddit" => Self::Reddit,
+            "x" => Self::X,
+            "web" => Self::Web,
+            "local_document" => Self::LocalDocument,
+            "other" => Self::Other,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceState {
+    Active,
+    Paused,
+    Removed,
+}
+
+impl SourceState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Removed => "removed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "active" | "resume" => Self::Active,
+            "paused" | "pause" => Self::Paused,
+            "removed" | "remove" => Self::Removed,
+            _ => return None,
+        })
+    }
+}
+
+/// A source as the registry sees it, independent of whether an adapter exists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NarrativeSource {
+    pub source_id: SourceId,
+    pub kind: SourceKind,
+    pub display_name: String,
+    pub locator: Option<String>,
+    pub rights_status: String,
+    pub rights_statement: Option<String>,
+    pub topics: Vec<String>,
+    pub state: SourceState,
+    pub poll_interval_minutes: u32,
+    pub per_scan_limit: u32,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub event_count: u64,
+    pub episode_count: u64,
+}
+
+/// Explicit, partial update. `None` means "leave unchanged".
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceUpdate {
+    pub display_name: Option<String>,
+    pub locator: Option<String>,
+    pub rights_statement: Option<String>,
+    pub topics: Option<Vec<String>>,
+    pub poll_interval_minutes: Option<u32>,
+    pub per_scan_limit: Option<u32>,
+    pub notes: Option<String>,
 }

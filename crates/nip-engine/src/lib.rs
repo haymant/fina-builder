@@ -10,10 +10,11 @@ use nip_domain::{
     EmbeddingIndexManifest, EtfMapping, EventRecord, EventSearchPage, EventSearchQuery,
     ExtractionStatus, FeatureCapabilities, HealthResponse, LocalEventImport, NarrativeCluster,
     NarrativeGraph, NarrativeGraphEdge, NarrativeGraphNode, NarrativeSignal,
-    NarrativeSignalSnapshot, PodcastEpisode, PodcastEpisodeState, PodcastRefreshReport,
-    PodcastSubscription, PodcastSubscriptionState, PodcastTranscript, ProviderConsent,
-    ProviderStatus, Readiness, ResourceStatus, SemanticSearchResult, SourceId, API_VERSION,
-    DOMAIN_SCHEMA_VERSION, SERVICE_NAME,
+    NarrativeSignalSnapshot, NarrativeSource, PodcastEpisode, PodcastEpisodePage,
+    PodcastEpisodeState,
+    PodcastRefreshReport, PodcastSubscription, PodcastSubscriptionState, PodcastTranscript,
+    ProviderConsent, ProviderStatus, Readiness, ResourceStatus, SemanticSearchResult, SourceId,
+    SourceKind, SourceState, SourceUpdate, API_VERSION, DOMAIN_SCHEMA_VERSION, SERVICE_NAME,
 };
 use nip_store::{SnapshotManifest, Store, StoreError, SubscriptionFetchStateUpdate};
 use serde::{Deserialize, Serialize};
@@ -25,7 +26,7 @@ use std::{
 };
 use thiserror::Error;
 
-use asr::{AsrError, AsrProvider, AsrRequest};
+use asr::{AsrError, AsrProvider, AsrRequest, AsrResult};
 pub use config::{ConfigError, NipConfig};
 use podcast::{
     parse_rss_feed, scheduled_next_poll, validate_feed_url, AudioClient, FeedClient, FeedRequest,
@@ -33,6 +34,25 @@ use podcast::{
 };
 use provider::{RigaBridgeClaimProvider, RigaBridgeProviderStatus, REMOTE_EXTRACTION_SCOPE};
 use semantic::{cluster_events, event_map, manifest, EmbeddingProvider, QdrantIndex};
+
+/// Input for creating a source of any kind. A podcast additionally creates a
+/// subscription row and performs its initial sync.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceDraft {
+    pub source_id: SourceId,
+    pub kind: SourceKind,
+    pub display_name: String,
+    pub locator: Option<String>,
+    pub rights_statement: String,
+    #[serde(default)]
+    pub topics: Vec<String>,
+    #[serde(default)]
+    pub poll_interval_minutes: Option<u32>,
+    #[serde(default)]
+    pub per_scan_limit: Option<u32>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PodcastSubscriptionRequest {
@@ -130,6 +150,16 @@ pub enum NipError {
     RemoteProviderRequired,
     #[error("remote consent requires a non-empty acting user")]
     InvalidConsentRequest,
+    #[error("source kind is not supported")]
+    InvalidSourceKind,
+    #[error("source needs a display name, rights statement and a locator for this kind")]
+    InvalidSourceDetails,
+    #[error("source was not found")]
+    SourceNotFound,
+    #[error("another active or paused source already uses this locator")]
+    DuplicateSourceLocator,
+    #[error("source still owns {count} retained event(s); mark it removed or purge through the retention path")]
+    SourceHasEvents { count: u64 },
 }
 
 /// Owns startup configuration and the local canonical store. Business logic
@@ -164,7 +194,7 @@ impl NipService {
             features: FeatureCapabilities {
                 duckdb_store: true,
                 podcast_rss_subscriptions: true,
-                local_audio_transcription: false,
+                local_audio_transcription: self.config.local_asr_available(),
                 claim_extraction: self.config.riga_bridge().is_some(),
                 parquet_export: true,
                 semantic_search: true,
@@ -388,8 +418,230 @@ impl NipService {
         source_id: &SourceId,
         state: PodcastSubscriptionState,
     ) -> Result<(), NipError> {
-        if !self.store.set_subscription_state(source_id, state)? {
+        let existing = self
+            .store
+            .subscription(source_id)?
+            .ok_or(NipError::SubscriptionNotFound)?;
+        // A removed subscription is terminal for the podcast adapter; the
+        // registry-level `set_source_state` still allows restoring a registry
+        // row that never had an adapter.
+        if existing.state == PodcastSubscriptionState::Removed
+            && state != PodcastSubscriptionState::Removed
+        {
             return Err(NipError::SubscriptionNotFound);
+        }
+        let registry_state = match state {
+            PodcastSubscriptionState::Active => SourceState::Active,
+            PodcastSubscriptionState::Paused => SourceState::Paused,
+            PodcastSubscriptionState::Removed => SourceState::Removed,
+        };
+        self.store
+            .set_source_state(source_id, registry_state, Utc::now())?;
+        Ok(())
+    }
+
+    pub fn sources(&self, include_removed: bool) -> Result<Vec<NarrativeSource>, NipError> {
+        Ok(self.store.sources(include_removed)?)
+    }
+
+    pub fn source(&self, source_id: &SourceId) -> Result<NarrativeSource, NipError> {
+        self.store
+            .source(source_id)?
+            .ok_or(NipError::SourceNotFound)
+    }
+
+    pub fn create_source(
+        &mut self,
+        draft: SourceDraft,
+        client: &dyn FeedClient,
+        now: DateTime<Utc>,
+    ) -> Result<NarrativeSource, NipError> {
+        let display_name = draft.display_name.trim();
+        if display_name.is_empty() || draft.rights_statement.trim().is_empty() {
+            return Err(NipError::InvalidSourceDetails);
+        }
+        let locator = draft
+            .locator
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if locator.is_none() && !matches!(draft.kind, SourceKind::LocalDocument | SourceKind::Other) {
+            return Err(NipError::InvalidSourceDetails);
+        }
+        if let Some(locator) = locator {
+            self.reject_duplicate_locator(&draft.source_id, locator)?;
+        }
+
+        let defaults = SourceUpdate {
+            topics: Some(draft.topics.clone()),
+            poll_interval_minutes: draft.poll_interval_minutes,
+            per_scan_limit: draft.per_scan_limit,
+            notes: draft.notes.clone(),
+            ..SourceUpdate::default()
+        };
+
+        if draft.kind == SourceKind::Podcast {
+            let feed_url = locator.ok_or(NipError::InvalidSourceDetails)?;
+            validate_feed_url(feed_url).map_err(map_feed_url_error)?;
+            self.subscribe_podcast_feed(
+                PodcastSubscriptionRequest {
+                    source_id: draft.source_id.clone(),
+                    feed_url: feed_url.to_owned(),
+                    show_name: display_name.to_owned(),
+                    rights_statement: draft.rights_statement.trim().to_owned(),
+                    user_confirmed_rights: true,
+                },
+                client,
+                now,
+            )?;
+            self.store
+                .update_source(&draft.source_id, &defaults, now)?;
+            return self.source(&draft.source_id);
+        }
+
+        let source = NarrativeSource {
+            source_id: draft.source_id,
+            kind: draft.kind,
+            display_name: display_name.to_owned(),
+            locator: locator.map(str::to_owned),
+            rights_status: "approved".to_owned(),
+            rights_statement: Some(draft.rights_statement.trim().to_owned()),
+            topics: draft.topics,
+            state: SourceState::Active,
+            poll_interval_minutes: clamp_poll_interval(draft.poll_interval_minutes),
+            per_scan_limit: clamp_per_scan_limit(draft.per_scan_limit),
+            notes: draft.notes,
+            created_at: now,
+            updated_at: now,
+            event_count: 0,
+            episode_count: 0,
+        };
+        self.store.insert_source(&source)?;
+        self.source(&source.source_id)
+    }
+
+    pub fn update_source(
+        &mut self,
+        source_id: &SourceId,
+        update: &SourceUpdate,
+        client: &dyn FeedClient,
+        sync: bool,
+        now: DateTime<Utc>,
+    ) -> Result<NarrativeSource, NipError> {
+        let existing = self.source(source_id)?;
+        if existing.state == SourceState::Removed {
+            return Err(NipError::SourceNotFound);
+        }
+        if let Some(name) = update.display_name.as_deref() {
+            if name.trim().is_empty() {
+                return Err(NipError::InvalidSourceDetails);
+            }
+        }
+        if let Some(statement) = update.rights_statement.as_deref() {
+            if statement.trim().is_empty() {
+                return Err(NipError::InvalidSourceDetails);
+            }
+        }
+        if let Some(locator) = update.locator.as_deref() {
+            let locator = locator.trim();
+            if locator.is_empty() {
+                return Err(NipError::InvalidSourceDetails);
+            }
+            self.reject_duplicate_locator(source_id, locator)?;
+            if existing.kind == SourceKind::Podcast {
+                validate_feed_url(locator).map_err(map_feed_url_error)?;
+            }
+        }
+
+        let mut normalised = update.clone();
+        normalised.poll_interval_minutes =
+            update.poll_interval_minutes.map(|minutes| clamp_poll_interval(Some(minutes)));
+        normalised.per_scan_limit =
+            update.per_scan_limit.map(|limit| clamp_per_scan_limit(Some(limit)));
+        normalised.display_name = update
+            .display_name
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_owned);
+        normalised.locator = update.locator.as_deref().map(str::trim).map(str::to_owned);
+        normalised.rights_statement = update
+            .rights_statement
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_owned);
+
+        let locator_changed = normalised
+            .locator
+            .as_deref()
+            .is_some_and(|locator| Some(locator) != existing.locator.as_deref());
+        let name_changed = normalised
+            .display_name
+            .as_deref()
+            .is_some_and(|name| name != existing.display_name);
+
+        let mut rest = normalised;
+        if existing.kind == SourceKind::Podcast && (locator_changed || name_changed) {
+            let feed_url = rest
+                .locator
+                .clone()
+                .or_else(|| existing.locator.clone())
+                .ok_or(NipError::InvalidSourceDetails)?;
+            let show_name = rest
+                .display_name
+                .clone()
+                .unwrap_or_else(|| existing.display_name.clone());
+            self.store
+                .update_podcast_locator(source_id, &feed_url, &show_name, now)?;
+            // The adapter update above already wrote locator and display name.
+            rest.locator = None;
+            rest.display_name = None;
+        }
+        self.store.update_source(source_id, &rest, now)?;
+
+        if existing.kind == SourceKind::Podcast && sync {
+            match self.refresh_podcast_feed(source_id, client, now) {
+                Ok(_) | Err(NipError::RefreshNotDue) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        self.source(source_id)
+    }
+
+    pub fn set_source_state(
+        &mut self,
+        source_id: &SourceId,
+        state: SourceState,
+        now: DateTime<Utc>,
+    ) -> Result<NarrativeSource, NipError> {
+        self.source(source_id)?;
+        if !self.store.set_source_state(source_id, state, now)? {
+            // Already in the requested state is still a success.
+            return self.source(source_id);
+        }
+        self.source(source_id)
+    }
+
+    pub fn delete_source(&mut self, source_id: &SourceId) -> Result<(), NipError> {
+        self.source(source_id)?;
+        let events = self.store.delete_source(source_id)?;
+        if events > 0 {
+            return Err(NipError::SourceHasEvents { count: events });
+        }
+        Ok(())
+    }
+
+    fn reject_duplicate_locator(
+        &self,
+        source_id: &SourceId,
+        locator: &str,
+    ) -> Result<(), NipError> {
+        let locator = locator.trim();
+        let duplicate = self.store.sources(false)?.iter().any(|candidate| {
+            candidate.source_id.as_str() != source_id.as_str()
+                && candidate.locator.as_deref() == Some(locator)
+        });
+        if duplicate {
+            return Err(NipError::DuplicateSourceLocator);
         }
         Ok(())
     }
@@ -403,6 +655,50 @@ impl NipService {
             return Err(NipError::SubscriptionNotFound);
         }
         Ok(self.store.discovered_episodes(source_id)?)
+    }
+
+    /// One page of discovered RSS metadata for the episode browser. Filters and
+    /// ordering are applied before `LIMIT`/`OFFSET`, so the UI can page through
+    /// thousands of episodes without loading the whole ledger.
+    pub fn podcast_episode_page(
+        &self,
+        source_id: Option<&SourceId>,
+        title_contains: Option<&str>,
+        sort: Option<&str>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<PodcastEpisodePage, NipError> {
+        if let Some(source_id) = source_id {
+            if self.store.subscription(source_id)?.is_none() {
+                return Err(NipError::SubscriptionNotFound);
+            }
+        }
+        let sort = match sort.unwrap_or("published_desc") {
+            "title_asc" => "title_asc",
+            _ => "published_desc",
+        };
+        let limit = limit.unwrap_or(50).clamp(1, 200);
+        let offset = offset.unwrap_or(0);
+        let (episodes, total) = self.store.discovered_episodes_page(
+            source_id,
+            title_contains,
+            sort,
+            limit,
+            offset,
+        )?;
+        let consumed = u64::from(offset) + episodes.len() as u64;
+        let next_offset = if consumed >= total {
+            None
+        } else {
+            Some((consumed).min(u64::from(u32::MAX)) as u32)
+        };
+        Ok(PodcastEpisodePage {
+            episodes,
+            total,
+            limit,
+            offset,
+            next_offset,
+        })
     }
 
     pub fn import_local_event(
@@ -1137,6 +1433,26 @@ impl NipService {
                 .set_episode_state(episode, PodcastEpisodeState::Failed)?;
             return Err(NipError::TranscriptionFailed);
         }
+        self.commit_podcast_transcript(episode, result, now)
+    }
+
+    /// Commit a provider result after the caller has finished the (potentially
+    /// long) audio download and ASR call. Keeping the service lock out of that
+    /// work lets health, scan and source calls continue while a local model runs.
+    pub fn commit_podcast_transcript(
+        &mut self,
+        episode: &PodcastEpisode,
+        result: AsrResult,
+        now: DateTime<Utc>,
+    ) -> Result<PodcastTranscript, NipError> {
+        if self.store.subscription(&episode.source_id)?.is_none() {
+            return Err(NipError::SubscriptionNotFound);
+        }
+        if result.text.trim().is_empty() {
+            self.store
+                .set_episode_state(episode, PodcastEpisodeState::Failed)?;
+            return Err(NipError::TranscriptionFailed);
+        }
         let transcript = PodcastTranscript {
             source_id: episode.source_id.clone(),
             source_native_id: episode.source_native_id.clone(),
@@ -1152,6 +1468,22 @@ impl NipService {
         Ok(transcript)
     }
 
+    /// Persist the terminal episode state after a provider failure.
+    pub fn record_transcription_failure(
+        &mut self,
+        episode: &PodcastEpisode,
+        error: AsrError,
+    ) -> Result<(), NipError> {
+        let state = match error {
+            AsrError::Unavailable | AsrError::Timeout | AsrError::Cancelled => {
+                PodcastEpisodeState::TranscriptionUnavailable
+            }
+            AsrError::InvalidInput | AsrError::MalformedOutput => PodcastEpisodeState::Failed,
+        };
+        self.store.set_episode_state(episode, state)?;
+        Ok(())
+    }
+
     pub fn transcribe_podcast_episode_from_enclosure(
         &mut self,
         episode: &PodcastEpisode,
@@ -1159,38 +1491,47 @@ impl NipService {
         provider: &dyn AsrProvider,
         now: DateTime<Utc>,
     ) -> Result<PodcastTranscript, NipError> {
-        let enclosure = episode
-            .enclosure_url
-            .as_deref()
-            .ok_or(NipError::UnsupportedAudio)?;
-        let response = audio_client
-            .fetch(enclosure)
-            .map_err(|_| NipError::AudioUnavailable)?;
-        if response.status != 200 || response.body.is_empty() {
-            return Err(NipError::AudioUnavailable);
-        }
-        let mime_type = response
-            .content_type
-            .as_deref()
-            .and_then(|value| value.split(';').next())
-            .map(str::trim)
-            .filter(|value| value.starts_with("audio/"))
-            .ok_or(NipError::UnsupportedAudio)?;
-        let file_name = enclosure
-            .rsplit('/')
-            .next()
-            .filter(|value| !value.is_empty())
-            .unwrap_or("episode.audio");
-        let request = AsrRequest {
-            job_id: format!("episode-{}", stable_episode_job_id(episode)),
-            audio: response.body,
-            file_name: file_name.to_owned(),
-            mime_type: mime_type.to_owned(),
-            language: None,
-            return_timestamps: false,
-        };
+        let request = podcast_asr_request(episode, audio_client)?;
         self.transcribe_podcast_episode(episode, request, provider, now)
     }
+}
+
+/// Download and validate a podcast enclosure into the narrow ASR request. This
+/// performs no ASR and takes no NIP store lock.
+pub fn podcast_asr_request(
+    episode: &PodcastEpisode,
+    audio_client: &dyn AudioClient,
+) -> Result<AsrRequest, NipError> {
+    let enclosure = episode
+        .enclosure_url
+        .as_deref()
+        .ok_or(NipError::UnsupportedAudio)?;
+    let response = audio_client
+        .fetch(enclosure)
+        .map_err(|_| NipError::AudioUnavailable)?;
+    if response.status != 200 || response.body.is_empty() {
+        return Err(NipError::AudioUnavailable);
+    }
+    let mime_type = response
+        .content_type
+        .as_deref()
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .filter(|value| value.starts_with("audio/"))
+        .ok_or(NipError::UnsupportedAudio)?;
+    let file_name = enclosure
+        .rsplit('/')
+        .next()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("episode.audio");
+    Ok(AsrRequest {
+        job_id: format!("episode-{}", stable_episode_job_id(episode)),
+        audio: response.body,
+        file_name: file_name.to_owned(),
+        mime_type: mime_type.to_owned(),
+        language: None,
+        return_timestamps: false,
+    })
 }
 
 fn transcript_hash(text: &str) -> String {
@@ -1209,6 +1550,14 @@ fn stable_episode_job_id(episode: &PodcastEpisode) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn clamp_per_scan_limit(limit: Option<u32>) -> u32 {
+    limit.unwrap_or(3).clamp(1, 10)
+}
+
+fn clamp_poll_interval(minutes: Option<u32>) -> u32 {
+    minutes.unwrap_or(360).clamp(15, 24 * 60)
 }
 
 fn map_feed_url_error(_: FeedValidationError) -> NipError {
@@ -1272,7 +1621,7 @@ mod tests {
         let health = service.health();
         assert_eq!(health.service, "nip-engine");
         assert_eq!(health.readiness, Readiness::Ready);
-        assert_eq!(health.schema_version, 8);
+        assert_eq!(health.schema_version, 9);
 
         let capabilities = service.capabilities();
         assert!(capabilities.features.duckdb_store);
@@ -1695,8 +2044,10 @@ mod tests {
                 )
                 .unwrap();
         }
+        // The point-in-time cutoff must follow the event's real ingestion time
+        // (`Utc::now()`), otherwise this test becomes time-of-day dependent.
         let snapshot = service
-            .signal_snapshot("2026-11-17T12:00:00Z".parse().unwrap())
+            .signal_snapshot("2026-11-18T12:00:00Z".parse().unwrap())
             .unwrap();
         assert_eq!(snapshot.coverage, "unknown");
         assert_eq!(

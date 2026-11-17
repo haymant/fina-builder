@@ -109,15 +109,24 @@ function measureDuration(file) {
 }
 
 function synthesize(cue, file, { bin, voice, rate, pitch }) {
-  const result = spawnSync(
-    bin,
-    ['--voice', voice.id, '--rate', rate, '--pitch', pitch, '--text', cue, '--write-media', file],
-    { stdio: 'inherit' },
-  )
-  if (result.error) {
-    throw new Error(`Unable to run ${bin}: ${result.error.message}\nSet EDGE_TTS_BIN or install edge-tts.`)
+  let lastStatus = null
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const result = spawnSync(
+      bin,
+      ['--voice', voice.id, '--rate', rate, '--pitch', pitch, '--text', cue, '--write-media', file],
+      { stdio: 'inherit' },
+    )
+    if (result.error) {
+      throw new Error(`Unable to run ${bin}: ${result.error.message}\nSet EDGE_TTS_BIN or install edge-tts.`)
+    }
+    if (result.status === 0) return
+    lastStatus = result.status
+    if (attempt < 3) {
+      console.error(`Narration attempt ${attempt} failed for cue; retrying: ${cue}`)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_500)
+    }
   }
-  if (result.status !== 0) throw new Error(`edge-tts exited with status ${result.status} for cue: ${cue}`)
+  throw new Error(`edge-tts exited with status ${lastStatus} for cue: ${cue}`)
 }
 
 function listVoices() {

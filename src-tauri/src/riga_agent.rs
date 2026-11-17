@@ -358,7 +358,10 @@ pub async fn riga_upload_attachment(
 }
 
 /// Prepare the desktop workspace and start the in-process service.
-pub fn install(app: &tauri::App) {
+///
+/// Returns the shared `IpcService` so the host can start the single NIP service
+/// and then register every engine (including NIP) in one connection pass.
+pub fn install(app: &tauri::App) -> IpcService {
     // Prefer the repository the app was launched from, so the desktop browses
     // the same per-session worktrees the agent runs in.
     if let Some(root) = std::env::current_dir()
@@ -375,52 +378,70 @@ pub fn install(app: &tauri::App) {
 
     let service = IpcService::new(ServerState::default());
     let local_model_events = service.subscribe_local_models();
-    app.manage(service);
+    app.manage(service.clone());
     let handle = app.handle().clone();
     tauri::async_runtime::spawn(forward_local_model_events(
-        handle.clone(),
+        handle,
         local_model_events,
     ));
+    service
+}
 
-    // Register the vendored engines with the embedded RIGA agent so the chat can
-    // call their tools (query_execution_net, price_put, vol_surface, …). This
-    // merges with any servers the user already configured in Connectors.
-    tauri::async_runtime::spawn(async move {
-        let state = handle.state::<IpcService>().state();
-        let service = IpcService::new(state);
-        let engines = [
-            (
-                "riga-flow",
-                crate::mcp_commands::get_riga_mcp_path(handle.clone()),
-                vec!["--transport".to_string(), "stdio".to_string()],
-            ),
-            (
-                "tac-engine",
-                crate::mcp_commands::get_tac_engine_path(handle.clone()),
-                Vec::new(),
-            ),
-        ];
-        for (name, path, args) in engines {
-            let Ok(command) = path else {
-                eprintln!(
-                    "RIGA: {name} MCP binary unavailable; the chat will not expose its tools"
-                );
-                continue;
-            };
-            let request = riga_server::McpRegistryRequest {
-                name: name.to_string(),
-                transport: "stdio".to_string(),
-                command: Some(command),
-                args,
-                url: None,
-                api_key: None,
-            };
-            if let Err(error) = service.save_mcp_registry(request).await {
-                eprintln!("RIGA: could not register the {name} MCP server: {error}");
-            }
+/// Register the vendored engines with the embedded RIGA agent so the chat can
+/// call their tools (`query_execution_net`, `price_put`, `vol_surface`, and the
+/// NIP source/registry tools). This merges with any servers the user already
+/// configured in Connectors, then connects them once.
+pub async fn register_engines(handle: AppHandle, nip_url: Option<String>) {
+    let state = handle.state::<IpcService>().state();
+    let service = IpcService::new(state);
+    let engines = [
+        (
+            "riga-flow",
+            crate::mcp_commands::get_riga_mcp_path(handle.clone()),
+            vec!["--transport".to_string(), "stdio".to_string()],
+        ),
+        (
+            "tac-engine",
+            crate::mcp_commands::get_tac_engine_path(handle.clone()),
+            Vec::new(),
+        ),
+    ];
+    for (name, path, args) in engines {
+        let Ok(command) = path else {
+            eprintln!(
+                "RIGA: {name} MCP binary unavailable; the chat will not expose its tools"
+            );
+            continue;
+        };
+        let request = riga_server::McpRegistryRequest {
+            name: name.to_string(),
+            transport: "stdio".to_string(),
+            command: Some(command),
+            args,
+            url: None,
+            api_key: None,
+        };
+        if let Err(error) = service.save_mcp_registry(request).await {
+            eprintln!("RIGA: could not register the {name} MCP server: {error}");
         }
-        // Connect once at startup so the first run's tools are ready immediately
-        // instead of paying for the stdio handshake mid-turn.
-        service.connect_mcp().await;
-    });
+    }
+    if let Some(url) = nip_url {
+        let request = riga_server::McpRegistryRequest {
+            name: "nip".to_string(),
+            transport: "http".to_string(),
+            command: None,
+            args: Vec::new(),
+            url: Some(format!("{url}/mcp")),
+            api_key: None,
+        };
+        match service.save_mcp_registry(request).await {
+            Ok(_) => eprintln!("RIGA: registered the nip MCP server at {url}/mcp"),
+            Err(error) => eprintln!("RIGA: could not register the nip MCP server: {error}"),
+        }
+    } else {
+        eprintln!("RIGA: NIP service unavailable; the chat will not expose its tools");
+    }
+    // Connect once at startup so the first run's tools are ready immediately
+    // instead of paying for the handshake mid-turn.
+    service.connect_mcp().await;
 }

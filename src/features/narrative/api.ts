@@ -1,6 +1,6 @@
 import { nip } from '../../api/nipTransport'
 import { toSnakeKeys } from '../../api/keyCase'
-import type { NipClaim, NipEditorialCandidate, NipEditorialReviewAudit, NipEmbeddingManifest, NipEtfMapping, NipEventSearchPage, NipExtractionStatus, NipHealth, NipNarrativeCluster, NipNarrativeGraph, NipNarrativeSignalSnapshot, NipPodcastEpisode, NipPodcastSubscription, NipProviderConsent, NipProviderStatus, NipResourceStatus, NipSemanticResult } from './types'
+import type { NipCapabilities, NipClaim, NipEditorialCandidate, NipEditorialReviewAudit, NipEmbeddingManifest, NipEpisodePage, NipEtfMapping, NipEventSearchPage, NipExtractionStatus, NipHealth, NipNarrativeCluster, NipNarrativeGraph, NipNarrativeSignalSnapshot, NipPodcastEpisode, NipPodcastSubscription, NipProviderConsent, NipProviderStatus, NipResourceStatus, NipSemanticResult, NipSource, NipSourceKind, NipSourceState } from './types'
 
 function fromTransport<T>(value: unknown): T {
   return toSnakeKeys(value) as T
@@ -8,6 +8,7 @@ function fromTransport<T>(value: unknown): T {
 
 export const narrativeApi = {
   health: async () => fromTransport<NipHealth>(await nip.callTool('health')),
+  capabilities: async () => fromTransport<NipCapabilities>(await nip.callTool('capabilities')),
   searchEvents: (args: { text?: string; sourceId?: string; asOf?: string; cursor?: string; limit?: number } = {}) =>
     nip.callTool('search_events', {
       text: args.text,
@@ -20,6 +21,14 @@ export const narrativeApi = {
   listPodcastSubscriptions: () => nip.callTool('list_podcast_subscriptions').then((value) => fromTransport<NipPodcastSubscription[]>(value)),
   refreshDuePodcastFeeds: () => nip.callTool('refresh_due_podcast_feeds').then((value) => fromTransport<{ results: Array<Record<string, unknown>> }>(value)),
   listPodcastEpisodes: (sourceId: string) => nip.callTool('list_podcast_episodes', { source_id: sourceId }).then((value) => fromTransport<NipPodcastEpisode[]>(value)),
+  listEpisodePage: (args: { sourceId?: string; titleContains?: string; sort?: string; limit?: number; offset?: number } = {}) =>
+    nip.callTool('list_episode_page', {
+      source_id: args.sourceId,
+      title_contains: args.titleContains,
+      sort: args.sort,
+      limit: args.limit ?? 50,
+      offset: args.offset ?? 0,
+    }).then((value) => fromTransport<NipEpisodePage>(value)),
   subscribePodcastFeed: (args: { sourceId: string; feedUrl: string; showName: string; rightsStatement: string; userConfirmedRights: boolean }) =>
     nip.callTool('subscribe_podcast_feed', {
       source_id: args.sourceId,
@@ -28,6 +37,33 @@ export const narrativeApi = {
       rights_statement: args.rightsStatement,
       user_confirmed_rights: args.userConfirmedRights,
     }).then((value) => fromTransport<Record<string, unknown>>(value)),
+  listSources: (includeRemoved = true) => nip.callTool('list_sources', { include_removed: includeRemoved }).then((value) => fromTransport<NipSource[]>(value)),
+  createSource: (args: { sourceId: string; kind: NipSourceKind; displayName: string; locator?: string | null; rightsStatement: string; userConfirmedRights: boolean; topics?: string[]; pollIntervalMinutes?: number; perScanLimit?: number; notes?: string }) =>
+    nip.callTool('create_source', {
+      source_id: args.sourceId,
+      kind: args.kind,
+      display_name: args.displayName,
+      locator: args.locator ?? undefined,
+      rights_statement: args.rightsStatement,
+      user_confirmed_rights: args.userConfirmedRights,
+      topics: args.topics,
+      poll_interval_minutes: args.pollIntervalMinutes,
+      per_scan_limit: args.perScanLimit,
+      notes: args.notes,
+    }).then((value) => fromTransport<NipSource>(value)),
+  updateSource: (args: { sourceId: string; displayName?: string; locator?: string; rightsStatement?: string; topics?: string[]; perScanLimit?: number; pollIntervalMinutes?: number; sync?: boolean }) =>
+    nip.callTool('update_source', {
+      source_id: args.sourceId,
+      display_name: args.displayName,
+      locator: args.locator,
+      rights_statement: args.rightsStatement,
+      topics: args.topics,
+      per_scan_limit: args.perScanLimit,
+      poll_interval_minutes: args.pollIntervalMinutes,
+      sync: args.sync,
+    }).then((value) => fromTransport<NipSource>(value)),
+  setSourceState: (sourceId: string, state: NipSourceState) => nip.callTool('set_source_state', { source_id: sourceId, state }).then((value) => fromTransport<NipSource>(value)),
+  deleteSource: (sourceId: string) => nip.callTool('delete_source', { source_id: sourceId, user_confirmed: true }).then((value) => fromTransport<{ source_id: string; deleted: boolean }>(value)),
   transcribePodcastEpisode: (args: { sourceId: string; sourceNativeId?: string | null; canonicalUrl?: string | null }) =>
     nip.callTool('transcribe_podcast_episode', {
       source_id: args.sourceId,

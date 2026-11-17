@@ -253,3 +253,31 @@ Phase 1 item 7 is implemented behind the existing RIGA provider boundary. NIP no
 Verification is recorded in [doc 57](./57-narrative-intelligence-testing-plan.md). Loopback fixtures prove that no HTTP request reaches a remote provider before consent, that revocation blocks the next extraction without a request, that a model change invalidates the prior binding, and that provider provenance is persisted per derivation.
 
 Remaining in this area: a packaged desktop smoke and restart/recovery run against an installed build has not been executed here. The host bridge and per-server environment are covered by unit tests (loopback binding/token rotation, NIP-only token injection); browser-development and un-packaged desktop paths use the same code. No real remote provider, feed or credential was configured during validation.
+
+## Source registry, CRUD and corrected locators — plan and status 2026-11-17
+
+Doc 55 §4.2 specified subscribe / list / pause / remove for podcast RSS, and
+explicitly deferred corporate, Reddit and X/Twitter connectors. The implementation
+shipped Create and Read only: there was no update path (a wrong feed URL could
+not be corrected), and pause/remove existed in the engine but nowhere in the UI.
+
+[Doc 64](./64-source-registry-crud-and-ingestion-beyond-podcasts.md) records the
+gap analysis, the read-only study of `../rehab-video-maker` (bounded-fetch
+lessons: its preflight swept all 17 curated feeds × 10 items ≈ 164 episodes per
+day to pick one), and the registry design. Schema v9 adds the fine-grained
+`source_kind` (podcast, company_meeting, filing, reddit, x, web, local_document,
+other), registry `state`, topic/policy fields, scan caps and `updated_at`, while
+keeping `source_type` as the coarse class consumed by event queries.
+
+Delivery in this change:
+
+- MCP: `list_sources`, `create_source`, `update_source`, `set_source_state`,
+  `delete_source`; podcast creation still routes through
+  `subscribe_podcast_feed`, and a podcast locator correction clears ETag,
+  last-modified and backoff before the next refresh.
+- Desktop: the **Sources** card lists every kind with edit, pause/resume, soft
+  remove and delete-when-empty actions; the add form has a kind selector.
+- Skills: `skills/nip-source-crud` and `skills/nip-source-radar` describe the
+  agent workflows, including the "never sweep every feed" rule.
+- Non-podcast fetch adapters (company meetings, filings, Reddit/X) remain Phase
+  2/3 gates; the registry stores them now, but no adapter fetches them yet.

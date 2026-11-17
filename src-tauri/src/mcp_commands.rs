@@ -12,6 +12,7 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::mcp::McpRuntime;
 use crate::nip_bridge::NipBridgeInfo;
+use crate::nip_http::NipServiceState;
 
 /// Managed state for the MCP registry.
 #[derive(Default)]
@@ -344,15 +345,15 @@ pub fn tac_mcp_reset(state: State<'_, McpState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn nip_mcp_list_tools(
-    app: AppHandle,
-    state: State<'_, McpState>,
-) -> Result<Value, String> {
-    let binary = get_nip_engine_path(app)?;
-    let mcp = state.runtime.clone();
+pub async fn nip_mcp_list_tools(state: State<'_, NipServiceState>) -> Result<Value, String> {
+    let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let (server, version, tools) = mcp.list_tools("nip", &binary)?;
-        Ok::<Value, String>(json!({ "server": server, "version": version, "tools": tools }))
+        let listing = state.list_tools()?;
+        Ok::<Value, String>(json!({
+            "server": listing.server,
+            "version": listing.version,
+            "tools": listing.tools,
+        }))
     })
     .await
     .map_err(|e| format!("MCP worker failed: {e}"))?
@@ -360,22 +361,20 @@ pub async fn nip_mcp_list_tools(
 
 #[tauri::command]
 pub async fn nip_mcp_call_tool(
-    app: AppHandle,
-    state: State<'_, McpState>,
+    state: State<'_, NipServiceState>,
     name: String,
     arguments: Option<Value>,
 ) -> Result<crate::mcp::McpCallResult, String> {
-    let binary = get_nip_engine_path(app)?;
-    let mcp = state.runtime.clone();
+    let state = state.inner().clone();
     let arguments = arguments.unwrap_or_else(|| json!({}));
-    tauri::async_runtime::spawn_blocking(move || mcp.call_tool("nip", &binary, &name, arguments))
+    tauri::async_runtime::spawn_blocking(move || state.call_tool(&name, arguments))
         .await
         .map_err(|e| format!("MCP worker failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn nip_mcp_reset(state: State<'_, McpState>) -> Result<(), String> {
-    state.runtime.try_reset("nip");
+pub fn nip_mcp_reset(state: State<'_, NipServiceState>) -> Result<(), String> {
+    state.reset();
     Ok(())
 }
 

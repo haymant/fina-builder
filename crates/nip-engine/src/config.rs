@@ -204,6 +204,17 @@ impl NipConfig {
         self.comfyui_url.as_ref()
     }
 
+    /// True when NIP can actually transcribe locally: either the deterministic
+    /// test fixture or a configured loopback ComfyUI ASR workflow.
+    pub fn local_asr_available(&self) -> bool {
+        self.test_mode || self.comfyui_url.is_some()
+    }
+
+    /// NIP-owned staging area for audio handed to the local ASR adapter.
+    pub fn asr_staging_root(&self) -> PathBuf {
+        self.data_dir.join("asr-staging")
+    }
+
     pub fn riga_bridge(&self) -> Option<&RigaBridgeConfig> {
         self.riga_bridge.as_ref()
     }

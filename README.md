@@ -25,6 +25,7 @@ drives them.
 | **[docs/58-narrative-intelligence-phase-0-decisions.md](./docs/58-narrative-intelligence-phase-0-decisions.md)** | Closed local-first Phase 0 baseline for approved podcast RSS, local transcription and RIGA-configured analysis, with the narrow ASR-host amendment in ADR 59; no feed, worker, model, UI or live source is configured. |
 | **[docs/59-comfyui-media-processing-architecture.md](./docs/59-comfyui-media-processing-architecture.md)** | Accepted boundary decision: optional local ComfyUI ASR/media execution, NIP-owned source lifecycle and purge, loopback-only integration gates, and the companion workflow's unverified runtime status. |
 | **[docs/60-narrative-intelligence-comfyui-handoff.md](./docs/60-narrative-intelligence-comfyui-handoff.md)** | Copy-ready handoff prompt for the next agent to implement and validate the optional local ASR adapter without crossing the NIP/ComfyUI ownership boundary. |
+| **[docs/63-nip-desktop-user-journey.md](./docs/63-nip-desktop-user-journey.md)** | User journey from the desktop app through first-run setup, approved feed configuration, local transcription, extraction consent, claim/evidence review, and the narrated Playwright demonstration. |
 | [README.md](./README.md) (this file) | How to run it and how to release it. |
 
 ## Requirements
@@ -127,6 +128,27 @@ UI, logs or persisted state.
 The TAC desktop sidecar still uses the same stdio transport and full Alpaca tool set when both
 API keys are configured. If both are omitted, it starts in the same Yahoo daily-stock/FX fallback
 mode as web mode; account/order tools are omitted, and Alpaca-only market data remains unavailable.
+
+### Narrative Intelligence (NIP) in the desktop app
+
+NIP ships as the `nip-engine` sidecar. In a development checkout, build/stage it once with
+`npm run mcp:sidecar:nip`; `npm run tauri:dev` then starts one shared `nip-engine --transport
+http` process and injects NIP-owned app-data paths plus a loopback RIGA provider bridge. The
+Narrative tab and the RIGA chat both call that one process (RIGA over HTTP MCP; the Narrative
+tab through the Tauri `nip_mcp_*` commands), so they share one DuckDB writer. Open
+**Narrative → Narrative Intelligence** to see the first-run checklist. The full analyst
+journey — approved feed, RSS discovery, local transcription, remote-consent gate,
+evidence-linked claims, Radar/Timeline, graph, and the ETF/editorial boundaries — is
+documented in [docs/63-nip-desktop-user-journey.md](./docs/63-nip-desktop-user-journey.md).
+
+```bash
+npm run test:e2e:journey:narrative-setup   # fast UI setup/rights/consent checks
+PLAYWRIGHT_NIP=on npm run test:e2e:journey:narrative
+PLAYWRIGHT_NIP=on npm run test:e2e:demo -- --grep @demo-narrative-research
+```
+
+The live tests use a disposable DuckDB store, a loopback RSS/audio fixture, and a deterministic
+loopback provider bridge. They do not contact a public feed, remote ASR, or public model endpoint.
 
 #### Optional NVIDIA CUDA backend
 

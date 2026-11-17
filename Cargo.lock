@@ -3871,6 +3871,7 @@ name = "payoff-explorer"
 version = "0.2.0"
 dependencies = [
  "axum",
+ "libc",
  "log",
  "riga-kernel",
  "riga-server",
@@ -3882,6 +3883,7 @@ dependencies = [
  "tauri-plugin-log",
  "tauri-plugin-opener",
  "tokio",
+ "ureq",
  "uuid",
 ]
 

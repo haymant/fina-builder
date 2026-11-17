@@ -13,9 +13,9 @@ use url::Url;
 
 const MAX_AUDIO_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES: usize = 2 * 1024 * 1024;
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
-const HISTORY_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const MAX_HISTORY_POLLS: usize = 300;
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
+const HISTORY_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const MAX_HISTORY_POLLS: usize = 3_600; // 30 minutes for a long local episode
 const WORKFLOW_VERSION: &str = "qwen3-asr-local-v1";
 const WORKFLOW_JSON: &str =
     include_str!("../../../modules/comfy/workflows/api/qwen3_asr_local.api.json");
@@ -377,13 +377,21 @@ fn parse_history_result(value: &Value) -> Result<Option<AsrResult>, AsrError> {
     {
         return Ok(None);
     }
-    let text = find_text(value).ok_or(AsrError::MalformedOutput)?;
+    // `outputs` is the only place a workflow result belongs. Searching the whole
+    // history first found node IDs in `meta` (for example "4") instead of text.
+    let outputs = entry.get("outputs");
+    let text = outputs
+        .and_then(find_text)
+        .or_else(|| find_text(value))
+        .ok_or(AsrError::MalformedOutput)?;
     if text.len() > MAX_TRANSCRIPT_BYTES || text.trim().is_empty() {
         return Err(AsrError::MalformedOutput);
     }
     Ok(Some(AsrResult {
         text,
-        language: find_string(value, &["language", "detected_language"]),
+        language: outputs
+            .and_then(|outputs| find_string(outputs, &["language", "detected_language"]))
+            .or_else(|| find_string(value, &["language", "detected_language"])),
         timings: Vec::new(),
         provenance: AsrProvenance {
             workflow_version: WORKFLOW_VERSION.into(),
@@ -399,6 +407,9 @@ fn parse_history_result(value: &Value) -> Result<Option<AsrResult>, AsrError> {
 fn find_text(value: &Value) -> Option<String> {
     if let Some(text) = value.as_str() {
         return (!text.trim().is_empty()).then(|| text.to_owned());
+    }
+    if let Some(items) = value.as_array() {
+        return items.iter().find_map(find_text);
     }
     value.as_object().and_then(|object| {
         ["text", "transcript", "output", "string"]
@@ -490,5 +501,23 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(result.text, "reviewed output");
+    }
+
+    #[test]
+    fn history_parser_prefers_outputs_over_node_ids_in_metadata() {
+        let result = parse_history_result(&json!({
+            "prompt-id": {
+                "prompt": [1, "prompt-id", {}, {"client_id": "fixture"}, ["4"]],
+                "outputs": {"4": {"text": ["The quick brown fox jumps over the lazy dog."]}},
+                "status": {"status_str": "success", "completed": true},
+                "meta": {"4": {"node_id": "4", "display_node": "4"}}
+            }
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            result.text,
+            "The quick brown fox jumps over the lazy dog."
+        );
     }
 }

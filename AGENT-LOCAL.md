@@ -51,6 +51,13 @@ by `src-tauri/src/mcp.rs`:
 - `get_riga_mcp_path` / `get_tac_engine_path` resolve the binaries: `RIGA_MCP_BIN` /
   `TAC_ENGINE_BIN`, then `modules/<dir>/target/{release,debug}`, then a bundled sidecar.
 
+NIP is different: one `nip-engine --transport http` process is started by
+`src-tauri/src/nip_http.rs` and shared by both surfaces. RIGA registers it as an HTTP MCP
+server; the Narrative tab's `nip_mcp_*` commands use the same loopback endpoint through a
+small Rust MCP client. This is deliberate — the DuckDB ledger has a single writer, so a
+second stdio `nip-engine` would fail on the database lock. Do not add NIP to the stdio
+engine list.
+
 The frontend reaches the engines through the same transports the tiles use
 (`src/api/rigaTransport.ts`, `src/api/tacTransport.ts`) — Tauri IPC in the desktop, HTTP
 (`/riga/mcp`, `/tac/mcp`) in the browser.
@@ -69,6 +76,20 @@ worktrees match the desktop. `RIGA_WORKSPACE_ROOT` overrides it.
 
 Agent transcripts are persisted under the OS app-data directory by `riga-server` (JSONL
 sessions). The panel exposes history via `showSessionHistoryButton`.
+
+## Capability-first checklist
+
+Before adding a Tauri command or UI affordance, expose the same operation as an
+MCP tool or a small, scripted local API and document it in `skills/`:
+
+1. Implement and test the backend/MCP tool or API script directly.
+2. Add a skill with exact commands, expected read-back, and failure codes.
+3. Only then add the Tauri surface. The UI must read capability flags (for
+   example `capabilities.features.local_audio_transcription`) and show the real
+   error instead of pretending an unavailable action is running.
+
+`modules/comfy/scripts/asr.py` and `skills/comfyui/` follow this pattern for the
+local ComfyUI ASR workflow; `skills/nip-transcription/` is the MCP-level test.
 
 ## Non-goals / cautions
 

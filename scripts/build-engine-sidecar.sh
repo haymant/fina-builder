@@ -41,5 +41,8 @@ if [[ ! -f "$src" ]]; then
 fi
 
 mkdir -p "src-tauri/binaries"
-cp "$src" "$dest"
+if ! cp "$src" "$dest"; then
+  echo "$bin sidecar: could not stage $dest (a running process may hold it); runtime will use the workspace path" >&2
+  exit 0
+fi
 echo "$bin sidecar: staged $dest"

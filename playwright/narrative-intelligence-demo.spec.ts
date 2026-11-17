@@ -2,121 +2,147 @@ import { expect, test } from './fixtures/test'
 import { TAG } from './support/tags'
 import { WorkspacePage } from './pages/WorkspacePage'
 
-const MCP_URL = 'http://127.0.0.1:8794/mcp'
-let rpcId = 1
-let sessionId: string | undefined
+const startedAt = Date.now()
 
-async function nipTool(name: string, args: Record<string, unknown> = {}) {
-  const headers: Record<string, string> = {
-    'content-type': 'application/json',
-    accept: 'application/json, text/event-stream',
-  }
-  if (sessionId) headers['Mcp-Session-Id'] = sessionId
-  const rpc = async (method: string, params: Record<string, unknown>, notify = false) => {
-    const id = notify ? undefined : rpcId++
-    const response = await fetch(MCP_URL, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ jsonrpc: '2.0', ...(id ? { id } : {}), method, params }),
-    })
-    sessionId = response.headers.get('Mcp-Session-Id') ?? sessionId
-    if (notify) return undefined
-    const body = await response.json() as { result?: { structuredContent?: unknown; content?: Array<{ text?: string }> }; error?: { message: string } }
-    if (body.error) throw new Error(body.error.message)
-    const result = body.result
-    if (result?.structuredContent !== undefined) return result.structuredContent
-    const text = result?.content?.find((item) => item.text)?.text
-    return text ? JSON.parse(text) : result
-  }
-  if (!sessionId) {
-    await rpc('initialize', {
-      protocolVersion: '2025-11-25',
-      capabilities: {},
-      clientInfo: { name: 'narrative-demo-seeder', version: '0.1.0' },
-    })
-    await rpc('notifications/initialized', {}, true)
-  }
-  return rpc('tools/call', { name, arguments: args })
+function mark(label: string) {
+  console.log(`[demo-cue] ${((Date.now() - startedAt) / 1000).toFixed(2)}s ${label}`)
 }
 
-test('subscribes once, reviews a fixture transcript, and opens evidence-linked claims', {
-  tag: [TAG.demo.any, TAG.demo.narrativeResearch, TAG.journey.narrativeIngestion, TAG.journey.narrativeEvidenceReview, TAG.feature.narrativeEvents, TAG.feature.narrativeClaims, TAG.dependency.nip, TAG.priority.p1],
+test('sets up NIP, approves a feed, transcribes, extracts evidence, and reviews the derived workspace', {
+  tag: [TAG.demo.any, TAG.demo.narrativeResearch, TAG.journey.narrativeSetup, TAG.journey.narrativeIngestion, TAG.journey.narrativeEvidenceReview, TAG.feature.narrativeSetup, TAG.feature.narrativeSources, TAG.feature.narrativeEvents, TAG.feature.narrativeClaims, TAG.dependency.nip, TAG.priority.p1],
 }, async ({ page }) => {
   test.skip(process.env.PLAYWRIGHT_NIP !== 'on', 'run with PLAYWRIGHT_NIP=on for the real loopback NIP service')
-  test.setTimeout(120_000)
-
-  await test.step('Prepare the illustrative loopback corpus', async () => {
-    await nipTool('subscribe_podcast_feed', {
-      source_id: 'fixture-podcast',
-      feed_url: 'http://127.0.0.1:8795/fixture/feed.xml',
-      show_name: 'Illustrative Test Corpus',
-      rights_statement: 'Synthetic fixture approved for local processing and retention.',
-      user_confirmed_rights: true,
-    })
-    await nipTool('transcribe_podcast_episode', {
-      source_id: 'fixture-podcast',
-      source_native_id: 'nip-fixture-episode-1',
-    })
-    const search = await nipTool('search_events', { source_id: 'fixture-podcast', limit: 10 }) as { events: Array<Record<string, unknown>> }
-    expect(search.events).toHaveLength(1)
-    await nipTool('extract_claims', { event: search.events[0] })
-    await nipTool('rebuild_narrative_clusters')
-    await nipTool('rebuild_narrative_graph')
-  })
+  test.setTimeout(180_000)
 
   const workspace = new WorkspacePage(page)
-  await test.step('Open the Narrative Intelligence workspace', async () => {
+  const checklist = page.getByTestId('nip-setup-checklist')
+
+  await test.step('Open Narrative Intelligence from the desktop menu', async () => {
+    mark('open-workspace')
     await workspace.open()
     await page.getByTestId('menu-narrative').click()
     await page.getByTestId('menuitem-narrative-overview').click()
     await expect(page.getByRole('heading', { name: 'Narrative Intelligence' })).toBeVisible()
-    await expect(page.getByText('Illustrative Test Corpus').first()).toBeVisible()
-    await expect(page.getByText(/Operational monitor/)).toBeVisible()
-    await expect(page.getByText(/1 claims · 1 runs/)).toBeVisible()
-    await page.waitForTimeout(3_000)
-  })
-
-  await test.step('Review the retained transcript provenance', async () => {
-    await expect(page.getByText('nip-fixture-episode-1')).toBeVisible()
-    await page.getByRole('button', { name: /nip-fixture-episode-1/ }).click()
-    await expect(page.getByText(/Source-linked record/)).toBeVisible()
-    await expect(page.getByText(/fixture research team expects policy/).last()).toBeVisible()
     await page.waitForTimeout(4_000)
   })
 
-  await test.step('Review the Phase 2 Radar and Timeline', async () => {
+  await test.step('Review first-run setup and source boundaries', async () => {
+    mark('review-setup')
+    await expect(checklist).toBeVisible()
+    await expect(checklist).toContainText('DuckDB schema v9')
+    await expect(checklist).toContainText('Extraction provider')
+    await expect(page.getByText('Approved sources')).toBeVisible()
+    await page.waitForTimeout(5_500)
+  })
+
+  await test.step('Approve one podcast feed with rights confirmation', async () => {
+    mark('approve-feed')
+    await page.getByLabel('Source ID').fill('demo-fixture-feed')
+    await page.getByLabel('Podcast feed URL').fill('http://127.0.0.1:8795/fixture/feed.xml')
+    await page.getByLabel('Show name').fill('Illustrative Test Corpus')
+    await page.getByLabel('Rights statement').fill('Synthetic fixture approved for local processing and retention.')
+    await page.getByLabel(/I confirm access and retention rights/).check()
+    await page.waitForTimeout(1_000)
+    await page.getByRole('button', { name: 'Approve and sync' }).click()
+    await expect(page.getByText('Feed approved and initial sync requested.')).toBeVisible()
+    await expect(page.getByText('Illustrative Test Corpus').first()).toBeVisible()
+    await page.waitForTimeout(5_500)
+  })
+
+  await test.step('Inspect the automatically discovered episode', async () => {
+    mark('inspect-episode')
+    await expect(page.getByText('Policy outlook fixture')).toBeVisible()
+    await expect(page.getByText('awaiting local transcription')).toBeVisible()
+    await page.waitForTimeout(5_000)
+  })
+
+  await test.step('Transcribe the episode locally', async () => {
+    mark('transcribe')
+    await page.getByRole('button', { name: 'Transcribe locally' }).click()
+    await expect(page.getByText('Episode transcribed locally.')).toBeVisible()
+    await expect(page.getByRole('button', { name: /nip-fixture-episode-1/ })).toBeVisible()
+    await page.waitForTimeout(5_500)
+  })
+
+  await test.step('Open the retained transcript and its provenance', async () => {
+    mark('open-transcript')
+    await page.getByRole('button', { name: /nip-fixture-episode-1/ }).click()
+    await expect(page.getByText(/Source-linked record/)).toBeVisible()
+    await expect(page.locator('.event-detail').getByText(/fixture research team expects policy/)).toBeVisible()
+    await page.waitForTimeout(6_000)
+  })
+
+  await test.step('Grant NIP consent for the remote extraction provider', async () => {
+    mark('grant-consent')
+    const consent = page.getByTestId('event-consent-grant')
+    if (await consent.isVisible()) {
+      await consent.click()
+      await expect(page.getByTestId('event-consent')).toHaveCount(0)
+    }
+    await page.waitForTimeout(5_500)
+  })
+
+  await test.step('Extract evidence-linked claims from the transcript', async () => {
+    mark('extract-claims')
+    await page.getByRole('button', { name: 'Extract claims' }).click()
+    await expect(page.getByText('1 claim committed with source evidence.')).toBeVisible()
+    await expect(checklist).toContainText('5/5 complete')
+    await page.waitForTimeout(5_000)
+  })
+
+  await test.step('Review the claim and its source evidence', async () => {
+    mark('review-claim')
+    await page.getByRole('tab', { name: 'Claim Explorer' }).click()
+    await expect(page.getByRole('heading', { name: /Policy is expected to remain restrictive/ })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Source evidence' })).toBeVisible()
+    await expect(page.getByText('riga_bridge', { exact: true })).toBeVisible()
+    await page.waitForTimeout(6_500)
+  })
+
+  await test.step('Rebuild the cluster and graph projections', async () => {
+    mark('rebuild-derived')
+    await page.getByRole('tab', { name: 'Graph' }).click()
+    await page.getByRole('button', { name: 'Rebuild clusters' }).click()
+    await expect(page.getByText(/narrative cluster.* rebuilt from canonical events/)).toBeVisible()
+    await page.getByRole('button', { name: 'Rebuild graph' }).click()
+    await expect(page.getByText(/evidence-linked edges/)).toBeVisible()
+    await page.waitForTimeout(5_500)
+  })
+
+  await test.step('Follow a graph edge back to the immutable source event', async () => {
+    mark('graph-evidence')
+    await page.getByRole('button', { name: /Evidence event-/ }).first().click()
+    await expect(page.getByText(/Source-linked record/)).toBeVisible()
+    await page.waitForTimeout(5_000)
+  })
+
+  await test.step('Review the descriptive Radar and Timeline windows', async () => {
+    mark('radar-timeline')
     await page.getByRole('tab', { name: 'Radar' }).click()
     await expect(page.getByRole('heading', { name: 'Narrative Radar' })).toBeVisible()
     await expect(page.getByText(/unknown coverage/)).toBeVisible()
+    await page.waitForTimeout(6_000)
     await page.getByRole('tab', { name: 'Timeline' }).click()
     await expect(page.getByRole('heading', { name: 'Narrative Timeline' })).toBeVisible()
-    await page.waitForTimeout(3_000)
+    await page.waitForTimeout(6_000)
   })
-  await test.step('Inspect the versioned graph and return to evidence', async () => {
-    await page.getByRole('tab', { name: 'Graph' }).click()
-    await expect(page.getByRole('heading', { name: 'Narrative Graph' })).toBeVisible()
-    await expect(page.getByText(/evidence-linked edges/)).toBeVisible()
-    await page.getByRole('button', { name: /Rebuild graph/ }).click()
-    await expect(page.getByText(/evidence-linked edges/)).toBeVisible()
-    await expect(page.getByRole('button', { name: /Evidence event-/ }).first()).toBeVisible()
-    await page.getByRole('button', { name: /Evidence event-/ }).first().click()
-    await expect(page.getByText(/Source-linked record/)).toBeVisible()
-    await page.waitForTimeout(3_000)
-  })
-  await test.step('Review Phase 3 research boundaries', async () => {
+
+  await test.step('Review the ETF and editorial research boundaries', async () => {
+    mark('boundaries')
     await page.getByRole('tab', { name: 'ETF Themes' }).click()
     await expect(page.getByRole('heading', { name: 'ETF Themes' })).toBeVisible()
     await expect(page.getByText(/No manual ETF mappings yet/)).toBeVisible()
+    await page.waitForTimeout(5_500)
     await page.getByRole('tab', { name: 'Editorial' }).click()
     await expect(page.getByRole('heading', { name: 'Editorial Planning' })).toBeVisible()
     await expect(page.getByText(/Awaiting human review|No editorial candidates yet/)).toBeVisible()
-    await page.waitForTimeout(3_000)
+    await page.waitForTimeout(5_500)
   })
-  await test.step('Inspect the evidence-linked claim', async () => {
-    await page.getByRole('tab', { name: 'Claim Explorer' }).click()
-    await expect(page.getByRole('heading', { name: /fixture research team expects policy/ })).toBeVisible()
-    await expect(page.getByText('Source evidence')).toBeVisible()
-    await expect(page.getByText('deterministic_fake', { exact: true })).toBeVisible()
-    await page.waitForTimeout(5_000)
+
+  await test.step('Return to the completed setup checklist', async () => {
+    mark('close')
+    await page.getByRole('tab', { name: 'Event review' }).click()
+    await expect(checklist).toContainText('5/5 complete')
+    await page.waitForTimeout(8_500)
   })
 })

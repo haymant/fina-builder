@@ -10,7 +10,9 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 2 : undefined,
+  // NIP service-backed journeys share one disposable DuckDB ledger. Keep them
+  // serial so an opt-in `PLAYWRIGHT_NIP=on` run cannot race on feed/consent state.
+  workers: nipEnabled ? 1 : process.env.CI ? 2 : undefined,
   reporter: 'list',
   use: {
     baseURL: 'http://127.0.0.1:4173',
@@ -56,6 +58,18 @@ export default defineConfig({
             url: 'http://127.0.0.1:8795/health',
             reuseExistingServer: false,
             timeout: 60_000,
+          },
+          {
+            // Deterministic stand-in for the desktop host's loopback RIGA
+            // provider bridge. It keeps the browser journey on the real NIP
+            // consent/extraction path without contacting a public provider.
+            command: 'node scripts/nip-provider-bridge-fixture.mjs',
+            url: 'http://127.0.0.1:8796/health',
+            reuseExistingServer: false,
+            timeout: 60_000,
+            env: {
+              NIP_BRIDGE_FIXTURE_TOKEN: process.env.NIP_BRIDGE_FIXTURE_TOKEN ?? 'nip-e2e-bridge-token',
+            },
           },
           {
             command: 'node scripts/start-nip-e2e.mjs',

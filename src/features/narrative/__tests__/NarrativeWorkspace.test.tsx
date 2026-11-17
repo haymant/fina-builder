@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { ClaimExplorer, OperationalMonitor, ProviderStatusPanel } from '../components/NarrativeWorkspace'
-import type { NipClaim, NipEvent, NipExtractionStatus, NipProviderStatus, NipResourceStatus } from '../types'
+import { ClaimExplorer, EpisodePanel, OperationalMonitor, ProviderStatusPanel, SetupChecklist } from '../components/NarrativeWorkspace'
+import type { NipClaim, NipEvent, NipExtractionStatus, NipPodcastEpisode, NipPodcastSubscription, NipProviderStatus, NipResourceStatus } from '../types'
 
 const event: NipEvent = {
   schema_version: 1,
@@ -115,5 +115,111 @@ describe('OperationalMonitor', () => {
     render(<OperationalMonitor resource={null} extraction={null} />)
     expect(screen.getAllByText('Checking…')).toHaveLength(4)
     expect(screen.getByText('No extraction run has committed claims yet.')).toBeTruthy()
+  })
+})
+
+const subscription: NipPodcastSubscription = {
+  source_id: 'fixture-show',
+  feed_url: 'http://127.0.0.1:8795/fixture/feed.xml',
+  show_name: 'Illustrative Test Corpus',
+  rights_statement: 'Approved for local processing.',
+  rights_confirmed_at: '2026-11-16T09:00:00Z',
+  state: 'active',
+  last_checked_at: '2026-11-16T09:00:00Z',
+  next_poll_at: '2026-11-16T15:00:00Z',
+  last_error_code: null,
+  consecutive_failures: 0,
+}
+
+const episode: NipPodcastEpisode = {
+  source_id: 'fixture-show',
+  source_native_id: 'nip-fixture-episode-1',
+  canonical_url: 'http://127.0.0.1:8795/fixture/episode-1',
+  title: 'Policy outlook fixture',
+  enclosure_url: 'http://127.0.0.1:8795/fixture/episode-1.mp3',
+  published_at: '2026-11-15T12:00:00Z',
+  discovered_at: '2026-11-16T09:00:00Z',
+  state: 'awaiting_local_transcription',
+}
+
+const health = { service: 'nip-engine', api_version: 1, readiness: 'ready' as const, schema_version: 8 }
+
+describe('SetupChecklist', () => {
+  it('shows the first-run steps and the next action when the provider needs consent', () => {
+    render(<SetupChecklist health={health} provider={providerStatus} subscriptions={[]} events={[]} claims={[]} />)
+    expect(screen.getByRole('region', { name: 'NIP setup checklist' })).toBeTruthy()
+    expect(screen.getByText('Local service')).toBeTruthy()
+    expect(screen.getByText('Extraction provider')).toBeTruthy()
+    expect(screen.getByText('Consent needed')).toBeTruthy()
+    expect(screen.getByText('Next')).toBeTruthy()
+    expect(screen.getByText('1/5 complete')).toBeTruthy()
+  })
+
+  it('marks every step complete once claims retain source evidence', () => {
+    render(<SetupChecklist health={health} provider={{ ...providerStatus, consent: 'granted', extraction_state: 'available' }} subscriptions={[subscription]} events={[event]} claims={[claim]} />)
+    expect(screen.getByText('5/5 complete')).toBeTruthy()
+    expect(screen.getAllByText('Complete')).toHaveLength(5)
+  })
+})
+
+describe('EpisodePanel', () => {
+  function renderPanel(overrides: Record<string, unknown> = {}) {
+    const props = {
+      subscriptions: [subscription],
+      episodes: [episode],
+      total: 1,
+      loading: false,
+      hasMore: false,
+      filters: { sort: 'published_desc' as const, sourceId: 'all', title: '' },
+      onFiltersChange: vi.fn(),
+      onLoadMore: vi.fn(),
+      busyKey: null,
+      message: null,
+      onTranscribe: vi.fn(),
+      transcriptionAvailable: true,
+      ...overrides,
+    }
+    return { props, ...render(<EpisodePanel {...props} />) }
+  }
+
+  it('offers local transcription for a discovered episode without implying a remote ASR fallback', () => {
+    const { props } = renderPanel()
+    expect(screen.getByText('Policy outlook fixture')).toBeTruthy()
+    expect(screen.getByText('awaiting local transcription')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Transcribe locally/ }))
+    expect(props.onTranscribe).toHaveBeenCalledWith(episode)
+  })
+
+  it('does not offer a dead transcribe action when local ASR is not configured', () => {
+    renderPanel({ transcriptionAvailable: false })
+    expect(screen.getByText(/Local ASR is not configured/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Transcribe locally/ })).toBeNull()
+  })
+
+  it('offers a retry after the local provider reported unavailable', () => {
+    renderPanel({ episodes: [{ ...episode, state: 'transcription_unavailable' }] })
+    expect(screen.getByRole('button', { name: /Retry local transcription/ })).toBeTruthy()
+    expect(screen.queryByText(/will not upload audio/)).toBeNull()
+  })
+
+  it('explains a non-retryable transcription state without implying a remote fallback', () => {
+    renderPanel({ episodes: [{ ...episode, state: 'not_eligible' }] })
+    expect(screen.getByText(/will not upload audio or substitute a remote ASR service/)).toBeTruthy()
+  })
+
+  it('sends sort, source and title changes to the server-side query', () => {
+    const { props } = renderPanel({ filters: { sort: 'published_desc', sourceId: 'all', title: '' } })
+    fireEvent.change(screen.getByLabelText('Sort episodes'), { target: { value: 'title_asc' } })
+    expect(props.onFiltersChange).toHaveBeenCalledWith({ sort: 'title_asc', sourceId: 'all', title: '' })
+    fireEvent.change(screen.getByLabelText('Filter episodes by source'), { target: { value: 'fixture-show' } })
+    expect(props.onFiltersChange).toHaveBeenCalledWith({ sort: 'published_desc', sourceId: 'fixture-show', title: '' })
+    fireEvent.change(screen.getByLabelText('Filter episodes by title'), { target: { value: 'policy' } })
+    expect(props.onFiltersChange).toHaveBeenCalledWith({ sort: 'published_desc', sourceId: 'all', title: 'policy' })
+  })
+
+  it('shows the next-page sentinel and reports the page count', () => {
+    renderPanel({ total: 128, hasMore: true })
+    expect(screen.getByText(/Showing 1 of 128 episodes/)).toBeTruthy()
+    expect(screen.getByText(/Scroll for more episodes/)).toBeTruthy()
   })
 })

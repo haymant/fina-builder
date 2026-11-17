@@ -6,8 +6,9 @@ use duckdb::{params, Connection, OptionalExt};
 use nip_domain::{
     ClaimRecord, EditorialCandidate, EditorialReviewAudit, EmbeddingIndexManifest, EtfMapping,
     EventRecord, EventSearchPage, EventSearchQuery, LocalEventImport, NarrativeCluster,
-    NarrativeClusterMember, NarrativeGraph, PodcastEpisode, PodcastEpisodeState,
+    NarrativeClusterMember, NarrativeGraph, NarrativeSource, PodcastEpisode, PodcastEpisodeState,
     PodcastSubscription, PodcastSubscriptionState, PodcastTranscript, ProviderConsent, SourceId,
+    SourceKind, SourceState, SourceUpdate,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -22,7 +23,8 @@ const MIGRATION_5: &str = include_str!("../migrations/0005_semantic_indexes.sql"
 const MIGRATION_6: &str = include_str!("../migrations/0006_phase3_research.sql");
 const MIGRATION_7: &str = include_str!("../migrations/0007_phase2_graph.sql");
 const MIGRATION_8: &str = include_str!("../migrations/0008_provider_consent_audit.sql");
-const LATEST_SCHEMA_VERSION: u32 = 8;
+const MIGRATION_9: &str = include_str!("../migrations/0009_source_registry.sql");
+const LATEST_SCHEMA_VERSION: u32 = 9;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -211,12 +213,20 @@ impl Store {
     ) -> Result<(), StoreError> {
         let transaction = self.connection.transaction()?;
         transaction.execute(
-            "INSERT INTO nip_sources (source_id, source_type, display_name, locator, rights_status)
-             VALUES (?, 'podcast', ?, ?, 'approved')",
+            "INSERT INTO nip_sources
+                (source_id, source_type, source_kind, display_name, locator, rights_status,
+                 rights_statement, state)
+             VALUES (?, 'podcast', 'podcast', ?, ?, 'approved', ?, ?)",
             params![
                 subscription.source_id.as_str(),
                 subscription.show_name,
-                subscription.feed_url
+                subscription.feed_url,
+                subscription.rights_statement,
+                registry_state_as_str(match subscription.state {
+                    PodcastSubscriptionState::Active => SourceState::Active,
+                    PodcastSubscriptionState::Paused => SourceState::Paused,
+                    PodcastSubscriptionState::Removed => SourceState::Removed,
+                }),
             ],
         )?;
         transaction.execute(
@@ -275,6 +285,201 @@ impl Store {
             params![subscription_state_as_str(state), source_id.as_str()],
         )?;
         Ok(changed == 1)
+    }
+
+    /// All registry rows. Removed sources are retained for audit and are only
+    /// returned when explicitly requested.
+    pub fn sources(&self, include_removed: bool) -> Result<Vec<NarrativeSource>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT s.source_id, s.source_kind, s.display_name, s.locator, s.rights_status,
+                    s.rights_statement, s.topics_json, s.state, s.poll_interval_minutes,
+                    s.per_scan_limit, s.notes, s.created_at, s.updated_at,
+                    (SELECT COUNT(*) FROM nip_events e WHERE e.source_id = s.source_id),
+                    (SELECT COUNT(*) FROM nip_podcast_episodes p WHERE p.source_id = s.source_id)
+             FROM nip_sources s
+             WHERE (? OR s.state <> 'removed')
+             ORDER BY s.display_name, s.source_id",
+        )?;
+        let rows = statement.query_map(params![include_removed], raw_source_from_row)?;
+        rows.map(|row| row?.try_into()).collect()
+    }
+
+    pub fn source(&self, source_id: &SourceId) -> Result<Option<NarrativeSource>, StoreError> {
+        let raw = self
+            .connection
+            .query_row(
+                "SELECT s.source_id, s.source_kind, s.display_name, s.locator, s.rights_status,
+                        s.rights_statement, s.topics_json, s.state, s.poll_interval_minutes,
+                        s.per_scan_limit, s.notes, s.created_at, s.updated_at,
+                        (SELECT COUNT(*) FROM nip_events e WHERE e.source_id = s.source_id),
+                        (SELECT COUNT(*) FROM nip_podcast_episodes p WHERE p.source_id = s.source_id)
+                 FROM nip_sources s WHERE s.source_id = ?",
+                params![source_id.as_str()],
+                raw_source_from_row,
+            )
+            .optional()?;
+        raw.map(TryInto::try_into).transpose()
+    }
+
+    /// Register a source that has no podcast adapter row (all non-podcast kinds).
+    pub fn insert_source(&mut self, source: &NarrativeSource) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT INTO nip_sources
+                (source_id, source_type, source_kind, display_name, locator, rights_status,
+                 rights_statement, topics_json, state, poll_interval_minutes, per_scan_limit,
+                 notes, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                source.source_id.as_str(),
+                source.kind.coarse_type(),
+                source.kind.as_str(),
+                source.display_name,
+                source.locator,
+                source.rights_status,
+                source.rights_statement,
+                serde_json::to_string(&source.topics)?,
+                registry_state_as_str(source.state),
+                source.poll_interval_minutes.min(i32::MAX as u32) as i32,
+                source.per_scan_limit.min(i32::MAX as u32) as i32,
+                source.notes,
+                source.created_at,
+                source.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_source(
+        &mut self,
+        source_id: &SourceId,
+        update: &SourceUpdate,
+        now: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        let topics = update
+            .topics
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        let changed = self.connection.execute(
+            "UPDATE nip_sources
+             SET display_name = COALESCE(?, display_name),
+                 locator = COALESCE(?, locator),
+                 rights_statement = COALESCE(?, rights_statement),
+                 topics_json = COALESCE(?, topics_json),
+                 poll_interval_minutes = COALESCE(?, poll_interval_minutes),
+                 per_scan_limit = COALESCE(?, per_scan_limit),
+                 notes = COALESCE(?, notes),
+                 updated_at = ?
+             WHERE source_id = ? AND state <> 'removed'",
+            params![
+                update.display_name,
+                update.locator,
+                update.rights_statement,
+                topics,
+                update
+                    .poll_interval_minutes
+                    .map(|minutes| minutes.min(i32::MAX as u32) as i32),
+                update
+                    .per_scan_limit
+                    .map(|limit| limit.min(i32::MAX as u32) as i32),
+                update.notes,
+                now,
+                source_id.as_str(),
+            ],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// Change the registry state and mirror it into the podcast adapter so a
+    /// paused or removed feed is never refreshed.
+    pub fn set_source_state(
+        &mut self,
+        source_id: &SourceId,
+        state: SourceState,
+        now: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        let transaction = self.connection.transaction()?;
+        let changed = transaction.execute(
+            "UPDATE nip_sources SET state = ?, updated_at = ?
+             WHERE source_id = ? AND state <> ?",
+            params![
+                registry_state_as_str(state),
+                now,
+                source_id.as_str(),
+                registry_state_as_str(state)
+            ],
+        )?;
+        if changed == 1 {
+            transaction.execute(
+                "UPDATE nip_podcast_subscriptions SET state = ? WHERE source_id = ?",
+                params![
+                    registry_state_as_str(state),
+                    source_id.as_str()
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(changed == 1)
+    }
+
+    /// Correct a podcast locator and forget the conditional-fetch bookkeeping so
+    /// the next refresh fetches the feed in full.
+    pub fn update_podcast_locator(
+        &mut self,
+        source_id: &SourceId,
+        feed_url: &str,
+        show_name: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        let transaction = self.connection.transaction()?;
+        let subscription_changed = transaction.execute(
+            "UPDATE nip_podcast_subscriptions
+             SET feed_url = ?, show_name = ?, etag = NULL, last_modified = NULL,
+                 next_poll_at = NULL, last_error_code = NULL, consecutive_failures = 0
+             WHERE source_id = ?",
+            params![feed_url, show_name, source_id.as_str()],
+        )?;
+        transaction.execute(
+            "UPDATE nip_sources
+             SET locator = ?, display_name = ?, updated_at = ?
+             WHERE source_id = ?",
+            params![feed_url, show_name, now, source_id.as_str()],
+        )?;
+        transaction.commit()?;
+        Ok(subscription_changed == 1)
+    }
+
+    /// Hard delete is only permitted when the source owns no retained events.
+    /// Returns the event count when deletion is refused.
+    pub fn delete_source(&mut self, source_id: &SourceId) -> Result<u64, StoreError> {
+        let events: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM nip_events WHERE source_id = ?",
+            params![source_id.as_str()],
+            |row| row.get(0),
+        )?;
+        if events > 0 {
+            return Ok(events.max(0) as u64);
+        }
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM nip_podcast_transcripts
+             WHERE episode_id IN (SELECT episode_id FROM nip_podcast_episodes WHERE source_id = ?)",
+            params![source_id.as_str()],
+        )?;
+        transaction.execute(
+            "DELETE FROM nip_podcast_episodes WHERE source_id = ?",
+            params![source_id.as_str()],
+        )?;
+        transaction.execute(
+            "DELETE FROM nip_podcast_subscriptions WHERE source_id = ?",
+            params![source_id.as_str()],
+        )?;
+        transaction.execute(
+            "DELETE FROM nip_sources WHERE source_id = ?",
+            params![source_id.as_str()],
+        )?;
+        transaction.commit()?;
+        Ok(0)
     }
 
     pub fn update_subscription_fetch_state(
@@ -362,6 +567,61 @@ impl Store {
         )?;
         let rows = statement.query_map(params![source_id.as_str()], raw_episode_from_row)?;
         rows.map(|row| row?.try_into()).collect()
+    }
+
+    /// Stable, filtered page over discovered RSS metadata. The page is ordered
+    /// before `LIMIT`/`OFFSET` so infinite scrolling cannot skip or duplicate a
+    /// row when new episodes are discovered between requests.
+    pub fn discovered_episodes_page(
+        &self,
+        source_id: Option<&SourceId>,
+        title_contains: Option<&str>,
+        sort: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<(Vec<PodcastEpisode>, u64), StoreError> {
+        let source_filter = source_id.map(SourceId::as_str);
+        let title_filter = title_contains
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_lowercase);
+        let title_filter = title_filter.as_deref();
+        let filter = "WHERE (? IS NULL OR source_id = ?)
+                        AND (? IS NULL OR title ILIKE '%' || ? || '%')";
+        let total: i64 = self.connection.query_row(
+            &format!("SELECT COUNT(*) FROM nip_podcast_episodes {filter}"),
+            params![source_filter, source_filter, title_filter, title_filter],
+            |row| row.get(0),
+        )?;
+        let order = if sort == "title_asc" {
+            "lower(COALESCE(title, source_native_id, '')) ASC, episode_id ASC"
+        } else {
+            "published_at DESC NULLS LAST, episode_id DESC"
+        };
+        let sql = format!(
+            "SELECT source_id, source_native_id, canonical_url, title, enclosure_url,
+                    published_at, discovered_at, state
+             FROM nip_podcast_episodes
+             {filter}
+             ORDER BY {order}
+             LIMIT ? OFFSET ?"
+        );
+        let mut statement = self.connection.prepare(&sql)?;
+        let rows = statement.query_map(
+            params![
+                source_filter,
+                source_filter,
+                title_filter,
+                title_filter,
+                i64::from(limit),
+                i64::from(offset)
+            ],
+            raw_episode_from_row,
+        )?;
+        let episodes = rows
+            .map(|row| row?.try_into())
+            .collect::<Result<Vec<PodcastEpisode>, StoreError>>()?;
+        Ok((episodes, total.max(0) as u64))
     }
 
     pub fn store_transcript(
@@ -483,8 +743,8 @@ impl Store {
         );
         let transaction = self.connection.transaction()?;
         transaction.execute(
-            "INSERT INTO nip_sources (source_id, source_type, display_name, locator, rights_status, rights_statement)
-             VALUES (?, 'local_document', ?, ?, 'approved', ?)
+            "INSERT INTO nip_sources (source_id, source_type, source_kind, display_name, locator, rights_status, rights_statement)
+             VALUES (?, 'local_document', 'local_document', ?, ?, 'approved', ?)
              ON CONFLICT (source_id) DO NOTHING",
             params![
                 import.source_id.as_str(),
@@ -1264,31 +1524,52 @@ fn apply_migrations(connection: &mut Connection) -> Result<u32, StoreError> {
         });
     }
 
+    let mut applied_any = false;
     if current_version < 1 {
         apply_migration(connection, 1, "core", MIGRATION_1)?;
         current_version = 1;
+        applied_any = true;
     }
     if current_version < 2 {
         apply_migration(connection, 2, "podcast_feeds", MIGRATION_2)?;
+        applied_any = true;
     }
     if current_version < 3 {
         apply_migration(connection, 3, "podcast_transcripts", MIGRATION_3)?;
+        applied_any = true;
     }
     if current_version < 4 {
         apply_migration(connection, 4, "claims", MIGRATION_4)?;
+        applied_any = true;
     }
     if current_version < 5 {
         apply_migration(connection, 5, "semantic_indexes", MIGRATION_5)?;
         current_version = 5;
+        applied_any = true;
     }
     if current_version < 6 {
         apply_migration(connection, 6, "phase3_research", MIGRATION_6)?;
+        applied_any = true;
     }
     if current_version < 7 {
         apply_migration(connection, 7, "phase2_graph", MIGRATION_7)?;
+        applied_any = true;
     }
     if current_version < 8 {
         apply_migration(connection, 8, "provider_consent_audit", MIGRATION_8)?;
+        applied_any = true;
+    }
+    if current_version < 9 {
+        apply_migration(connection, 9, "source_registry", MIGRATION_9)?;
+        current_version = 9;
+        applied_any = true;
+    }
+    let _ = current_version;
+    if applied_any {
+        // Migration 0009 rebuilds tables (DROP/RENAME). DuckDB cannot replay
+        // those catalog records from a WAL left behind by a crashed process, so
+        // flush the migration into the database file immediately.
+        connection.execute_batch("CHECKPOINT;")?;
     }
     Ok(LATEST_SCHEMA_VERSION)
 }
@@ -1352,6 +1633,10 @@ fn collect_snapshot_files(
         }
     }
     Ok(())
+}
+
+fn registry_state_as_str(state: SourceState) -> &'static str {
+    state.as_str()
 }
 
 fn subscription_state_as_str(state: PodcastSubscriptionState) -> &'static str {
@@ -1480,6 +1765,68 @@ impl TryFrom<RawEvent> for EventRecord {
             revision_of: raw
                 .revision_of
                 .and_then(|id| nip_domain::EventId::new(id).ok()),
+        })
+    }
+}
+
+struct RawSource {
+    source_id: String,
+    kind: String,
+    display_name: String,
+    locator: Option<String>,
+    rights_status: String,
+    rights_statement: Option<String>,
+    topics_json: String,
+    state: String,
+    poll_interval_minutes: i32,
+    per_scan_limit: i32,
+    notes: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    event_count: i64,
+    episode_count: i64,
+}
+
+fn raw_source_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<RawSource> {
+    Ok(RawSource {
+        source_id: row.get(0)?,
+        kind: row.get(1)?,
+        display_name: row.get(2)?,
+        locator: row.get(3)?,
+        rights_status: row.get(4)?,
+        rights_statement: row.get(5)?,
+        topics_json: row.get(6)?,
+        state: row.get(7)?,
+        poll_interval_minutes: row.get(8)?,
+        per_scan_limit: row.get(9)?,
+        notes: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+        event_count: row.get(13)?,
+        episode_count: row.get(14)?,
+    })
+}
+
+impl TryFrom<RawSource> for NarrativeSource {
+    type Error = StoreError;
+
+    fn try_from(raw: RawSource) -> Result<Self, Self::Error> {
+        Ok(Self {
+            source_id: SourceId::new(raw.source_id).map_err(|_| StoreError::InvalidStoredState)?,
+            kind: SourceKind::parse(&raw.kind).ok_or(StoreError::InvalidStoredState)?,
+            display_name: raw.display_name,
+            locator: raw.locator,
+            rights_status: raw.rights_status,
+            rights_statement: raw.rights_statement,
+            topics: serde_json::from_str(&raw.topics_json).unwrap_or_default(),
+            state: SourceState::parse(&raw.state).ok_or(StoreError::InvalidStoredState)?,
+            poll_interval_minutes: raw.poll_interval_minutes.max(0) as u32,
+            per_scan_limit: raw.per_scan_limit.max(0) as u32,
+            notes: raw.notes,
+            created_at: raw.created_at,
+            updated_at: raw.updated_at,
+            event_count: raw.event_count.max(0) as u64,
+            episode_count: raw.episode_count.max(0) as u64,
         })
     }
 }
@@ -1635,7 +1982,7 @@ mod tests {
 
         {
             let store = Store::open(&path).unwrap();
-            assert_eq!(store.schema_version(), 8);
+            assert_eq!(store.schema_version(), 9);
             assert!(store.has_table("nip_schema_migrations").unwrap());
             assert!(store.has_table("nip_sources").unwrap());
             assert!(store.has_table("nip_events").unwrap());
@@ -1645,14 +1992,14 @@ mod tests {
         }
 
         let reopened = Store::open(&path).unwrap();
-        assert_eq!(reopened.schema_version(), 8);
+        assert_eq!(reopened.schema_version(), 9);
         let migration_count: i64 = reopened
             .connection
             .query_row("SELECT COUNT(*) FROM nip_schema_migrations", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 8);
+        assert_eq!(migration_count, 9);
     }
 
     #[test]
@@ -1681,7 +2028,7 @@ mod tests {
         drop(connection);
 
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version(), 8);
+        assert_eq!(store.schema_version(), 9);
         assert!(store.has_table("nip_events").unwrap());
         assert!(store.has_table("nip_podcast_subscriptions").unwrap());
     }
@@ -1779,6 +2126,87 @@ mod tests {
             rows[0].state,
             PodcastEpisodeState::AwaitingLocalTranscription
         );
+    }
+
+    #[test]
+    fn discovered_episode_pages_filter_sort_and_report_total() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        store
+            .add_approved_subscription(&subscription("feed-a"))
+            .unwrap();
+        store
+            .add_approved_subscription(&subscription("feed-b"))
+            .unwrap();
+        let alpha = PodcastEpisode {
+            title: Some("Alpha episode".into()),
+            published_at: Some("2026-11-10T12:00:00Z".parse().unwrap()),
+            ..episode("feed-a", Some("guid-alpha"), None)
+        };
+        let beta = PodcastEpisode {
+            title: Some("Beta episode".into()),
+            published_at: Some("2026-11-12T12:00:00Z".parse().unwrap()),
+            ..episode("feed-a", Some("guid-beta"), None)
+        };
+        let gamma = PodcastEpisode {
+            title: Some("Gamma episode".into()),
+            published_at: Some("2026-11-11T12:00:00Z".parse().unwrap()),
+            ..episode("feed-b", Some("guid-gamma"), None)
+        };
+        store
+            .record_discovered_episodes(&[alpha, beta, gamma])
+            .unwrap();
+
+        let (first_page, total) = store
+            .discovered_episodes_page(None, None, "published_desc", 2, 0)
+            .unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(
+            first_page
+                .iter()
+                .map(|row| row.title.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("Beta episode"), Some("Gamma episode")]
+        );
+        let (second_page, _) = store
+            .discovered_episodes_page(None, None, "published_desc", 2, 2)
+            .unwrap();
+        assert_eq!(
+            second_page
+                .iter()
+                .map(|row| row.title.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("Alpha episode")]
+        );
+
+        let (titles, total) = store
+            .discovered_episodes_page(None, None, "title_asc", 10, 0)
+            .unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(
+            titles
+                .iter()
+                .map(|row| row.title.as_deref())
+                .collect::<Vec<_>>(),
+            vec![
+                Some("Alpha episode"),
+                Some("Beta episode"),
+                Some("Gamma episode")
+            ]
+        );
+
+        let (beta_only, total) = store
+            .discovered_episodes_page(None, Some("BETA"), "published_desc", 10, 0)
+            .unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(beta_only[0].title.as_deref(), Some("Beta episode"));
+
+        let feed_b = SourceId::new("feed-b").unwrap();
+        let (feed_b_rows, total) = store
+            .discovered_episodes_page(Some(&feed_b), None, "published_desc", 10, 0)
+            .unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(feed_b_rows[0].source_id, feed_b);
     }
 
     #[test]
@@ -1894,7 +2322,7 @@ mod tests {
             error,
             StoreError::FutureSchema {
                 found: 99,
-                supported: 8
+                supported: 9
             }
         ));
     }
@@ -2148,5 +2576,164 @@ mod tests {
             store.save_etf_mapping(&bad_version),
             Err(StoreError::InvalidResearchRecord)
         ));
+    }
+
+    fn narrative_source(source_id: &str, kind: SourceKind) -> NarrativeSource {
+        NarrativeSource {
+            source_id: SourceId::new(source_id).unwrap(),
+            kind,
+            display_name: "Q3 management call".into(),
+            locator: Some("https://example.invalid/q3-call".into()),
+            rights_status: "approved".into(),
+            rights_statement: Some("Internal transcript cleared for local retention".into()),
+            topics: vec!["company meeting".into(), "guidance".into()],
+            state: SourceState::Active,
+            poll_interval_minutes: 360,
+            per_scan_limit: 3,
+            notes: None,
+            created_at: "2026-11-17T09:00:00Z".parse().unwrap(),
+            updated_at: "2026-11-17T09:00:00Z".parse().unwrap(),
+            event_count: 0,
+            episode_count: 0,
+        }
+    }
+
+    #[test]
+    fn source_registry_crud_covers_non_podcast_kinds() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let source = narrative_source("meeting-q3", SourceKind::CompanyMeeting);
+        store.insert_source(&source).unwrap();
+
+        let listed = store.sources(false).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].kind, SourceKind::CompanyMeeting);
+        assert_eq!(listed[0].state, SourceState::Active);
+        assert_eq!(listed[0].topics, vec!["company meeting", "guidance"]);
+
+        let update = SourceUpdate {
+            display_name: Some("Q3 earnings call".into()),
+            locator: Some("https://example.invalid/q3-earnings".into()),
+            per_scan_limit: Some(5),
+            ..SourceUpdate::default()
+        };
+        assert!(store
+            .update_source(
+                &source.source_id,
+                &update,
+                "2026-11-17T10:00:00Z".parse().unwrap()
+            )
+            .unwrap());
+        let updated = store.source(&source.source_id).unwrap().unwrap();
+        assert_eq!(updated.display_name, "Q3 earnings call");
+        assert_eq!(updated.locator.as_deref(), Some("https://example.invalid/q3-earnings"));
+        assert_eq!(updated.per_scan_limit, 5);
+
+        assert!(store
+            .set_source_state(
+                &source.source_id,
+                SourceState::Paused,
+                "2026-11-17T11:00:00Z".parse().unwrap()
+            )
+            .unwrap());
+        assert!(store.sources(false).unwrap()[0].state == SourceState::Paused);
+        assert!(store.sources(true).unwrap().len() == 1);
+
+        assert!(store
+            .set_source_state(
+                &source.source_id,
+                SourceState::Removed,
+                "2026-11-17T12:00:00Z".parse().unwrap()
+            )
+            .unwrap());
+        assert!(store.sources(false).unwrap().is_empty());
+        assert_eq!(store.sources(true).unwrap()[0].state, SourceState::Removed);
+    }
+
+    #[test]
+    fn podcast_locator_correction_clears_conditional_fetch_state() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        store
+            .add_approved_subscription(&subscription("feed-a"))
+            .unwrap();
+
+        let registry = store.source(&SourceId::new("feed-a").unwrap()).unwrap().unwrap();
+        assert_eq!(registry.kind, SourceKind::Podcast);
+        assert_eq!(registry.state, SourceState::Active);
+
+        maybe_set_fetch_state(&mut store);
+        let corrected = store
+            .update_podcast_locator(
+                &SourceId::new("feed-a").unwrap(),
+                "https://example.invalid/feed.xml",
+                "Corrected show",
+                "2026-11-17T10:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        assert!(corrected);
+        let subscription = store
+            .subscription(&SourceId::new("feed-a").unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(subscription.feed_url, "https://example.invalid/feed.xml");
+        assert_eq!(subscription.show_name, "Corrected show");
+        assert!(subscription.etag.is_none());
+        assert!(subscription.next_poll_at.is_none());
+        assert!(subscription.last_error_code.is_none());
+        let registry = store.source(&SourceId::new("feed-a").unwrap()).unwrap().unwrap();
+        assert_eq!(registry.locator.as_deref(), Some("https://example.invalid/feed.xml"));
+        assert_eq!(registry.display_name, "Corrected show");
+    }
+
+    fn maybe_set_fetch_state(store: &mut Store) {
+        let subscription = store
+            .subscription(&SourceId::new("feed-a").unwrap())
+            .unwrap()
+            .unwrap();
+        store
+            .update_subscription_fetch_state(SubscriptionFetchStateUpdate {
+                source_id: &subscription.source_id,
+                etag: Some("\"etag-1\""),
+                last_modified: Some("Thu, 13 Nov 2026 10:00:00 GMT"),
+                checked_at: "2026-11-17T09:00:00Z".parse().unwrap(),
+                next_poll_at: "2026-11-17T15:00:00Z".parse().unwrap(),
+                last_error_code: Some("feed_unavailable"),
+                consecutive_failures: 2,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn deleting_a_source_is_refused_while_events_reference_it() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let source = narrative_source("filing-10k", SourceKind::Filing);
+        store.insert_source(&source).unwrap();
+        store
+            .import_local_event(
+                &LocalEventImport {
+                    source_id: source.source_id.clone(),
+                    source_display_name: source.display_name.clone(),
+                    source_native_id: Some("10k-q3".into()),
+                    canonical_url: source.locator.clone(),
+                    title: Some("10-K Q3".into()),
+                    content_text: "Risk factors unchanged.".into(),
+                    published_at: None,
+                    source_updated_at: None,
+                    rights_statement: "Public filing".into(),
+                    user_confirmed_rights: true,
+                },
+                "2026-11-17T09:30:00Z".parse().unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(store.delete_source(&source.source_id).unwrap(), 1);
+        assert!(store.source(&source.source_id).unwrap().is_some());
+
+        let empty = narrative_source("filing-8k", SourceKind::Filing);
+        store.insert_source(&empty).unwrap();
+        assert_eq!(store.delete_source(&empty.source_id).unwrap(), 0);
+        assert!(store.source(&empty.source_id).unwrap().is_none());
     }
 }

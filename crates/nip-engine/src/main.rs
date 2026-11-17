@@ -11,15 +11,18 @@ use std::{
 use chrono::{DateTime, Utc};
 use nip_domain::{
     EtfMapping, EventRecord, EventSearchQuery, LocalEventImport, PodcastSubscriptionState, SourceId,
+    SourceKind, SourceState, SourceUpdate,
 };
 use nip_engine::{
-    asr::DeterministicFakeAsrProvider,
+    asr::{AsrError, AsrProvider, ComfyUiAsrProvider, DeterministicFakeAsrProvider},
     podcast::{HttpAudioClient, HttpFeedClient},
+    podcast_asr_request,
     semantic::{
         DeterministicEmbeddingProvider, HttpEmbeddingProvider, QdrantIndex, DEFAULT_DIMENSIONS,
         DEFAULT_MODEL_ID, DEFAULT_MODEL_REVISION,
     },
-    DeterministicFakeClaimProvider, NipConfig, NipService, PodcastSubscriptionRequest,
+    DeterministicFakeClaimProvider, NipConfig, NipError, NipService, PodcastSubscriptionRequest,
+    SourceDraft,
 };
 use nip_store::Store;
 use rmcp::{
@@ -270,6 +273,37 @@ impl NipMcp {
     }
 
     #[tool(
+        description = "List one stable page of discovered podcast episodes across sources, newest-first by default, with optional source and title filters."
+    )]
+    fn list_episode_page(
+        &self,
+        Parameters(params): Parameters<EpisodePageParams>,
+    ) -> CallToolResult {
+        let source_id = match params.source_id.map(SourceId::new).transpose() {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error.message),
+        };
+        match self
+            .service
+            .lock()
+            .map_err(|_| "NIP service lock failed".to_owned())
+            .and_then(|service| {
+                service
+                    .podcast_episode_page(
+                        source_id.as_ref(),
+                        params.title_contains.as_deref(),
+                        params.sort.as_deref(),
+                        params.limit,
+                        params.offset,
+                    )
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok(page) => structured_success(serde_json::to_value(page).unwrap()),
+            Err(error) => structured_error("storage_unavailable", error),
+        }
+    }
+
+    #[tool(
         description = "Pause, resume, or remove a podcast subscription after explicit user action."
     )]
     fn set_podcast_subscription_state(
@@ -306,62 +340,249 @@ impl NipMcp {
     }
 
     #[tool(
-        description = "In NIP_TEST_MODE only, fetch a loopback fixture enclosure and transcribe it with the deterministic local provider."
+        description = "List every registered source (podcast, company meeting, filing, reddit, x, web, local document, other) with rights, topics, lifecycle state, scan caps and retained event count."
+    )]
+    fn list_sources(&self, Parameters(params): Parameters<ListSourcesParams>) -> CallToolResult {
+        match self
+            .service
+            .lock()
+            .map_err(|_| "NIP service lock failed".to_owned())
+            .and_then(|service| {
+                service
+                    .sources(params.include_removed.unwrap_or(false))
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok(sources) => structured_success(serde_json::to_value(sources).unwrap()),
+            Err(error) => structured_error("storage_unavailable", error),
+        }
+    }
+
+    #[tool(
+        description = "Register a source of any kind after explicit rights confirmation. A podcast additionally creates its RSS subscription and performs the initial sync."
+    )]
+    fn create_source(&self, Parameters(params): Parameters<CreateSourceParams>) -> CallToolResult {
+        if params.user_confirmed_rights != Some(true) {
+            return structured_error(
+                "rights_confirmation_required",
+                "pass user_confirmed_rights=true only after the access and retention rights are reviewed",
+            );
+        }
+        let source_id = match SourceId::new(params.source_id) {
+            Ok(source) => source,
+            Err(error) => return structured_error("invalid_request", error.message),
+        };
+        let kind = match SourceKind::parse(&params.kind) {
+            Some(kind) => kind,
+            None => {
+                return structured_error(
+                    "invalid_request",
+                    "kind must be one of podcast, company_meeting, filing, reddit, x, web, local_document, other",
+                )
+            }
+        };
+        let draft = SourceDraft {
+            source_id,
+            kind,
+            display_name: params.display_name,
+            locator: params.locator,
+            rights_statement: params.rights_statement,
+            topics: params.topics.unwrap_or_default(),
+            poll_interval_minutes: params.poll_interval_minutes,
+            per_scan_limit: params.per_scan_limit,
+            notes: params.notes,
+        };
+        let client = HttpFeedClient::default();
+        match self.service.lock() {
+            Ok(mut service) => {
+                match service.create_source(draft, &client, Utc::now()) {
+                    Ok(source) => structured_success(serde_json::to_value(source).unwrap()),
+                    Err(error) => structured_error("create_failed", error.to_string()),
+                }
+            }
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Correct or change a source: display name, locator or podcast feed URL, rights statement, topics and scan caps. A podcast URL correction resets ETag/backoff; pass sync=true to refresh immediately."
+    )]
+    fn update_source(&self, Parameters(params): Parameters<UpdateSourceParams>) -> CallToolResult {
+        let source_id = match SourceId::new(params.source_id) {
+            Ok(source) => source,
+            Err(error) => return structured_error("invalid_request", error.message),
+        };
+        let update = SourceUpdate {
+            display_name: params.display_name,
+            locator: params.locator,
+            rights_statement: params.rights_statement,
+            topics: params.topics,
+            poll_interval_minutes: params.poll_interval_minutes,
+            per_scan_limit: params.per_scan_limit,
+            notes: params.notes,
+        };
+        let client = HttpFeedClient::default();
+        match self.service.lock() {
+            Ok(mut service) => match service.update_source(
+                &source_id,
+                &update,
+                &client,
+                params.sync.unwrap_or(false),
+                Utc::now(),
+            ) {
+                Ok(source) => structured_success(serde_json::to_value(source).unwrap()),
+                Err(error) => structured_error("update_failed", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Activate, pause, resume or remove any source kind. Paused sources are skipped by refresh; removed sources are retained for audit."
+    )]
+    fn set_source_state(&self, Parameters(params): Parameters<SetStateParams>) -> CallToolResult {
+        let source_id = match SourceId::new(params.source_id) {
+            Ok(source) => source,
+            Err(error) => return structured_error("invalid_request", error.message),
+        };
+        let state = match SourceState::parse(&params.state) {
+            Some(state) => state,
+            None => {
+                return structured_error(
+                    "invalid_request",
+                    "state must be active, paused, or removed",
+                )
+            }
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.set_source_state(&source_id, state, Utc::now()) {
+                Ok(source) => structured_success(serde_json::to_value(source).unwrap()),
+                Err(error) => structured_error("operation_failed", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Permanently delete a source that owns no retained events, including its podcast episode metadata. A source with events must be marked removed instead."
+    )]
+    fn delete_source(&self, Parameters(params): Parameters<DeleteSourceParams>) -> CallToolResult {
+        if params.user_confirmed != Some(true) {
+            return structured_error(
+                "confirmation_required",
+                "pass user_confirmed=true to delete a source",
+            );
+        }
+        let source_id = match SourceId::new(params.source_id) {
+            Ok(source) => source,
+            Err(error) => return structured_error("invalid_request", error.message),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.delete_source(&source_id) {
+                Ok(()) => structured_success(json!({"source_id": source_id, "deleted": true})),
+                Err(error) => structured_error("delete_failed", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Download an approved episode enclosure and transcribe it with the configured local ASR provider (NIP_COMFYUI_URL), or the deterministic fixture in NIP_TEST_MODE. No remote ASR fallback."
     )]
     fn transcribe_podcast_episode(
         &self,
         Parameters(params): Parameters<EpisodeParams>,
     ) -> CallToolResult {
-        match self.service.lock() {
-            Ok(mut service) => {
-                if !service.config().test_mode() {
-                    return structured_error(
-                        "unsupported",
-                        "fixture transcription is available only in NIP_TEST_MODE",
-                    );
+        let (episode, test_mode, comfyui_url, staging_root) = {
+            let service = match self.service.lock() {
+                Ok(service) => service,
+                Err(_) => return structured_error("internal", "NIP service lock failed"),
+            };
+            let source_id = match SourceId::new(params.source_id) {
+                Ok(source) => source,
+                Err(error) => return structured_error("invalid_request", error.message),
+            };
+            let episodes = match service.podcast_episodes(&source_id) {
+                Ok(episodes) => episodes,
+                Err(error) => {
+                    return structured_error("storage_unavailable", error.to_string())
                 }
-                let source_id = match SourceId::new(params.source_id) {
-                    Ok(source) => source,
-                    Err(error) => return structured_error("invalid_request", error.message),
-                };
-                let episodes = match service.podcast_episodes(&source_id) {
-                    Ok(episodes) => episodes,
-                    Err(error) => {
-                        return structured_error("storage_unavailable", error.to_string())
-                    }
-                };
-                let episode = episodes.into_iter().find(|episode| {
-                    params
-                        .source_native_id
+            };
+            let episode = episodes.into_iter().find(|episode| {
+                params
+                    .source_native_id
+                    .as_deref()
+                    .is_none_or(|id| episode.source_native_id.as_deref() == Some(id))
+                    && params
+                        .canonical_url
                         .as_deref()
-                        .is_none_or(|id| episode.source_native_id.as_deref() == Some(id))
-                        && params
-                            .canonical_url
-                            .as_deref()
-                            .is_none_or(|url| episode.canonical_url.as_deref() == Some(url))
-                });
-                let Some(episode) = episode else {
-                    return structured_error("not_found", "podcast episode was not found");
-                };
-                let client = HttpAudioClient::for_test();
-                let provider = match DeterministicFakeAsrProvider::new(
-                    "The fixture research team expects policy to remain restrictive until inflation cools.",
-                    Some("en".into()),
-                ) {
-                    Ok(provider) => provider,
-                    Err(error) => return structured_error("internal", error.to_string()),
-                };
-                match service.transcribe_podcast_episode_from_enclosure(
-                    &episode,
-                    &client,
-                    &provider,
-                    Utc::now(),
-                ) {
-                    Ok(transcript) => structured_success(serde_json::to_value(transcript).unwrap()),
-                    Err(error) => structured_error("transcription_failed", error.to_string()),
+                        .is_none_or(|url| episode.canonical_url.as_deref() == Some(url))
+            });
+            let Some(episode) = episode else {
+                return structured_error("not_found", "podcast episode was not found");
+            };
+            let test_mode = service.config().test_mode();
+            let comfyui_url = service
+                .config()
+                .comfyui_url()
+                .map(|url| url.as_str().to_owned());
+            let staging_root = service.config().asr_staging_root();
+            (episode, test_mode, comfyui_url, staging_root)
+        };
+
+        if test_mode {
+            let mut service = match self.service.lock() {
+                Ok(service) => service,
+                Err(_) => return structured_error("internal", "NIP service lock failed"),
+            };
+            let client = HttpAudioClient::for_test();
+            let provider = match DeterministicFakeAsrProvider::new(
+                "The fixture research team expects policy to remain restrictive until inflation cools.",
+                Some("en".into()),
+            ) {
+                Ok(provider) => provider,
+                Err(error) => return structured_error("internal", error.to_string()),
+            };
+            return match service.transcribe_podcast_episode_from_enclosure(
+                &episode,
+                &client,
+                &provider,
+                Utc::now(),
+            ) {
+                Ok(transcript) => structured_success(serde_json::to_value(transcript).unwrap()),
+                Err(error) => transcription_error(error),
+            };
+        }
+
+        let Some(comfyui_url) = comfyui_url else {
+            return structured_error(
+                "transcription_unavailable",
+                "local ASR is not configured; set NIP_COMFYUI_URL to a loopback ComfyUI server running the Qwen3-ASR workflow",
+            );
+        };
+        let request = match podcast_asr_request(&episode, &HttpAudioClient::default()) {
+            Ok(request) => request,
+            Err(error) => return transcription_error(error),
+        };
+        let provider = match ComfyUiAsrProvider::new(&comfyui_url, staging_root) {
+            Ok(provider) => provider,
+            Err(error) => return structured_error("transcription_unavailable", error.to_string()),
+        };
+        let result = match provider.transcribe(&request) {
+            Ok(result) => result,
+            Err(error) => {
+                if let Ok(mut service) = self.service.lock() {
+                    let _ = service.record_transcription_failure(&episode, error.clone());
                 }
+                return asr_error(error);
             }
-            Err(_) => structured_error("internal", "NIP service lock failed"),
+        };
+        let mut service = match self.service.lock() {
+            Ok(service) => service,
+            Err(_) => return structured_error("internal", "NIP service lock failed"),
+        };
+        match service.commit_podcast_transcript(&episode, result, Utc::now()) {
+            Ok(transcript) => structured_success(serde_json::to_value(transcript).unwrap()),
+            Err(error) => transcription_error(error),
         }
     }
 
@@ -769,6 +990,52 @@ struct SetStateParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct ListSourcesParams {
+    /// Include soft-removed sources. Defaults to false.
+    include_removed: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CreateSourceParams {
+    source_id: String,
+    /// podcast | company_meeting | filing | reddit | x | web | local_document | other
+    kind: String,
+    display_name: String,
+    /// RSS feed URL, source URL or local reference. Required except for local_document/other.
+    locator: Option<String>,
+    rights_statement: String,
+    user_confirmed_rights: Option<bool>,
+    topics: Option<Vec<String>>,
+    poll_interval_minutes: Option<u32>,
+    per_scan_limit: Option<u32>,
+    notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct UpdateSourceParams {
+    source_id: String,
+    display_name: Option<String>,
+    locator: Option<String>,
+    rights_statement: Option<String>,
+    topics: Option<Vec<String>>,
+    poll_interval_minutes: Option<u32>,
+    per_scan_limit: Option<u32>,
+    notes: Option<String>,
+    /// Refresh a podcast immediately after the correction.
+    sync: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DeleteSourceParams {
+    source_id: String,
+    user_confirmed: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SubscribeParams {
     source_id: String,
     feed_url: String,
@@ -783,6 +1050,21 @@ struct EpisodeParams {
     source_id: String,
     source_native_id: Option<String>,
     canonical_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EpisodePageParams {
+    /// Restrict to one source. Omit for all podcast sources.
+    source_id: Option<String>,
+    /// Case-insensitive substring over the episode title.
+    title_contains: Option<String>,
+    /// published_desc (default) or title_asc.
+    sort: Option<String>,
+    /// Page size, clamped to 1–200. Defaults to 50.
+    limit: Option<u32>,
+    /// Zero-based row offset. Defaults to 0.
+    offset: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -873,6 +1155,44 @@ fn structured_error(code: impl Into<String>, message: impl Into<String>) -> Call
     CallToolResult::structured_error(json!({"code": code.into(), "message": message.into()}))
 }
 
+fn transcription_error(error: NipError) -> CallToolResult {
+    match error {
+        NipError::AudioUnavailable => structured_error(
+            "audio_unavailable",
+            "the podcast audio enclosure could not be downloaded",
+        ),
+        NipError::UnsupportedAudio => structured_error(
+            "unsupported_audio",
+            "the episode has no supported audio enclosure",
+        ),
+        NipError::TranscriptionUnavailable => structured_error(
+            "transcription_unavailable",
+            "the local ASR provider is unavailable or timed out; no remote fallback was attempted",
+        ),
+        NipError::TranscriptionFailed => structured_error(
+            "transcription_failed",
+            "the local ASR provider returned an empty or malformed transcript",
+        ),
+        NipError::SubscriptionNotFound => {
+            structured_error("not_found", "podcast subscription was not found")
+        }
+        other => structured_error("transcription_failed", other.to_string()),
+    }
+}
+
+fn asr_error(error: AsrError) -> CallToolResult {
+    match error {
+        AsrError::Unavailable | AsrError::Timeout | AsrError::Cancelled => structured_error(
+            "transcription_unavailable",
+            "the local ASR provider is unavailable or timed out; no remote fallback was attempted",
+        ),
+        AsrError::InvalidInput | AsrError::MalformedOutput => structured_error(
+            "transcription_failed",
+            "the local ASR provider rejected the audio or returned a malformed transcript",
+        ),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Transport {
     Stdio,
@@ -960,8 +1280,25 @@ async fn run() -> Result<(), String> {
         Store::restore_parquet_snapshot(&snapshot, config.database_path())
             .map_err(|error| format!("NIP snapshot restore failed: {error}"))?;
     }
-    let service =
-        NipService::open(config).map_err(|_| "NIP service initialization failed".to_owned())?;
+    let service = match NipService::open(config) {
+        Ok(service) => service,
+        Err(error) => {
+            // Startup diagnostics stay on stderr: the MCP client receives only
+            // the safe summary, while the desktop log names the real cause.
+            eprintln!(
+                "{}",
+                json!({
+                    "code": "startup_failed",
+                    "message": "NIP service initialization failed",
+                    "detail": match std::error::Error::source(&error) {
+                        Some(source) => format!("{error}: {source}"),
+                        None => error.to_string(),
+                    },
+                })
+            );
+            return Err("NIP service initialization failed".to_owned());
+        }
+    };
     let server = NipMcp {
         service: Arc::new(Mutex::new(service)),
     };
