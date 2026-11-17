@@ -1,3 +1,4 @@
+use std::net::{IpAddr, ToSocketAddrs};
 use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -10,6 +11,7 @@ use url::Url;
 
 pub const PRODUCTION_POLL_INTERVAL: TimeDelta = TimeDelta::hours(6);
 const MAX_FEED_BYTES: u64 = 4 * 1024 * 1024;
+pub const MAX_AUDIO_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_BACKOFF: TimeDelta = TimeDelta::hours(6);
 const BASE_BACKOFF: TimeDelta = TimeDelta::minutes(1);
 
@@ -41,6 +43,89 @@ pub enum FeedClientError {
 /// in-process fixtures without public network access.
 pub trait FeedClient {
     fn fetch(&self, request: &FeedRequest) -> Result<FeedResponse, FeedClientError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioResponse {
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub body: Vec<u8>,
+}
+
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum AudioClientError {
+    #[error("podcast enclosure request failed")]
+    Request,
+    #[error("podcast enclosure response was invalid or too large")]
+    InvalidBody,
+}
+
+pub trait AudioClient {
+    fn fetch(&self, url: &str) -> Result<AudioResponse, AudioClientError>;
+}
+
+pub struct HttpAudioClient {
+    agent: Agent,
+    allow_loopback: bool,
+}
+
+impl Default for HttpAudioClient {
+    fn default() -> Self {
+        Self::new(false)
+    }
+}
+
+impl HttpAudioClient {
+    fn new(allow_loopback: bool) -> Self {
+        let config = Agent::config_builder()
+            .http_status_as_error(false)
+            .timeout_global(Some(Duration::from_secs(60)))
+            .max_redirects(0)
+            .build();
+        Self {
+            agent: config.into(),
+            allow_loopback,
+        }
+    }
+
+    /// Test-only client for the loopback synthetic enclosure fixture. The
+    /// production client never permits loopback, private, or link-local hosts.
+    pub fn for_test() -> Self {
+        Self::new(true)
+    }
+}
+
+impl AudioClient for HttpAudioClient {
+    fn fetch(&self, value: &str) -> Result<AudioResponse, AudioClientError> {
+        let url = validate_audio_url(value, self.allow_loopback)
+            .map_err(|_| AudioClientError::Request)?;
+        let mut response = self
+            .agent
+            .get(url.as_str())
+            .call()
+            .map_err(|_| AudioClientError::Request)?;
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let body = if status == 200 {
+            response
+                .body_mut()
+                .with_config()
+                .limit(MAX_AUDIO_BYTES)
+                .read_to_vec()
+                .map_err(|_| AudioClientError::InvalidBody)?
+        } else {
+            Vec::new()
+        };
+        Ok(AudioResponse {
+            status,
+            content_type,
+            body,
+        })
+    }
 }
 
 pub struct HttpFeedClient {
@@ -112,6 +197,53 @@ pub enum FeedValidationError {
     InvalidUrl,
 }
 
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum AudioUrlError {
+    #[error("audio URL must resolve to a public HTTP or HTTPS destination")]
+    Invalid,
+}
+
+fn validate_audio_url(value: &str, allow_loopback: bool) -> Result<Url, AudioUrlError> {
+    let url = Url::parse(value).map_err(|_| AudioUrlError::Invalid)?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(AudioUrlError::Invalid);
+    }
+    let host = url.host_str().ok_or(AudioUrlError::Invalid)?;
+    let port = url.port_or_known_default().ok_or(AudioUrlError::Invalid)?;
+    let addresses = (host, port)
+        .to_socket_addrs()
+        .map_err(|_| AudioUrlError::Invalid)?;
+    if addresses.into_iter().any(|address| {
+        let ip = address.ip();
+        if allow_loopback {
+            !(ip.is_loopback() || is_public_ip(ip))
+        } else {
+            !is_public_ip(ip)
+        }
+    }) {
+        return Err(AudioUrlError::Invalid);
+    }
+    Ok(url)
+}
+
+fn is_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            !ip.is_private() && !ip.is_loopback() && !ip.is_link_local() && !ip.is_unspecified()
+        }
+        IpAddr::V6(ip) => {
+            !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !ip.is_unique_local()
+                && !ip.is_unicast_link_local()
+        }
+    }
+}
+
 pub fn validate_feed_url(value: &str) -> Result<Url, FeedValidationError> {
     let mut url = Url::parse(value).map_err(|_| FeedValidationError::InvalidUrl)?;
     if !matches!(url.scheme(), "http" | "https")
@@ -149,7 +281,7 @@ struct RawEpisode {
 }
 
 /// Parse the RSS metadata required for source-linked episode discovery. Audio
-/// enclosures are recorded but never downloaded by this discovery-only slice.
+/// enclosures are recorded; bounded retrieval is a separate service operation.
 pub fn parse_rss_feed(
     xml: &str,
     feed_url: &Url,

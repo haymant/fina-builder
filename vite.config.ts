@@ -76,6 +76,7 @@ export default defineConfig({
       '/riga': { target: process.env.VITE_RIGA_UPSTREAM ?? 'http://127.0.0.1:8788', changeOrigin: true, rewrite: (path) => path.replace(/^\/riga/, '') },
       '/tac': { target: process.env.VITE_TAC_UPSTREAM ?? 'http://127.0.0.1:8790', changeOrigin: true, rewrite: (path) => path.replace(/^\/tac/, '') },
       '/trade-repo': { target: process.env.VITE_TRADE_REPO_UPSTREAM ?? 'http://127.0.0.1:8792', changeOrigin: true, rewrite: (path) => path.replace(/^\/trade-repo/, '') },
+      '/nip': { target: process.env.VITE_NIP_UPSTREAM ?? 'http://127.0.0.1:8794', changeOrigin: true, rewrite: (path) => path.replace(/^\/nip/, '') },
       '/ws': { target: 'ws://127.0.0.1:8787', ws: true },
       '/health': { target: 'http://127.0.0.1:8787' },
       '/provider': { target: 'http://127.0.0.1:8787' },

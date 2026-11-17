@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
+const nipEnabled = process.env.PLAYWRIGHT_NIP === 'on'
 
 export default defineConfig({
   testDir: './playwright',
@@ -48,5 +49,21 @@ export default defineConfig({
         TRADE_REPO_HTTP_PORT: '8792',
       },
     },
+    ...(nipEnabled
+      ? [
+          {
+            command: 'node scripts/nip-fixture-server.mjs',
+            url: 'http://127.0.0.1:8795/health',
+            reuseExistingServer: false,
+            timeout: 60_000,
+          },
+          {
+            command: 'node scripts/start-nip-e2e.mjs',
+            url: 'http://127.0.0.1:8794/health',
+            reuseExistingServer: false,
+            timeout: Number(process.env.PLAYWRIGHT_NIP_STARTUP_TIMEOUT ?? 600_000),
+          },
+        ]
+      : []),
   ],
 })

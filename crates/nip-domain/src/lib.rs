@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 pub const API_VERSION: u16 = 1;
 pub const DOMAIN_SCHEMA_VERSION: u32 = 1;
@@ -141,6 +142,131 @@ pub struct EventRecord {
     pub revision_of: Option<EventId>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalEventImport {
+    pub source_id: SourceId,
+    pub source_display_name: String,
+    pub source_native_id: Option<String>,
+    pub canonical_url: Option<String>,
+    pub title: Option<String>,
+    pub content_text: String,
+    pub published_at: Option<DateTime<Utc>>,
+    pub source_updated_at: Option<DateTime<Utc>>,
+    pub rights_statement: String,
+    pub user_confirmed_rights: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventSearchQuery {
+    pub text: Option<String>,
+    pub source_id: Option<SourceId>,
+    pub as_of: Option<DateTime<Utc>>,
+    pub cursor: Option<String>,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventSearchPage {
+    pub events: Vec<EventRecord>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NarrativeSignal {
+    pub narrative_id: String,
+    pub label: String,
+    pub current_week_start: DateTime<Utc>,
+    pub current_week_end: DateTime<Utc>,
+    pub prior_week_start: DateTime<Utc>,
+    pub prior_week_end: DateTime<Utc>,
+    pub current_count: u32,
+    pub prior_count: u32,
+    pub mentions_per_day: f64,
+    pub prior_mentions_per_day: f64,
+    pub delta_mentions_per_day: f64,
+    pub percent_change: Option<f64>,
+    pub distinct_source_categories: u32,
+    pub category_counts: BTreeMap<String, u32>,
+    pub persistence_complete_weeks: u32,
+    pub first_published_at: Option<DateTime<Utc>>,
+    pub first_ingested_at: Option<DateTime<Utc>>,
+    pub evidence_event_ids: Vec<String>,
+    pub coverage: String,
+    pub data_quality_flags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NarrativeSignalSnapshot {
+    pub formula_version: String,
+    pub source_category_taxonomy_version: String,
+    pub derivation_run_id: String,
+    pub as_of: DateTime<Utc>,
+    pub current_week_start: DateTime<Utc>,
+    pub current_week_end: DateTime<Utc>,
+    pub coverage: String,
+    pub signals: Vec<NarrativeSignal>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EtfMapping {
+    pub mapping_id: String,
+    pub narrative_id: String,
+    pub ticker: String,
+    pub rationale: String,
+    pub evidence_event_ids: Vec<String>,
+    pub author: String,
+    pub reviewer: Option<String>,
+    pub version: u32,
+    pub effective_from: DateTime<Utc>,
+    pub effective_to: Option<DateTime<Utc>>,
+    pub known_at: DateTime<Utc>,
+    pub review_status: String,
+    pub ticker_status: String,
+    pub market_data_coverage: String,
+    pub mapping_validity: String,
+    pub supersedes_mapping_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EditorialCandidate {
+    pub candidate_id: String,
+    pub title_angle: String,
+    pub narrative_ids: Vec<String>,
+    pub claim_ids: Vec<String>,
+    pub evidence_event_ids: Vec<String>,
+    pub rank: u32,
+    pub component_values: BTreeMap<String, f64>,
+    pub derivation_run_id: String,
+    pub review_status: String,
+    pub review_reason: Option<String>,
+    pub reviewer: Option<String>,
+    pub reviewed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimEvidence {
+    pub event_id: EventId,
+    pub quote: Option<String>,
+    pub start_offset: Option<u32>,
+    pub end_offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimRecord {
+    pub claim_id: String,
+    pub claim_text: String,
+    pub speaker_or_author: Option<String>,
+    pub confidence_millis: u16,
+    pub extraction_run_id: String,
+    pub provider: String,
+    pub model: String,
+    pub prompt_version: String,
+    pub extracted_at: DateTime<Utc>,
+    pub evidence: Vec<ClaimEvidence>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IngestionRunStatus {
@@ -212,6 +338,20 @@ pub struct PodcastEpisode {
     pub state: PodcastEpisodeState,
 }
 
+/// A validated transcript is stored separately from RSS metadata and is only
+/// created after an ASR provider returns a non-empty result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PodcastTranscript {
+    pub source_id: SourceId,
+    pub source_native_id: Option<String>,
+    pub canonical_url: Option<String>,
+    pub transcript_text: String,
+    pub content_hash: String,
+    pub detected_language: Option<String>,
+    pub provenance_json: String,
+    pub transcribed_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PodcastRefreshReport {
     pub source_id: SourceId,
@@ -252,6 +392,106 @@ pub struct CapabilitiesResponse {
     pub api_version: u16,
     pub schema_version: u32,
     pub features: FeatureCapabilities,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmbeddingIndexManifest {
+    pub index_id: String,
+    pub model_id: String,
+    pub model_revision: String,
+    pub dimensions: u32,
+    pub chunking_version: String,
+    pub collection_name: String,
+    pub status: String,
+    pub event_count: u32,
+    pub created_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SemanticSearchResult {
+    pub event: EventRecord,
+    pub score: f32,
+    pub index_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NarrativeClusterMember {
+    pub event_id: EventId,
+    pub similarity_millis: u16,
+    pub rank: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NarrativeCluster {
+    pub cluster_id: String,
+    pub derivation_run_id: String,
+    pub label: String,
+    pub algorithm_version: String,
+    pub member_count: u32,
+    pub created_at: DateTime<Utc>,
+    pub members: Vec<NarrativeClusterMember>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NarrativeGraphNode {
+    pub node_id: String,
+    pub node_type: String,
+    pub label: String,
+    pub evidence_event_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NarrativeGraphEdge {
+    pub edge_id: String,
+    pub from_node_id: String,
+    pub to_node_id: String,
+    pub edge_type: String,
+    pub evidence_event_ids: Vec<String>,
+    pub confidence_millis: u16,
+    pub derivation_run_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NarrativeGraph {
+    pub graph_id: String,
+    pub derivation_run_id: String,
+    pub algorithm_version: String,
+    pub created_at: DateTime<Utc>,
+    pub nodes: Vec<NarrativeGraphNode>,
+    pub edges: Vec<NarrativeGraphEdge>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceStatus {
+    pub observed_at: DateTime<Utc>,
+    pub database_path: String,
+    pub database_bytes: u64,
+    pub event_count: u32,
+    pub claim_count: u32,
+    pub extraction_run_count: u32,
+    pub cluster_count: u32,
+    pub graph_edge_count: u32,
+    pub scheduler_interval_seconds: u64,
+    pub scheduler_state: String,
+    pub semantic_index_state: String,
+    pub semantic_model: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtractionStatus {
+    pub observed_at: DateTime<Utc>,
+    pub state: String,
+    pub claim_count: u32,
+    pub extraction_run_count: u32,
+    pub latest_run_id: Option<String>,
+    pub latest_provider: Option<String>,
+    pub latest_model: Option<String>,
+    pub latest_prompt_version: Option<String>,
+    pub latest_extracted_at: Option<DateTime<Utc>>,
+    pub evidence_linked_claim_count: u32,
+    pub warnings: Vec<String>,
 }
 
 #[cfg(test)]

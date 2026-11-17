@@ -1,7 +1,7 @@
 import { Command as Cmd } from 'cmdk'
 import {
   BookOpen, Columns3, Copy, Database, FilePlus2, FileUp, HelpCircle, History, Keyboard, LayoutGrid, Layers, ArrowLeftRight,
-  MessageSquare, Moon, Plus, Search, Sun, Trash2, BookOpenCheck, Activity, CalendarClock,
+  MessageSquare, Moon, Plus, Search, Sun, Trash2, BookOpenCheck, Activity, CalendarClock, BrainCircuit, ShieldCheck,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
@@ -43,12 +43,17 @@ export function useMenuCommands(p: AppMenuBarProps): MenuCommand[] {
       run: () => p.onNavigate({ kind: 'dashboard', dashboardId: d.id }),
     }))
     const trades = TRADE_VIEWS.map((v) => ({ id: `trades:${v.id}`, group: 'Trades', label: `Trade Repository: ${v.label}`, icon: TRADE_ICONS[v.id], accel: v.accel, keywords: 'trade repository', run: () => p.onNavigate({ kind: 'trades', view: v.id }) }))
+    const narrative = [
+      { id: 'narrative:overview', group: 'Narrative', label: 'Narrative Intelligence', icon: BrainCircuit, keywords: 'events evidence claims', run: () => p.onNavigate({ kind: 'narrative', view: 'overview' as const }) },
+      { id: 'narrative:claims', group: 'Narrative', label: 'Claim Explorer', icon: ShieldCheck, keywords: 'claims evidence provenance', run: () => p.onNavigate({ kind: 'narrative', view: 'claims' as const }) },
+    ]
     return [
       { id: 'file:new-dashboard', group: 'File', label: 'New dashboard from template…', icon: Plus, run: p.onNewDashboard },
       { id: 'file:duplicate', group: 'File', label: 'Duplicate dashboard', icon: Copy, run: p.onDuplicateDashboard },
       { id: 'file:delete', group: 'File', label: 'Delete dashboard…', icon: Trash2, run: p.onDeleteDashboard },
       ...dash,
       ...trades,
+      ...narrative,
       { id: 'trades:new', group: 'Trades', label: 'New trade…', icon: Plus, accel: 'Alt+N', run: p.onNewTrade },
       { id: 'tools:add-tile', group: 'Tools', label: 'Add tile…', icon: Columns3, run: p.onAddTile },
       { id: 'tools:chat', group: 'Tools', label: 'Chat (RIGA assistant)', icon: MessageSquare, accel: 'Alt+C', run: p.onChat },
@@ -89,7 +94,11 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [commands])
 
-  const where = loc.kind === 'dashboard' ? ['Dashboards', props.dashboards.find((d) => d.id === loc.dashboardId)?.name ?? '—'] : ['Trade Repository', TRADE_VIEWS.find((v) => v.id === loc.view)!.label]
+  const where = loc.kind === 'dashboard'
+    ? ['Dashboards', props.dashboards.find((d) => d.id === loc.dashboardId)?.name ?? '—']
+    : loc.kind === 'trades'
+      ? ['Trade Repository', TRADE_VIEWS.find((v) => v.id === loc.view)!.label]
+      : ['Narrative Intelligence', loc.view === 'claims' ? 'Claim Explorer' : 'Event review']
 
   return (
     <div className="app-menubar" data-testid="app-menubar">
@@ -137,6 +146,10 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
           </MenubarContent>
         </MenubarMenu>
         <MenubarMenu>
+          <MenubarTrigger data-testid="menu-narrative">Narrative</MenubarTrigger>
+          <MenubarContent>{by('Narrative').map((c) => <Item key={c.id} cmd={c} />)}</MenubarContent>
+        </MenubarMenu>
+        <MenubarMenu>
           <MenubarTrigger data-testid="menu-tools">Tools</MenubarTrigger>
           <MenubarContent>{by('Tools').map((c) => <Item key={c.id} cmd={c} />)}</MenubarContent>
         </MenubarMenu>
@@ -149,7 +162,7 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
         </MenubarMenu>
       </Menubar>
       <nav className="app-breadcrumb" aria-label="Location" data-testid="breadcrumb">
-        {loc.kind === 'trades' ? <Database size={12} /> : <LayoutGrid size={12} />}
+        {loc.kind === 'trades' ? <Database size={12} /> : loc.kind === 'narrative' ? <BrainCircuit size={12} /> : <LayoutGrid size={12} />}
         <span>{where[0]}</span><span className="text-muted">/</span><b>{where[1]}</b>
       </nav>
       <button type="button" className="palette-button" data-testid="open-palette" onClick={() => setPalette(true)}>
@@ -162,7 +175,7 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
             <div className="palette-input"><Search size={15} /><Cmd.Input autoFocus placeholder="Type a dashboard, view or command…" data-testid="palette-input" /></div>
             <Cmd.List className="palette-list">
               <Cmd.Empty className="px-3 py-6 text-center text-xs text-muted">No matches.</Cmd.Empty>
-              {['Dashboards', 'Trades', 'Tools', 'View', 'File', 'Help'].map((g) => (
+              {['Dashboards', 'Trades', 'Narrative', 'Tools', 'View', 'File', 'Help'].map((g) => (
                 <Cmd.Group key={g} heading={g} className="palette-group">
                   {by(g).map((c) => {
                     const Icon = c.icon

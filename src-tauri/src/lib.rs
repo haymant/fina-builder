@@ -55,6 +55,7 @@ pub fn run() {
             // MCP registry (visual atlas + vendored engines).
             mcp_commands::get_riga_mcp_path,
             mcp_commands::get_tac_engine_path,
+            mcp_commands::get_nip_engine_path,
             mcp_commands::riga_mcp_list_tools,
             mcp_commands::riga_mcp_call_tool,
             mcp_commands::riga_mcp_list_resources,
@@ -66,6 +67,9 @@ pub fn run() {
             mcp_commands::tac_mcp_list_tools,
             mcp_commands::tac_mcp_call_tool,
             mcp_commands::tac_mcp_reset,
+            mcp_commands::nip_mcp_list_tools,
+            mcp_commands::nip_mcp_call_tool,
+            mcp_commands::nip_mcp_reset,
             // RIGA agent (chat panel).
             riga_agent::kernel_health,
             riga_agent::riga_transport_connect,

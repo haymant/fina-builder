@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use crate::asr::LoopbackUrl;
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -24,6 +25,8 @@ pub enum ConfigError {
     DataDirectoryAliasesLake,
     #[error("the operating system application-data directory could not be resolved")]
     AppDataUnavailable,
+    #[error("NIP_COMFYUI_URL must be an HTTP(S) loopback URL without credentials")]
+    InvalidComfyUiUrl,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +34,7 @@ pub struct NipConfig {
     data_dir: PathBuf,
     lake_dir: PathBuf,
     test_mode: bool,
+    comfyui_url: Option<LoopbackUrl>,
 }
 
 impl NipConfig {
@@ -42,6 +46,7 @@ impl NipConfig {
             "NIP_LAKE_DIR",
             "TAC_LAKE_DIR",
             "NIP_TEST_MODE",
+            "NIP_COMFYUI_URL",
         ]
         .into_iter()
         .filter_map(|key| env::var(key).ok().map(|value| (key.to_owned(), value)))
@@ -69,6 +74,11 @@ impl NipConfig {
     ) -> Result<Self, ConfigError> {
         let repo_root = normalize_absolute(repo_root, Path::new("/"));
         let test_mode = parse_test_mode(values.get("NIP_TEST_MODE"))?;
+        let comfyui_url = values
+            .get("NIP_COMFYUI_URL")
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| LoopbackUrl::parse(value).map_err(|_| ConfigError::InvalidComfyUiUrl))
+            .transpose()?;
 
         let configured_data = configured_path(values, "NIP_DATA_DIR")?;
         if test_mode && configured_data.is_none() {
@@ -131,6 +141,7 @@ impl NipConfig {
             data_dir,
             lake_dir,
             test_mode,
+            comfyui_url,
         })
     }
 
@@ -148,6 +159,10 @@ impl NipConfig {
 
     pub fn test_mode(&self) -> bool {
         self.test_mode
+    }
+
+    pub fn comfyui_url(&self) -> Option<&LoopbackUrl> {
+        self.comfyui_url.as_ref()
     }
 }
 
@@ -380,6 +395,33 @@ mod tests {
         assert_eq!(
             NipConfig::resolve(&env(&[("NIP_TEST_MODE", "yes")]), root, None, true).unwrap_err(),
             ConfigError::InvalidTestMode
+        );
+    }
+
+    #[test]
+    fn validates_optional_loopback_comfyui_url_without_exposing_other_environment() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let config = NipConfig::resolve(
+            &env(&[("NIP_COMFYUI_URL", "http://127.0.0.1:8188")]),
+            root,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            config.comfyui_url().unwrap().as_str(),
+            "http://127.0.0.1:8188"
+        );
+        assert_eq!(
+            NipConfig::resolve(
+                &env(&[("NIP_COMFYUI_URL", "http://example.com:8188")]),
+                root,
+                None,
+                true,
+            )
+            .unwrap_err(),
+            ConfigError::InvalidComfyUiUrl
         );
     }
 }

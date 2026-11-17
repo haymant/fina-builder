@@ -1,10 +1,12 @@
 // App-level navigation model: the menu bar and the command palette are the primary way to
 // reach every dashboard and every trade repository view (tabs are for documents only).
 export type TradeView = 'blotter' | 'positions' | 'recon' | 'audit' | 'import' | 'fixings'
+export type NarrativeView = 'overview' | 'claims'
 
 export type Location =
   | { kind: 'dashboard'; dashboardId: string }
   | { kind: 'trades'; view: TradeView }
+  | { kind: 'narrative'; view: NarrativeView }
 
 export const TRADE_VIEWS: { id: TradeView; label: string; accel: string }[] = [
   { id: 'blotter', label: 'Blotter', accel: 'Alt+Shift+1' },

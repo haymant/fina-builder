@@ -22,6 +22,12 @@ export const TAG = {
     tradeGovernance: '@journey-trade-governance',
     tradeOperations: '@journey-trade-operations',
     tradeFixingCapture: '@journey-trade-fixing-capture',
+    narrativeReview: '@journey-narrative-review',
+    narrativeIngestion: '@journey-narrative-ingestion',
+    narrativeEvidenceReview: '@journey-narrative-evidence-review',
+    narrativeDiscovery: '@journey-narrative-discovery',
+    narrativeThemeMapping: '@journey-narrative-theme-mapping',
+    narrativeEditorialReview: '@journey-narrative-editorial-review',
   },
   feature: {
     workspace: '@feature-workspace',
@@ -50,6 +56,9 @@ export const TAG = {
     tradeImport: '@feature-trade-import',
     tradeFixings: '@feature-trade-fixings',
     fixingDueQueue: '@feature-fixing-due-queue',
+    narrative: '@feature-narrative-intelligence',
+    narrativeEvents: '@feature-narrative-events',
+    narrativeClaims: '@feature-narrative-claims',
     bitemporal: '@feature-bitemporal',
     entitlements: '@feature-entitlements',
     savedViews: '@feature-saved-views',
@@ -57,6 +66,7 @@ export const TAG = {
   dependency: {
     riga: '@requires-riga',
     tradeRepository: '@requires-trade-repository',
+    nip: '@requires-nip',
   },
   demo: {
     any: '@demo',
@@ -65,5 +75,6 @@ export const TAG = {
     pricerDashboards: '@demo-pricer-dashboards',
     tradeFixings: '@demo-trade-fixings',
     tradeRepository: '@demo-trade-repository',
+    narrativeResearch: '@demo-narrative-research',
   },
 } as const

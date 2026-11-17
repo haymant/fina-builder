@@ -1,0 +1,697 @@
+{
+  "corpus": [
+    {
+      "id": "jpm-rates-credit-2024",
+      "company": "JPMorgan Chase",
+      "topic": "rates-credit",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/19617/000001961725000270/jpm-20241231.htm",
+      "content": "JPMorganChase states that changes in interest rates and credit spreads can adversely affect earnings, liquidity, or capital. Higher interest rates can increase net interest income, but can also reduce loan originations, increase allowance for credit losses and net charge-offs, cause deposit outflows, create losses on available-for-sale securities, and raise funding costs. Variable-rate borrowers may reduce or stop payments, causing losses and higher servicing costs."
+    },
+    {
+      "id": "jpm-risk-models-2024",
+      "company": "JPMorgan Chase",
+      "topic": "risk-models",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/19617/000001961725000270/jpm-20241231.htm",
+      "content": "JPMorganChase uses models and estimations to measure, monitor, and control market, credit, capital, liquidity, and operational risks. Models rely on historical trends and assumptions; in market stress, previously uncorrelated indicators may become correlated and previously correlated indicators may become uncorrelated. Incorrect models or judgments could cause unexpected losses, reduce capital, and increase regulatory scrutiny."
+    },
+    {
+      "id": "jpm-capital-liquidity-2024",
+      "company": "JPMorgan Chase",
+      "topic": "capital-liquidity",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/19617/000001961725000270/jpm-20241231.htm",
+      "content": "JPMorganChase is subject to enhanced liquidity and overall risk management standards for systemically important financial institutions. The firm must maintain board oversight of risk management and serve as a source of financial strength for its depository institution subsidiaries."
+    },
+    {
+      "id": "msft-cloud-ai-investment-2024",
+      "company": "Microsoft",
+      "topic": "cloud-ai",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/789019/000095017024087843/msft-20240630.htm",
+      "content": "Microsoft continues to invest in high performance and sustainable computing to meet growing demand for cloud computing and AI infrastructure and datacenters. Azure offers hybrid consistency, developer productivity, data and AI capabilities, security, and compliance. Microsoft offers supercomputing power for AI at scale, custom AI accelerators, and an in-house central processing unit."
+    },
+    {
+      "id": "msft-cloud-margin-risk-2024",
+      "company": "Microsoft",
+      "topic": "cloud-margins",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/789019/000095017024087843/msft-20240630.htm",
+      "content": "Microsoft says its cloud and AI strategy incurs significant costs to build and maintain infrastructure. These costs will reduce operating margins. Success depends on bringing compelling cloud and AI products to market, maintaining reliability and security, and generating sufficient usage and revenue to support infrastructure and development investments."
+    },
+    {
+      "id": "msft-datacenter-supply-2024",
+      "company": "Microsoft",
+      "topic": "datacenter-supply",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/789019/000095017024087843/msft-20240630.htm",
+      "content": "Microsoft expects investments in cloud and AI infrastructure and devices to continue increasing operating costs. Datacenters depend on permitted land, predictable energy, networking supplies, servers, GPUs, and other components. Extended disruptions at qualified suppliers could affect the ability to manufacture devices on time to meet consumer demand."
+    },
+    {
+      "id": "nvda-demand-supply-2025",
+      "company": "NVIDIA",
+      "topic": "semiconductor-demand",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581025000023/nvda-20250126.htm",
+      "content": "NVIDIA has long manufacturing lead times and builds finished products and maintains inventory in advance of anticipated demand. Shortages and limited supply can extend lead times beyond twelve months. To secure supply and capacity, NVIDIA has paid premiums, provided deposits, and entered long-term supply agreements and capacity commitments."
+    },
+    {
+      "id": "nvda-inventory-mismatch-2025",
+      "company": "NVIDIA",
+      "topic": "inventory-mismatch",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581025000023/nvda-20250126.htm",
+      "content": "NVIDIA warns that inaccurate demand estimates or customer order changes can create mismatches between supply and demand. The mismatch can result in product shortages or excess inventory, significantly harm financial results, and recur. Component shortages in a complex data center buildout can have a broader revenue impact."
+    },
+    {
+      "id": "nvda-supply-chain-concentration-2025",
+      "company": "NVIDIA",
+      "topic": "supply-chain",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581025000023/nvda-20250126.htm",
+      "content": "NVIDIA uses a fabless and contracting manufacturing strategy. Its supply chain is mainly concentrated in the Asia-Pacific region, with wafers from TSMC and Samsung, memory from SK Hynix, Micron, and Samsung, and packaging using CoWoS technology. The company relies on foundry capacity and scarce input materials in a supply-constrained environment."
+    },
+    {
+      "id": "xom-refining-margins-2024",
+      "company": "ExxonMobil",
+      "topic": "refining-margins",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/34088/000003408825000010/xom-20241231.htm",
+      "content": "ExxonMobil reports that refining margins declined in 2024 from high 2023 levels as increased industry capacity outpaced record global demand, leaving margins near the bottom of the ten-year range. Chemical margins improved slightly but remained well below the ten-year range because of oversupply, primarily in Asia."
+    },
+    {
+      "id": "xom-commodity-demand-2024",
+      "company": "ExxonMobil",
+      "topic": "commodity-demand",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/34088/000003408825000010/xom-20241231.htm",
+      "content": "ExxonMobil states that oil, gas, petrochemical, and refined-product prices and margins depend on local, regional, and global conditions affecting supply and demand. Energy and petrochemical demand is closely linked to economic activity and prosperity; recessions and low growth can adversely affect results."
+    },
+    {
+      "id": "xom-energy-transition-2024",
+      "company": "ExxonMobil",
+      "topic": "energy-transition",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/34088/000003408825000010/xom-20241231.htm",
+      "content": "ExxonMobil is pursuing lower-emission and new business opportunities including carbon capture and storage, hydrogen, lower-emission fuels, carbon materials, and lithium. These opportunities depend on market growth, supportive and stable government policies, and technology that enables commercial-scale economics."
+    },
+    {
+      "id": "cat-backlog-2024",
+      "company": "Caterpillar",
+      "topic": "backlog",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/18230/000001823025000008/cat-20241231.htm",
+      "content": "Caterpillar reported firm order backlog of approximately 30.0 billion dollars at December 31, 2024, up from 27.5 billion dollars at year-end 2023. About 8.0 billion dollars of the total backlog was not expected to be filled in 2025. Backlog increased in Energy and Transportation while Construction Industries and Resource Industries decreased."
+    },
+    {
+      "id": "cat-construction-outlook-2024",
+      "company": "Caterpillar",
+      "topic": "construction-outlook",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/18230/000001823025000008/cat-20241231.htm",
+      "content": "Caterpillar expected moderately lower sales of equipment to end users in North America in 2025 compared with 2024. Construction spending remained healthy, driven by large multi-year projects and government infrastructure investment, while planning assumptions reflected lower demand for new equipment and lower dealer rental fleet loading."
+    },
+    {
+      "id": "cat-supplier-components-2024",
+      "company": "Caterpillar",
+      "topic": "supplier-components",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/18230/000001823025000008/cat-20241231.htm",
+      "content": "Caterpillar sources steel, castings, forgings, and finished components globally. Increases in demand or supply-chain disruptions have led to parts and component constraints across some products. The company monitors supplier financial viability, production flexibility, business continuity, quality, and delivery risk."
+    }
+  ],
+  "queries": [
+    {
+      "id": "q01",
+      "text": "higher interest rates net interest income credit losses",
+      "relevant": [
+        "jpm-rates-credit-2024"
+      ]
+    },
+    {
+      "id": "q02",
+      "text": "stress testing risk models capital liquidity regulatory scrutiny",
+      "relevant": [
+        "jpm-risk-models-2024",
+        "jpm-capital-liquidity-2024"
+      ]
+    },
+    {
+      "id": "q03",
+      "text": "AI infrastructure cloud datacenters GPUs capital investment",
+      "relevant": [
+        "msft-cloud-ai-investment-2024",
+        "msft-datacenter-supply-2024"
+      ]
+    },
+    {
+      "id": "q04",
+      "text": "cloud AI infrastructure costs reduce operating margins",
+      "relevant": [
+        "msft-cloud-margin-risk-2024"
+      ]
+    },
+    {
+      "id": "q05",
+      "text": "semiconductor manufacturing lead times supply capacity premiums",
+      "relevant": [
+        "nvda-demand-supply-2025",
+        "nvda-supply-chain-concentration-2025"
+      ]
+    },
+    {
+      "id": "q06",
+      "text": "demand estimates customer orders excess inventory shortages",
+      "relevant": [
+        "nvda-inventory-mismatch-2025"
+      ]
+    },
+    {
+      "id": "q07",
+      "text": "refining margins capacity additions global demand oversupply",
+      "relevant": [
+        "xom-refining-margins-2024"
+      ]
+    },
+    {
+      "id": "q08",
+      "text": "energy demand recession economic growth commodity margins",
+      "relevant": [
+        "xom-commodity-demand-2024"
+      ]
+    },
+    {
+      "id": "q09",
+      "text": "firm order backlog billion construction industries energy transportation",
+      "relevant": [
+        "cat-backlog-2024"
+      ]
+    },
+    {
+      "id": "q10",
+      "text": "dealer rental fleet construction demand infrastructure investment",
+      "relevant": [
+        "cat-construction-outlook-2024"
+      ]
+    },
+    {
+      "id": "q11",
+      "text": "supplier financial viability production flexibility component constraints",
+      "relevant": [
+        "cat-supplier-components-2024"
+      ]
+    },
+    {
+      "id": "q12",
+      "text": "hydrogen carbon capture lithium supportive government policies commercial scale",
+      "relevant": [
+        "xom-energy-transition-2024"
+      ]
+    }
+  ],
+  "benchmark": "NIP financial semantic retrieval benchmark",
+  "generated_at": "2026-11-16T23:28:40.284Z",
+  "corpus_documents": 15,
+  "query_count": 12,
+  "k": 5,
+  "embedding_model": "benchmark-financial-hash-v3",
+  "embedding_dimensions": 8,
+  "manifest": {
+    "chunking_version": "nip-chunk-v1",
+    "collection_name": "bge-benchmark-financial-hash-v3-v1",
+    "completed_at": "2026-11-16T23:28:39.983394223Z",
+    "created_at": "2026-11-16T23:28:39.845883848Z",
+    "dimensions": 8,
+    "event_count": 15,
+    "index_id": "bge-benchmark-financial-hash-v3-v1",
+    "model_id": "benchmark-financial-hash-v3",
+    "model_revision": "v1",
+    "status": "ready"
+  },
+  "hybrid": {
+    "recall_at_5": 1,
+    "precision_at_5": 0.25000000000000006,
+    "mrr": 0.8055555555555555,
+    "ndcg_at_5": 0.8551549589285763
+  },
+  "lexical_baseline": {
+    "recall_at_5": 1,
+    "precision_at_5": 0.25000000000000006,
+    "mrr": 1,
+    "ndcg_at_5": 0.9933100657623489
+  },
+  "rows": [
+    {
+      "id": "q01",
+      "text": "higher interest rates net interest income credit losses",
+      "relevant": [
+        "jpm-rates-credit-2024"
+      ],
+      "semantic_ids": [
+        "jpm-rates-credit-2024",
+        "nvda-supply-chain-concentration-2025",
+        "xom-energy-transition-2024",
+        "msft-cloud-ai-investment-2024",
+        "xom-commodity-demand-2024",
+        "cat-backlog-2024",
+        "msft-datacenter-supply-2024",
+        "xom-refining-margins-2024",
+        "msft-cloud-margin-risk-2024",
+        "cat-construction-outlook-2024"
+      ],
+      "lexical_ids": [
+        "jpm-rates-credit-2024",
+        "jpm-risk-models-2024",
+        "jpm-capital-liquidity-2024",
+        "msft-cloud-ai-investment-2024",
+        "msft-cloud-margin-risk-2024"
+      ],
+      "semantic_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 1,
+        "ndcg": 1
+      },
+      "lexical_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 1,
+        "ndcg": 1
+      }
+    },
+    {
+      "id": "q02",
+      "text": "stress testing risk models capital liquidity regulatory scrutiny",
+      "relevant": [
+        "jpm-risk-models-2024",
+        "jpm-capital-liquidity-2024"
+      ],
+      "semantic_ids": [
+        "jpm-risk-models-2024",
+        "jpm-capital-liquidity-2024",
+        "cat-construction-outlook-2024",
+        "nvda-demand-supply-2025",
+        "cat-supplier-components-2024",
+        "msft-datacenter-supply-2024",
+        "jpm-rates-credit-2024",
+        "cat-backlog-2024",
+        "msft-cloud-margin-risk-2024",
+        "msft-cloud-ai-investment-2024"
+      ],
+      "lexical_ids": [
+        "jpm-risk-models-2024",
+        "jpm-rates-credit-2024",
+        "jpm-capital-liquidity-2024",
+        "cat-supplier-components-2024",
+        "msft-cloud-ai-investment-2024"
+      ],
+      "semantic_metrics": {
+        "recall": 1,
+        "precision": 0.4,
+        "mrr": 1,
+        "ndcg": 1
+      },
+      "lexical_metrics": {
+        "recall": 1,
+        "precision": 0.4,
+        "mrr": 1,
+        "ndcg": 0.9197207891481876
+      }
+    },
+    {
+      "id": "q03",
+      "text": "AI infrastructure cloud datacenters GPUs capital investment",
+      "relevant": [
+        "msft-cloud-ai-investment-2024",
+        "msft-datacenter-supply-2024"
+      ],
+      "semantic_ids": [
+        "msft-datacenter-supply-2024",
+        "msft-cloud-ai-investment-2024",
+        "msft-cloud-margin-risk-2024",
+        "cat-supplier-components-2024",
+        "cat-construction-outlook-2024",
+        "cat-backlog-2024",
+        "jpm-rates-credit-2024",
+        "nvda-inventory-mismatch-2025",
+        "jpm-risk-models-2024",
+        "xom-commodity-demand-2024"
+      ],
+      "lexical_ids": [
+        "msft-datacenter-supply-2024",
+        "msft-cloud-ai-investment-2024",
+        "msft-cloud-margin-risk-2024",
+        "cat-construction-outlook-2024",
+        "jpm-rates-credit-2024"
+      ],
+      "semantic_metrics": {
+        "recall": 1,
+        "precision": 0.4,
+        "mrr": 1,
+        "ndcg": 1
+      },
+      "lexical_metrics": {
+        "recall": 1,
+        "precision": 0.4,
+        "mrr": 1,
+        "ndcg": 1
+      }
+    },
+    {
+      "id": "q04",
+      "text": "cloud AI infrastructure costs reduce operating margins",
+      "relevant": [
+        "msft-cloud-margin-risk-2024"
+      ],
+      "semantic_ids": [
+        "msft-cloud-margin-risk-2024",
+        "jpm-risk-models-2024",
+        "cat-construction-outlook-2024",
+        "msft-cloud-ai-investment-2024",
+        "msft-datacenter-supply-2024",
+        "jpm-rates-credit-2024",
+        "xom-commodity-demand-2024",
+        "xom-refining-margins-2024",
+        "cat-supplier-components-2024",
+        "cat-backlog-2024"
+      ],
+      "lexical_ids": [
+        "msft-cloud-margin-risk-2024",
+        "msft-datacenter-supply-2024",
+        "jpm-rates-credit-2024",
+        "msft-cloud-ai-investment-2024",
+        "jpm-risk-models-2024"
+      ],
+      "semantic_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 1,
+        "ndcg": 1
+      },
+      "lexical_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 1,
+        "ndcg": 1
+      }
+    },
+    {
+      "id": "q05",
+      "text": "semiconductor manufacturing lead times supply capacity premiums",
+      "relevant": [
+        "nvda-demand-supply-2025",
+        "nvda-supply-chain-concentration-2025"
+      ],
+      "semantic_ids": [
+        "nvda-demand-supply-2025",
+        "nvda-supply-chain-concentration-2025",
+        "xom-energy-transition-2024",
+        "xom-refining-margins-2024",
+        "cat-backlog-2024",
+        "nvda-inventory-mismatch-2025",
+        "jpm-rates-credit-2024",
+        "xom-commodity-demand-2024",
+        "cat-supplier-components-2024",
+        "msft-datacenter-supply-2024"
+      ],
+      "lexical_ids": [
+        "nvda-demand-supply-2025",
+        "nvda-supply-chain-concentration-2025",
+        "nvda-inventory-mismatch-2025",
+        "xom-refining-margins-2024",
+        "xom-commodity-demand-2024"
+      ],
+      "semantic_metrics": {
+        "recall": 1,
+        "precision": 0.4,
+        "mrr": 1,
+        "ndcg": 1
+      },
+      "lexical_metrics": {
+        "recall": 1,
+        "precision": 0.4,
+        "mrr": 1,
+        "ndcg": 1
+      }
+    },
+    {
+      "id": "q06",
+      "text": "demand estimates customer orders excess inventory shortages",
+      "relevant": [
+        "nvda-inventory-mismatch-2025"
+      ],
+      "semantic_ids": [
+        "nvda-inventory-mismatch-2025",
+        "jpm-capital-liquidity-2024",
+        "cat-construction-outlook-2024",
+        "cat-supplier-components-2024",
+        "nvda-demand-supply-2025",
+        "jpm-risk-models-2024",
+        "msft-cloud-ai-investment-2024",
+        "xom-commodity-demand-2024",
+        "cat-backlog-2024",
+        "msft-datacenter-supply-2024"
+      ],
+      "lexical_ids": [
+        "nvda-inventory-mismatch-2025",
+        "nvda-demand-supply-2025",
+        "msft-cloud-ai-investment-2024",
+        "msft-datacenter-supply-2024",
+        "xom-refining-margins-2024"
+      ],
+      "semantic_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 1,
+        "ndcg": 1
+      },
+      "lexical_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 1,
+        "ndcg": 1
+      }
+    },
+    {
+      "id": "q07",
+      "text": "refining margins capacity additions global demand oversupply",
+      "relevant": [
+        "xom-refining-margins-2024"
+      ],
+      "semantic_ids": [
+        "msft-cloud-ai-investment-2024",
+        "xom-commodity-demand-2024",
+        "xom-refining-margins-2024",
+        "nvda-supply-chain-concentration-2025",
+        "cat-supplier-components-2024",
+        "nvda-inventory-mismatch-2025",
+        "cat-construction-outlook-2024",
+        "jpm-rates-credit-2024",
+        "jpm-risk-models-2024",
+        "msft-cloud-margin-risk-2024"
+      ],
+      "lexical_ids": [
+        "xom-refining-margins-2024",
+        "xom-commodity-demand-2024",
+        "nvda-demand-supply-2025",
+        "msft-cloud-ai-investment-2024",
+        "msft-cloud-margin-risk-2024"
+      ],
+      "semantic_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 0.3333333333333333,
+        "ndcg": 0.5
+      },
+      "lexical_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 1,
+        "ndcg": 1
+      }
+    },
+    {
+      "id": "q08",
+      "text": "energy demand recession economic growth commodity margins",
+      "relevant": [
+        "xom-commodity-demand-2024"
+      ],
+      "semantic_ids": [
+        "xom-refining-margins-2024",
+        "xom-commodity-demand-2024",
+        "nvda-inventory-mismatch-2025",
+        "cat-supplier-components-2024",
+        "cat-backlog-2024",
+        "jpm-capital-liquidity-2024",
+        "cat-construction-outlook-2024",
+        "msft-datacenter-supply-2024",
+        "nvda-supply-chain-concentration-2025",
+        "msft-cloud-ai-investment-2024"
+      ],
+      "lexical_ids": [
+        "xom-commodity-demand-2024",
+        "msft-datacenter-supply-2024",
+        "xom-refining-margins-2024",
+        "msft-cloud-ai-investment-2024",
+        "msft-cloud-margin-risk-2024"
+      ],
+      "semantic_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 0.5,
+        "ndcg": 0.6309297535714575
+      },
+      "lexical_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 1,
+        "ndcg": 1
+      }
+    },
+    {
+      "id": "q09",
+      "text": "firm order backlog billion construction industries energy transportation",
+      "relevant": [
+        "cat-backlog-2024"
+      ],
+      "semantic_ids": [
+        "cat-backlog-2024",
+        "cat-construction-outlook-2024",
+        "jpm-capital-liquidity-2024",
+        "xom-energy-transition-2024",
+        "xom-commodity-demand-2024",
+        "msft-datacenter-supply-2024",
+        "nvda-inventory-mismatch-2025",
+        "jpm-rates-credit-2024",
+        "xom-refining-margins-2024",
+        "nvda-demand-supply-2025"
+      ],
+      "lexical_ids": [
+        "cat-backlog-2024",
+        "jpm-capital-liquidity-2024",
+        "msft-datacenter-supply-2024",
+        "nvda-inventory-mismatch-2025",
+        "xom-commodity-demand-2024"
+      ],
+      "semantic_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 1,
+        "ndcg": 1
+      },
+      "lexical_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 1,
+        "ndcg": 1
+      }
+    },
+    {
+      "id": "q10",
+      "text": "dealer rental fleet construction demand infrastructure investment",
+      "relevant": [
+        "cat-construction-outlook-2024"
+      ],
+      "semantic_ids": [
+        "nvda-inventory-mismatch-2025",
+        "msft-datacenter-supply-2024",
+        "cat-construction-outlook-2024",
+        "cat-supplier-components-2024",
+        "msft-cloud-ai-investment-2024",
+        "msft-cloud-margin-risk-2024",
+        "cat-backlog-2024",
+        "xom-commodity-demand-2024",
+        "jpm-rates-credit-2024",
+        "jpm-capital-liquidity-2024"
+      ],
+      "lexical_ids": [
+        "cat-construction-outlook-2024",
+        "msft-cloud-ai-investment-2024",
+        "msft-datacenter-supply-2024",
+        "msft-cloud-margin-risk-2024",
+        "nvda-demand-supply-2025"
+      ],
+      "semantic_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 0.3333333333333333,
+        "ndcg": 0.5
+      },
+      "lexical_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 1,
+        "ndcg": 1
+      }
+    },
+    {
+      "id": "q11",
+      "text": "supplier financial viability production flexibility component constraints",
+      "relevant": [
+        "cat-supplier-components-2024"
+      ],
+      "semantic_ids": [
+        "cat-supplier-components-2024",
+        "nvda-inventory-mismatch-2025",
+        "jpm-capital-liquidity-2024",
+        "msft-datacenter-supply-2024",
+        "nvda-demand-supply-2025",
+        "cat-backlog-2024",
+        "xom-commodity-demand-2024",
+        "msft-cloud-ai-investment-2024",
+        "jpm-rates-credit-2024",
+        "nvda-supply-chain-concentration-2025"
+      ],
+      "lexical_ids": [
+        "cat-supplier-components-2024",
+        "nvda-inventory-mismatch-2025",
+        "jpm-capital-liquidity-2024",
+        "jpm-rates-credit-2024",
+        "jpm-risk-models-2024"
+      ],
+      "semantic_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 1,
+        "ndcg": 1
+      },
+      "lexical_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 1,
+        "ndcg": 1
+      }
+    },
+    {
+      "id": "q12",
+      "text": "hydrogen carbon capture lithium supportive government policies commercial scale",
+      "relevant": [
+        "xom-energy-transition-2024"
+      ],
+      "semantic_ids": [
+        "cat-construction-outlook-2024",
+        "xom-energy-transition-2024",
+        "xom-refining-margins-2024",
+        "cat-backlog-2024",
+        "msft-datacenter-supply-2024",
+        "jpm-rates-credit-2024",
+        "nvda-demand-supply-2025",
+        "cat-supplier-components-2024",
+        "jpm-risk-models-2024",
+        "jpm-capital-liquidity-2024"
+      ],
+      "lexical_ids": [
+        "xom-energy-transition-2024",
+        "msft-cloud-ai-investment-2024",
+        "cat-construction-outlook-2024",
+        "jpm-rates-credit-2024",
+        "jpm-risk-models-2024"
+      ],
+      "semantic_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 0.5,
+        "ndcg": 0.6309297535714575
+      },
+      "lexical_metrics": {
+        "recall": 1,
+        "precision": 0.2,
+        "mrr": 1,
+        "ndcg": 1
+      }
+    }
+  ],
+  "sources": [
+    "https://www.sec.gov/Archives/edgar/data/19617/000001961725000270/jpm-20241231.htm",
+    "https://www.sec.gov/Archives/edgar/data/789019/000095017024087843/msft-20240630.htm",
+    "https://www.sec.gov/Archives/edgar/data/1045810/000104581025000023/nvda-20250126.htm",
+    "https://www.sec.gov/Archives/edgar/data/34088/000003408825000010/xom-20241231.htm",
+    "https://www.sec.gov/Archives/edgar/data/18230/000001823025000008/cat-20241231.htm"
+  ]
+}

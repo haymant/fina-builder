@@ -19,6 +19,7 @@ import '../panels.css'
 
 const Grid = WidthProvider(Responsive)
 const TradeRepository = lazy(() => import('../../trade-repository/components/TradeRepository').then((m) => ({ default: m.TradeRepository })))
+const NarrativeWorkspace = lazy(() => import('../../narrative/components/NarrativeWorkspace').then((m) => ({ default: m.NarrativeWorkspace })))
 
 const showAllKey = (id: string) => `fina.showAllTiles.${id}`
 
@@ -45,6 +46,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
   const [location, setLocationState] = useState<Location>(() => {
     const l = loadLocation()
     if (l?.kind === 'trades' && TRADE_VIEWS.some((v) => v.id === l.view)) return l
+    if (l?.kind === 'narrative' && (l.view === 'overview' || l.view === 'claims')) return l
     return { kind: 'dashboard', dashboardId: selectedId }
   })
   const navigate = useCallback((l: Location) => {
@@ -153,6 +155,12 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
         <main className="workspace-canvas relative flex min-h-0 flex-1 flex-col overflow-hidden p-4">
           <Suspense fallback={null}>
             <TradeRepository view={location.view} onViewChange={goTrades} newTradeSignal={newTradeSignal} onOpenDashboard={(id) => navigate({ kind: 'dashboard', dashboardId: dashboards.some((d) => d.id === id) ? id : dashboards[0]!.id })} />
+          </Suspense>
+        </main>
+      ) : location.kind === 'narrative' ? (
+        <main className="workspace-canvas relative min-h-0 flex-1 overflow-auto p-5">
+          <Suspense fallback={<div className="narrative-empty"><span>Loading Narrative Intelligence…</span></div>}>
+            <NarrativeWorkspace view={location.view} />
           </Suspense>
         </main>
       ) : (

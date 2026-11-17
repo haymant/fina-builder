@@ -4,14 +4,24 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use duckdb::{params, Connection, OptionalExt};
 use nip_domain::{
-    PodcastEpisode, PodcastEpisodeState, PodcastSubscription, PodcastSubscriptionState, SourceId,
+    ClaimRecord, EditorialCandidate, EmbeddingIndexManifest, EtfMapping, EventRecord,
+    EventSearchPage, EventSearchQuery, LocalEventImport, NarrativeCluster, NarrativeClusterMember,
+    NarrativeGraph, PodcastEpisode, PodcastEpisodeState, PodcastSubscription,
+    PodcastSubscriptionState, PodcastTranscript, SourceId,
 };
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 const MIGRATION_1: &str = include_str!("../migrations/0001_core.sql");
 const MIGRATION_2: &str = include_str!("../migrations/0002_podcast_feeds.sql");
-const LATEST_SCHEMA_VERSION: u32 = 2;
+const MIGRATION_3: &str = include_str!("../migrations/0003_podcast_transcripts.sql");
+const MIGRATION_4: &str = include_str!("../migrations/0004_claims.sql");
+const MIGRATION_5: &str = include_str!("../migrations/0005_semantic_indexes.sql");
+const MIGRATION_6: &str = include_str!("../migrations/0006_phase3_research.sql");
+const MIGRATION_7: &str = include_str!("../migrations/0007_phase2_graph.sql");
+const LATEST_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -27,6 +37,34 @@ pub enum StoreError {
     InvalidStoredState,
     #[error("podcast episode has neither an RSS GUID nor an episode URL")]
     MissingEpisodeIdentity,
+    #[error("podcast transcript is invalid")]
+    InvalidTranscript,
+    #[error("local import requires explicit rights confirmation")]
+    RightsConfirmationRequired,
+    #[error("local event content is invalid")]
+    InvalidEvent,
+    #[error("manual research record is invalid")]
+    InvalidResearchRecord,
+    #[error("snapshot path is invalid")]
+    InvalidSnapshotPath,
+    #[error("snapshot manifest is invalid")]
+    InvalidSnapshotManifest,
+    #[error("snapshot database already exists")]
+    SnapshotDatabaseExists,
+    #[error("snapshot file operation failed")]
+    SnapshotIo(#[source] std::io::Error),
+    #[error("snapshot manifest serialization failed")]
+    SnapshotJson(#[from] serde_json::Error),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotManifest {
+    pub format: String,
+    pub schema_version: u32,
+    pub exported_at: DateTime<Utc>,
+    pub event_count: u64,
+    pub file_count: u64,
+    pub content_sha256: String,
 }
 
 #[derive(Debug, Clone)]
@@ -73,6 +111,95 @@ impl Store {
 
     pub fn database_path(&self) -> &Path {
         &self.database_path
+    }
+
+    /// Export the complete DuckDB ledger and projections as an atomic Parquet
+    /// snapshot. The export directory is immutable after the manifest is
+    /// written; DuckDB remains the canonical store.
+    pub fn export_parquet_snapshot(
+        &self,
+        lake_dir: impl AsRef<Path>,
+    ) -> Result<(PathBuf, SnapshotManifest), StoreError> {
+        let lake_dir = lake_dir.as_ref();
+        if lake_dir.as_os_str().is_empty() {
+            return Err(StoreError::InvalidSnapshotPath);
+        }
+        fs::create_dir_all(lake_dir).map_err(StoreError::SnapshotIo)?;
+        let stamp = Utc::now().timestamp_nanos_opt().unwrap_or_default();
+        let staging = lake_dir.join(format!(".staging-{stamp}"));
+        let final_dir = lake_dir.join(format!("snapshot-{stamp}"));
+        fs::create_dir_all(&staging).map_err(StoreError::SnapshotIo)?;
+        let result = (|| {
+            let event_count: u64 =
+                self.connection
+                    .query_row("SELECT COUNT(*) FROM nip_events", [], |row| row.get(0))?;
+            let export_path = sql_string_literal(&staging);
+            self.connection.execute(
+                &format!("EXPORT DATABASE '{export_path}' (FORMAT PARQUET)"),
+                [],
+            )?;
+            let (file_count, content_sha256) = snapshot_digest(&staging)?;
+            let manifest = SnapshotManifest {
+                format: "nip-duckdb-export-parquet-v1".into(),
+                schema_version: self.schema_version,
+                exported_at: Utc::now(),
+                event_count,
+                file_count,
+                content_sha256,
+            };
+            fs::write(
+                staging.join("nip-snapshot-manifest.json"),
+                serde_json::to_vec_pretty(&manifest)?,
+            )
+            .map_err(StoreError::SnapshotIo)?;
+            fs::rename(&staging, &final_dir).map_err(StoreError::SnapshotIo)?;
+            Ok((final_dir, manifest))
+        })();
+        if result.is_err() {
+            let _ = fs::remove_dir_all(&staging);
+        }
+        result
+    }
+
+    /// Restore an immutable snapshot into a new DuckDB path after verifying
+    /// its manifest and file digest. Existing databases are never overwritten.
+    pub fn restore_parquet_snapshot(
+        snapshot_dir: impl AsRef<Path>,
+        database_path: impl AsRef<Path>,
+    ) -> Result<SnapshotManifest, StoreError> {
+        let snapshot_dir = snapshot_dir.as_ref();
+        let database_path = database_path.as_ref();
+        let manifest_path = snapshot_dir.join("nip-snapshot-manifest.json");
+        let manifest: SnapshotManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).map_err(StoreError::SnapshotIo)?)?;
+        if manifest.format != "nip-duckdb-export-parquet-v1"
+            || manifest.schema_version > LATEST_SCHEMA_VERSION
+        {
+            return Err(StoreError::InvalidSnapshotManifest);
+        }
+        let (file_count, content_sha256) = snapshot_digest(snapshot_dir)?;
+        if file_count != manifest.file_count || content_sha256 != manifest.content_sha256 {
+            return Err(StoreError::InvalidSnapshotManifest);
+        }
+        if database_path.exists() {
+            return Err(StoreError::SnapshotDatabaseExists);
+        }
+        if let Some(parent) = database_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent).map_err(StoreError::SnapshotIo)?;
+        }
+        let connection = Connection::open(database_path)?;
+        let snapshot_path = sql_string_literal(snapshot_dir);
+        connection.execute(&format!("IMPORT DATABASE '{snapshot_path}'"), [])?;
+        drop(connection);
+        let restored = Self::open(database_path)?;
+        let restored_count: u64 =
+            restored
+                .connection
+                .query_row("SELECT COUNT(*) FROM nip_events", [], |row| row.get(0))?;
+        if restored_count != manifest.event_count {
+            return Err(StoreError::InvalidSnapshotManifest);
+        }
+        Ok(manifest)
     }
 
     /// Persist an already user-approved feed. There is deliberately no default
@@ -236,6 +363,671 @@ impl Store {
         rows.map(|row| row?.try_into()).collect()
     }
 
+    pub fn store_transcript(
+        &mut self,
+        episode: &PodcastEpisode,
+        transcript: &PodcastTranscript,
+    ) -> Result<(), StoreError> {
+        if episode.source_id != transcript.source_id
+            || transcript.transcript_text.trim().is_empty()
+            || transcript.content_hash.trim().is_empty()
+            || transcript.provenance_json.trim().is_empty()
+        {
+            return Err(StoreError::InvalidTranscript);
+        }
+        let identity_key = episode_identity(episode)?;
+        let transaction = self.connection.transaction()?;
+        let episode_id: String = transaction.query_row(
+            "SELECT episode_id FROM nip_podcast_episodes WHERE source_id = ? AND identity_key = ?",
+            params![episode.source_id.as_str(), identity_key],
+            |row| row.get(0),
+        )?;
+        let event_id = format!(
+            "event-{}",
+            &hex_digest(format!("{}\0{}", episode_id, transcript.content_hash).as_bytes())[..32]
+        );
+        transaction.execute(
+            "INSERT INTO nip_events (event_id, source_id, source_native_id, canonical_url,
+                content_hash, content_text, published_at, source_updated_at, captured_at,
+                ingested_at, schema_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+             ON CONFLICT (event_id) DO NOTHING",
+            params![
+                event_id,
+                episode.source_id.as_str(),
+                episode.source_native_id,
+                episode.canonical_url,
+                transcript.content_hash,
+                transcript.transcript_text,
+                episode.published_at,
+                Option::<DateTime<Utc>>::None,
+                episode.discovered_at,
+                transcript.transcribed_at,
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO nip_podcast_transcripts
+                (episode_id, transcript_text, content_hash, detected_language, provenance_json, transcribed_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT (episode_id) DO UPDATE SET
+                transcript_text = excluded.transcript_text,
+                content_hash = excluded.content_hash,
+                detected_language = excluded.detected_language,
+                provenance_json = excluded.provenance_json,
+                transcribed_at = excluded.transcribed_at",
+            params![
+                episode_id,
+                transcript.transcript_text,
+                transcript.content_hash,
+                transcript.detected_language,
+                transcript.provenance_json,
+                transcript.transcribed_at,
+            ],
+        )?;
+        transaction.execute(
+            "UPDATE nip_podcast_episodes SET state = 'transcribed' WHERE episode_id = ?",
+            params![episode_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn set_episode_state(
+        &mut self,
+        episode: &PodcastEpisode,
+        state: PodcastEpisodeState,
+    ) -> Result<bool, StoreError> {
+        let identity_key = episode_identity(episode)?;
+        let changed = self.connection.execute(
+            "UPDATE nip_podcast_episodes SET state = ? WHERE source_id = ? AND identity_key = ?",
+            params![
+                episode_state_as_str(state),
+                episode.source_id.as_str(),
+                identity_key
+            ],
+        )?;
+        Ok(changed == 1)
+    }
+
+    pub fn import_local_event(
+        &mut self,
+        import: &LocalEventImport,
+        captured_at: DateTime<Utc>,
+    ) -> Result<EventRecord, StoreError> {
+        if !import.user_confirmed_rights {
+            return Err(StoreError::RightsConfirmationRequired);
+        }
+        if import.content_text.trim().is_empty()
+            || import.source_display_name.trim().is_empty()
+            || import.rights_statement.trim().is_empty()
+        {
+            return Err(StoreError::InvalidEvent);
+        }
+        let content_hash = hex_digest(import.content_text.as_bytes());
+        let identity = import
+            .source_native_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| format!("native:{value}"))
+            .or_else(|| {
+                import
+                    .canonical_url
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| format!("url:{value}"))
+            })
+            .unwrap_or_else(|| format!("bytes:{content_hash}"));
+        let event_id = format!(
+            "event-{}",
+            &hex_digest(format!("{}\0{}", import.source_id.as_str(), identity).as_bytes())[..32]
+        );
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO nip_sources (source_id, source_type, display_name, locator, rights_status, rights_statement)
+             VALUES (?, 'local_document', ?, ?, 'approved', ?)
+             ON CONFLICT (source_id) DO NOTHING",
+            params![
+                import.source_id.as_str(),
+                import.source_display_name,
+                import.canonical_url,
+                import.rights_statement,
+            ],
+        )?;
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM nip_events WHERE event_id = ?)",
+            params![event_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            transaction.execute(
+                "INSERT INTO nip_events (event_id, source_id, source_native_id, canonical_url,
+                    content_hash, content_text, published_at, source_updated_at, captured_at,
+                    ingested_at, schema_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                params![
+                    event_id,
+                    import.source_id.as_str(),
+                    import.source_native_id,
+                    import.canonical_url,
+                    content_hash,
+                    import.content_text,
+                    import.published_at,
+                    import.source_updated_at,
+                    captured_at,
+                    Utc::now(),
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        self.event_by_id(&event_id)?.ok_or(StoreError::InvalidEvent)
+    }
+
+    pub fn save_etf_mapping(&mut self, mapping: &EtfMapping) -> Result<(), StoreError> {
+        if mapping.mapping_id.trim().is_empty()
+            || mapping.narrative_id.trim().is_empty()
+            || mapping.rationale.trim().is_empty()
+            || mapping.author.trim().is_empty()
+            || mapping.evidence_event_ids.is_empty()
+            || !valid_ticker(&mapping.ticker)
+            || mapping
+                .effective_to
+                .is_some_and(|end| end <= mapping.effective_from)
+        {
+            return Err(StoreError::InvalidResearchRecord);
+        }
+        for event_id in &mapping.evidence_event_ids {
+            let exists: bool = self.connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM nip_events WHERE event_id = ?)",
+                params![event_id],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Err(StoreError::InvalidResearchRecord);
+            }
+        }
+        self.connection.execute("INSERT INTO nip_etf_mappings (mapping_id, narrative_id, ticker, rationale, evidence_event_ids, author, reviewer, version, effective_from, effective_to, known_at, review_status, ticker_status, market_data_coverage, mapping_validity, supersedes_mapping_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", params![mapping.mapping_id, mapping.narrative_id, mapping.ticker, mapping.rationale, serde_json::to_string(&mapping.evidence_event_ids)?, mapping.author, mapping.reviewer, mapping.version as i32, mapping.effective_from, mapping.effective_to, mapping.known_at, mapping.review_status, mapping.ticker_status, mapping.market_data_coverage, mapping.mapping_validity, mapping.supersedes_mapping_id, mapping.created_at])?;
+        Ok(())
+    }
+
+    pub fn etf_mappings(&self) -> Result<Vec<EtfMapping>, StoreError> {
+        let mut statement = self.connection.prepare("SELECT mapping_id, narrative_id, ticker, rationale, evidence_event_ids, author, reviewer, version, effective_from, effective_to, known_at, review_status, ticker_status, market_data_coverage, mapping_validity, supersedes_mapping_id, created_at FROM nip_etf_mappings ORDER BY narrative_id, ticker, version")?;
+        let rows = statement.query_map([], |row| {
+            let evidence: String = row.get(4)?;
+            Ok(EtfMapping {
+                mapping_id: row.get(0)?,
+                narrative_id: row.get(1)?,
+                ticker: row.get(2)?,
+                rationale: row.get(3)?,
+                evidence_event_ids: serde_json::from_str(&evidence)
+                    .map_err(|error| duckdb::Error::ToSqlConversionFailure(Box::new(error)))?,
+                author: row.get(5)?,
+                reviewer: row.get(6)?,
+                version: row.get::<_, i32>(7)? as u32,
+                effective_from: row.get(8)?,
+                effective_to: row.get(9)?,
+                known_at: row.get(10)?,
+                review_status: row.get(11)?,
+                ticker_status: row.get(12)?,
+                market_data_coverage: row.get(13)?,
+                mapping_validity: row.get(14)?,
+                supersedes_mapping_id: row.get(15)?,
+                created_at: row.get(16)?,
+            })
+        })?;
+        Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
+    pub fn replace_editorial_candidates(
+        &mut self,
+        candidates: &[EditorialCandidate],
+    ) -> Result<(), StoreError> {
+        let transaction = self.connection.transaction()?;
+        if let Some(first) = candidates.first() {
+            transaction.execute(
+                "DELETE FROM nip_editorial_candidates WHERE derivation_run_id = ?",
+                params![first.derivation_run_id],
+            )?;
+        }
+        for candidate in candidates {
+            if candidate.title_angle.trim().is_empty() || candidate.evidence_event_ids.is_empty() {
+                return Err(StoreError::InvalidResearchRecord);
+            }
+            transaction.execute("INSERT INTO nip_editorial_candidates (candidate_id, title_angle, narrative_ids, claim_ids, evidence_event_ids, rank, component_values, derivation_run_id, review_status, review_reason, reviewer, reviewed_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", params![candidate.candidate_id, candidate.title_angle, serde_json::to_string(&candidate.narrative_ids)?, serde_json::to_string(&candidate.claim_ids)?, serde_json::to_string(&candidate.evidence_event_ids)?, candidate.rank as i32, serde_json::to_string(&candidate.component_values)?, candidate.derivation_run_id, candidate.review_status, candidate.review_reason, candidate.reviewer, candidate.reviewed_at, candidate.created_at])?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn editorial_candidates(&self) -> Result<Vec<EditorialCandidate>, StoreError> {
+        let mut statement = self.connection.prepare("SELECT candidate_id, title_angle, narrative_ids, claim_ids, evidence_event_ids, rank, component_values, derivation_run_id, review_status, review_reason, reviewer, reviewed_at, created_at FROM nip_editorial_candidates ORDER BY rank, candidate_id")?;
+        let rows = statement.query_map([], |row| {
+            let parse = |index| -> duckdb::Result<Value> {
+                let text: String = row.get(index)?;
+                serde_json::from_str(&text)
+                    .map_err(|error| duckdb::Error::ToSqlConversionFailure(Box::new(error)))
+            };
+            Ok(EditorialCandidate {
+                candidate_id: row.get(0)?,
+                title_angle: row.get(1)?,
+                narrative_ids: serde_json::from_value(parse(2)?)
+                    .map_err(|error| duckdb::Error::ToSqlConversionFailure(Box::new(error)))?,
+                claim_ids: serde_json::from_value(parse(3)?)
+                    .map_err(|error| duckdb::Error::ToSqlConversionFailure(Box::new(error)))?,
+                evidence_event_ids: serde_json::from_value(parse(4)?)
+                    .map_err(|error| duckdb::Error::ToSqlConversionFailure(Box::new(error)))?,
+                rank: row.get::<_, i32>(5)? as u32,
+                component_values: serde_json::from_value(parse(6)?)
+                    .map_err(|error| duckdb::Error::ToSqlConversionFailure(Box::new(error)))?,
+                derivation_run_id: row.get(7)?,
+                review_status: row.get(8)?,
+                review_reason: row.get(9)?,
+                reviewer: row.get(10)?,
+                reviewed_at: row.get(11)?,
+                created_at: row.get(12)?,
+            })
+        })?;
+        Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
+    pub fn review_editorial_candidate(
+        &mut self,
+        candidate_id: &str,
+        status: &str,
+        reason: &str,
+        reviewer: &str,
+        reviewed_at: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        if !matches!(status, "relevant" | "irrelevant" | "deferred")
+            || reason.trim().is_empty()
+            || reviewer.trim().is_empty()
+        {
+            return Err(StoreError::InvalidResearchRecord);
+        }
+        let changed = self.connection.execute("UPDATE nip_editorial_candidates SET review_status = ?, review_reason = ?, reviewer = ?, reviewed_at = ? WHERE candidate_id = ?", params![status, reason, reviewer, reviewed_at, candidate_id])?;
+        if changed == 0 {
+            return Err(StoreError::InvalidResearchRecord);
+        }
+        Ok(())
+    }
+
+    pub fn search_events(&self, query: &EventSearchQuery) -> Result<EventSearchPage, StoreError> {
+        let limit = query.limit.clamp(1, 200) as i64;
+        let cursor = query.cursor.as_deref().unwrap_or("");
+        let mut statement = self.connection.prepare(
+            "SELECT event_id, source_id, source_native_id, canonical_url, content_hash,
+                    content_text, published_at, source_updated_at, captured_at, ingested_at,
+                    revision_of FROM nip_events
+             WHERE event_id > ?
+               AND (? IS NULL OR source_id = ?)
+               AND (? IS NULL OR content_text ILIKE '%' || ? || '%')
+               AND (? IS NULL OR ingested_at <= ?)
+             ORDER BY event_id LIMIT ?",
+        )?;
+        let text = query.text.as_deref();
+        let source = query.source_id.as_ref().map(SourceId::as_str);
+        let rows = statement.query_map(
+            params![
+                cursor,
+                source,
+                source,
+                text,
+                text,
+                query.as_of,
+                query.as_of,
+                limit
+            ],
+            raw_event_from_row,
+        )?;
+        let events = rows.collect::<duckdb::Result<Vec<_>>>()?;
+        let next_cursor = (events.len() == limit as usize)
+            .then(|| {
+                events
+                    .last()
+                    .map(|event| event.event_id.as_str().to_owned())
+            })
+            .flatten();
+        Ok(EventSearchPage {
+            events: events
+                .into_iter()
+                .map(|raw| raw.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+            next_cursor,
+        })
+    }
+
+    /// Return canonical events with their version-1 diffusion category. This is
+    /// deliberately a read-only projection; DuckDB remains the signal input.
+    pub fn events_with_source_categories(
+        &self,
+        as_of: Option<DateTime<Utc>>,
+    ) -> Result<Vec<(EventRecord, String)>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT e.event_id, e.source_id, e.source_native_id, e.canonical_url,
+                    e.content_hash, e.content_text, e.published_at, e.source_updated_at,
+                    e.captured_at, e.ingested_at, e.revision_of,
+                    COALESCE(s.source_type, 'other')
+             FROM nip_events e
+             LEFT JOIN nip_sources s ON s.source_id = e.source_id
+             WHERE (? IS NULL OR e.ingested_at <= ?)
+             ORDER BY e.event_id",
+        )?;
+        let rows = statement.query_map(params![as_of, as_of], |row| {
+            let raw = raw_event_from_row(row)?;
+            let category: String = row.get(11)?;
+            Ok((raw, source_category(category)))
+        })?;
+        rows.collect::<duckdb::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|(raw, category)| raw.try_into().map(|event| (event, category)))
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    pub fn store_claim(&mut self, claim: &ClaimRecord) -> Result<(), StoreError> {
+        if claim.claim_text.trim().is_empty() || claim.extraction_run_id.trim().is_empty() {
+            return Err(StoreError::InvalidEvent);
+        }
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO nip_claims (claim_id, claim_text, speaker_or_author, confidence_millis,
+                extraction_run_id, provider, model, prompt_version, extracted_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (claim_id) DO UPDATE SET claim_text = excluded.claim_text,
+                speaker_or_author = excluded.speaker_or_author,
+                confidence_millis = excluded.confidence_millis,
+                extraction_run_id = excluded.extraction_run_id,
+                provider = excluded.provider, model = excluded.model,
+                prompt_version = excluded.prompt_version, extracted_at = excluded.extracted_at",
+            params![
+                claim.claim_id,
+                claim.claim_text,
+                claim.speaker_or_author,
+                claim.confidence_millis as i32,
+                claim.extraction_run_id,
+                claim.provider,
+                claim.model,
+                claim.prompt_version,
+                claim.extracted_at,
+            ],
+        )?;
+        for evidence in &claim.evidence {
+            transaction.execute(
+                "INSERT INTO nip_claim_evidence (claim_id, event_id, quote, start_offset, end_offset)
+                 VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT (claim_id, event_id) DO UPDATE SET quote = excluded.quote,
+                    start_offset = excluded.start_offset, end_offset = excluded.end_offset",
+                params![
+                    claim.claim_id,
+                    evidence.event_id.as_str(),
+                    evidence.quote,
+                    evidence.start_offset.map(|value| value as i32),
+                    evidence.end_offset.map(|value| value as i32),
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn claims(&self) -> Result<Vec<ClaimRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT claim_id, claim_text, speaker_or_author, confidence_millis,
+                    extraction_run_id, provider, model, prompt_version, extracted_at
+             FROM nip_claims ORDER BY extracted_at, claim_id",
+        )?;
+        let mut claims = Vec::new();
+        for row in statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get(2)?,
+                row.get::<_, i32>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get(8)?,
+            ))
+        })? {
+            let (
+                claim_id,
+                claim_text,
+                speaker,
+                confidence,
+                run,
+                provider,
+                model,
+                prompt,
+                extracted_at,
+            ) = row?;
+            let mut evidence_statement = self.connection.prepare(
+                "SELECT event_id, quote, start_offset, end_offset FROM nip_claim_evidence WHERE claim_id = ? ORDER BY event_id",
+            )?;
+            let evidence_rows = evidence_statement
+                .query_map(params![claim_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<i32>>(2)?,
+                        row.get::<_, Option<i32>>(3)?,
+                    ))
+                })?
+                .collect::<duckdb::Result<Vec<_>>>()?;
+            let evidence = evidence_rows
+                .into_iter()
+                .map(|(event_id, quote, start_offset, end_offset)| {
+                    Ok(nip_domain::ClaimEvidence {
+                        event_id: nip_domain::EventId::new(event_id)
+                            .map_err(|_| StoreError::InvalidEvent)?,
+                        quote,
+                        start_offset: start_offset.map(|v| v as u32),
+                        end_offset: end_offset.map(|v| v as u32),
+                    })
+                })
+                .collect::<Result<Vec<_>, StoreError>>()?;
+            claims.push(ClaimRecord {
+                claim_id,
+                claim_text,
+                speaker_or_author: speaker,
+                confidence_millis: confidence.clamp(0, 1000) as u16,
+                extraction_run_id: run,
+                provider,
+                model,
+                prompt_version: prompt,
+                extracted_at,
+                evidence,
+            });
+        }
+        Ok(claims)
+    }
+
+    pub fn all_events(&self) -> Result<Vec<EventRecord>, StoreError> {
+        let page = self.search_events(&EventSearchQuery {
+            text: None,
+            source_id: None,
+            as_of: None,
+            cursor: None,
+            limit: 200,
+        })?;
+        Ok(page.events)
+    }
+
+    pub fn save_embedding_manifest(
+        &mut self,
+        manifest: &EmbeddingIndexManifest,
+    ) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT INTO nip_embedding_indexes
+             (index_id, model_id, model_revision, dimensions, chunking_version, collection_name,
+              status, event_count, created_at, completed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (index_id) DO UPDATE SET status = excluded.status,
+                event_count = excluded.event_count, completed_at = excluded.completed_at",
+            params![
+                manifest.index_id,
+                manifest.model_id,
+                manifest.model_revision,
+                manifest.dimensions as i32,
+                manifest.chunking_version,
+                manifest.collection_name,
+                manifest.status,
+                manifest.event_count as i32,
+                manifest.created_at,
+                manifest.completed_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn embedding_manifests(&self) -> Result<Vec<EmbeddingIndexManifest>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT index_id, model_id, model_revision, dimensions, chunking_version,
+                    collection_name, status, event_count, created_at, completed_at
+             FROM nip_embedding_indexes ORDER BY created_at DESC, index_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(EmbeddingIndexManifest {
+                index_id: row.get(0)?,
+                model_id: row.get(1)?,
+                model_revision: row.get(2)?,
+                dimensions: row.get::<_, i32>(3)?.max(0) as u32,
+                chunking_version: row.get(4)?,
+                collection_name: row.get(5)?,
+                status: row.get(6)?,
+                event_count: row.get::<_, i32>(7)?.max(0) as u32,
+                created_at: row.get(8)?,
+                completed_at: row.get(9)?,
+            })
+        })?;
+        rows.collect::<duckdb::Result<Vec<_>>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn replace_clusters(&mut self, clusters: &[NarrativeCluster]) -> Result<(), StoreError> {
+        let transaction = self.connection.transaction()?;
+        transaction.execute("DELETE FROM nip_cluster_memberships", [])?;
+        transaction.execute("DELETE FROM nip_narrative_clusters", [])?;
+        for cluster in clusters {
+            transaction.execute(
+                "INSERT INTO nip_narrative_clusters
+                 (cluster_id, derivation_run_id, label, algorithm_version, member_count, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+                params![
+                    cluster.cluster_id,
+                    cluster.derivation_run_id,
+                    cluster.label,
+                    cluster.algorithm_version,
+                    cluster.member_count as i32,
+                    cluster.created_at
+                ],
+            )?;
+            for member in &cluster.members {
+                transaction.execute(
+                    "INSERT INTO nip_cluster_memberships
+                     (derivation_run_id, cluster_id, event_id, similarity_millis, rank)
+                     VALUES (?, ?, ?, ?, ?)",
+                    params![
+                        cluster.derivation_run_id,
+                        cluster.cluster_id,
+                        member.event_id.as_str(),
+                        member.similarity_millis as i32,
+                        member.rank as i32
+                    ],
+                )?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn clusters(&self) -> Result<Vec<NarrativeCluster>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT cluster_id, derivation_run_id, label, algorithm_version, member_count, created_at
+             FROM nip_narrative_clusters ORDER BY derivation_run_id, cluster_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i32>(4)?,
+                row.get(5)?,
+            ))
+        })?;
+        let mut clusters = Vec::new();
+        for row in rows {
+            let (cluster_id, run, label, algorithm, count, created_at) = row?;
+            let mut members_statement = self.connection.prepare(
+                "SELECT event_id, similarity_millis, rank FROM nip_cluster_memberships
+                 WHERE derivation_run_id = ? AND cluster_id = ? ORDER BY rank, event_id",
+            )?;
+            let members = members_statement
+                .query_map(params![run, cluster_id], |member| {
+                    Ok(NarrativeClusterMember {
+                        event_id: nip_domain::EventId::new(member.get::<_, String>(0)?).map_err(
+                            |_| {
+                                duckdb::Error::ToSqlConversionFailure(Box::new(
+                                    std::io::Error::other("invalid event id"),
+                                ))
+                            },
+                        )?,
+                        similarity_millis: member.get::<_, i32>(1)?.clamp(0, 1000) as u16,
+                        rank: member.get::<_, i32>(2)?.max(0) as u32,
+                    })
+                })?
+                .collect::<duckdb::Result<Vec<_>>>()?;
+            clusters.push(NarrativeCluster {
+                cluster_id,
+                derivation_run_id: run,
+                label,
+                algorithm_version: algorithm,
+                member_count: count.max(0) as u32,
+                created_at,
+                members,
+            });
+        }
+        Ok(clusters)
+    }
+
+    pub fn save_graph(&mut self, graph: &NarrativeGraph) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT INTO nip_graph_projections (graph_id, derivation_run_id, algorithm_version, created_at, graph_json)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (graph_id) DO UPDATE SET derivation_run_id = excluded.derivation_run_id,
+                algorithm_version = excluded.algorithm_version, created_at = excluded.created_at,
+                graph_json = excluded.graph_json",
+            params![
+                graph.graph_id,
+                graph.derivation_run_id,
+                graph.algorithm_version,
+                graph.created_at,
+                serde_json::to_string(graph)?
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn latest_graph(&self) -> Result<Option<NarrativeGraph>, StoreError> {
+        let value: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT graph_json FROM nip_graph_projections ORDER BY created_at DESC, graph_id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        value
+            .map(|json| serde_json::from_str(&json).map_err(StoreError::SnapshotJson))
+            .transpose()
+    }
+
+    fn event_by_id(&self, event_id: &str) -> Result<Option<EventRecord>, StoreError> {
+        self.connection.query_row(
+            "SELECT event_id, source_id, source_native_id, canonical_url, content_hash,
+                    content_text, published_at, source_updated_at, captured_at, ingested_at, revision_of
+             FROM nip_events WHERE event_id = ?",
+            params![event_id], raw_event_from_row,
+        ).optional()?.map(TryInto::try_into).transpose()
+    }
+
     #[cfg(test)]
     fn has_table(&self, table: &str) -> Result<bool, StoreError> {
         let count: i64 = self.connection.query_row(
@@ -276,6 +1068,22 @@ fn apply_migrations(connection: &mut Connection) -> Result<u32, StoreError> {
     if current_version < 2 {
         apply_migration(connection, 2, "podcast_feeds", MIGRATION_2)?;
     }
+    if current_version < 3 {
+        apply_migration(connection, 3, "podcast_transcripts", MIGRATION_3)?;
+    }
+    if current_version < 4 {
+        apply_migration(connection, 4, "claims", MIGRATION_4)?;
+    }
+    if current_version < 5 {
+        apply_migration(connection, 5, "semantic_indexes", MIGRATION_5)?;
+        current_version = 5;
+    }
+    if current_version < 6 {
+        apply_migration(connection, 6, "phase3_research", MIGRATION_6)?;
+    }
+    if current_version < 7 {
+        apply_migration(connection, 7, "phase2_graph", MIGRATION_7)?;
+    }
     Ok(LATEST_SCHEMA_VERSION)
 }
 
@@ -292,6 +1100,51 @@ fn apply_migration(
         params![version, name],
     )?;
     transaction.commit()?;
+    Ok(())
+}
+
+fn sql_string_literal(path: &Path) -> String {
+    path.to_string_lossy().replace('\'', "''")
+}
+
+fn snapshot_digest(root: &Path) -> Result<(u64, String), StoreError> {
+    let mut files = Vec::new();
+    collect_snapshot_files(root, root, &mut files)?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut digest = Sha256::new();
+    for (relative, path) in &files {
+        digest.update(relative.as_bytes());
+        digest.update([0]);
+        digest.update(fs::read(path).map_err(StoreError::SnapshotIo)?);
+    }
+    Ok((files.len() as u64, format!("{:x}", digest.finalize())))
+}
+
+fn collect_snapshot_files(
+    root: &Path,
+    directory: &Path,
+    files: &mut Vec<(String, PathBuf)>,
+) -> Result<(), StoreError> {
+    let mut entries = fs::read_dir(directory)
+        .map_err(StoreError::SnapshotIo)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::SnapshotIo)?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_snapshot_files(root, &path, files)?;
+        } else if path.file_name().and_then(|name| name.to_str())
+            != Some("nip-snapshot-manifest.json")
+        {
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| StoreError::InvalidSnapshotPath)?
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/");
+            files.push((relative, path));
+        }
+    }
     Ok(())
 }
 
@@ -341,6 +1194,88 @@ fn stable_episode_id(source_id: &str, identity_key: &str) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     format!("episode-{}", &hex[..32])
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+struct RawEvent {
+    event_id: String,
+    source_id: String,
+    source_native_id: Option<String>,
+    canonical_url: Option<String>,
+    content_hash: String,
+    content_text: Option<String>,
+    published_at: Option<DateTime<Utc>>,
+    source_updated_at: Option<DateTime<Utc>>,
+    captured_at: DateTime<Utc>,
+    ingested_at: DateTime<Utc>,
+    revision_of: Option<String>,
+}
+
+fn source_category(source_type: String) -> String {
+    match source_type.as_str() {
+        "podcast" => "podcast",
+        "news" => "news",
+        "corporate" => "corporate",
+        "community" => "community",
+        _ => "other",
+    }
+    .to_owned()
+}
+
+fn valid_ticker(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed.len() <= 12
+        && trimmed.chars().all(|character| {
+            character.is_ascii_uppercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '-')
+        })
+}
+fn raw_event_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<RawEvent> {
+    Ok(RawEvent {
+        event_id: row.get(0)?,
+        source_id: row.get(1)?,
+        source_native_id: row.get(2)?,
+        canonical_url: row.get(3)?,
+        content_hash: row.get(4)?,
+        content_text: row.get(5)?,
+        published_at: row.get(6)?,
+        source_updated_at: row.get(7)?,
+        captured_at: row.get(8)?,
+        ingested_at: row.get(9)?,
+        revision_of: row.get(10)?,
+    })
+}
+
+impl TryFrom<RawEvent> for EventRecord {
+    type Error = StoreError;
+
+    fn try_from(raw: RawEvent) -> Result<Self, Self::Error> {
+        Ok(Self {
+            schema_version: 1,
+            event_id: nip_domain::EventId::new(raw.event_id)
+                .map_err(|_| StoreError::InvalidEvent)?,
+            source_id: SourceId::new(raw.source_id).map_err(|_| StoreError::InvalidEvent)?,
+            source_native_id: raw.source_native_id,
+            canonical_url: raw.canonical_url,
+            content_hash: raw.content_hash,
+            content_text: raw.content_text,
+            times: nip_domain::EventTimes {
+                published_at: raw.published_at,
+                source_updated_at: raw.source_updated_at,
+                captured_at: raw.captured_at,
+                ingested_at: raw.ingested_at,
+            },
+            revision_of: raw
+                .revision_of
+                .and_then(|id| nip_domain::EventId::new(id).ok()),
+        })
+    }
 }
 
 struct RawSubscription {
@@ -493,7 +1428,7 @@ mod tests {
 
         {
             let store = Store::open(&path).unwrap();
-            assert_eq!(store.schema_version(), 2);
+            assert_eq!(store.schema_version(), 7);
             assert!(store.has_table("nip_schema_migrations").unwrap());
             assert!(store.has_table("nip_sources").unwrap());
             assert!(store.has_table("nip_events").unwrap());
@@ -503,14 +1438,14 @@ mod tests {
         }
 
         let reopened = Store::open(&path).unwrap();
-        assert_eq!(reopened.schema_version(), 2);
+        assert_eq!(reopened.schema_version(), 7);
         let migration_count: i64 = reopened
             .connection
             .query_row("SELECT COUNT(*) FROM nip_schema_migrations", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 2);
+        assert_eq!(migration_count, 7);
     }
 
     #[test]
@@ -539,7 +1474,7 @@ mod tests {
         drop(connection);
 
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version(), 2);
+        assert_eq!(store.schema_version(), 7);
         assert!(store.has_table("nip_events").unwrap());
         assert!(store.has_table("nip_podcast_subscriptions").unwrap());
     }
@@ -640,6 +1575,94 @@ mod tests {
     }
 
     #[test]
+    fn transcript_commit_is_atomic_and_marks_episode_transcribed() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let subscription = subscription("feed-transcript");
+        store.add_approved_subscription(&subscription).unwrap();
+        let episode = episode("feed-transcript", Some("guid-1"), None);
+        assert_eq!(
+            store
+                .record_discovered_episodes(std::slice::from_ref(&episode))
+                .unwrap(),
+            1
+        );
+        let transcript = PodcastTranscript {
+            source_id: episode.source_id.clone(),
+            source_native_id: episode.source_native_id.clone(),
+            canonical_url: episode.canonical_url.clone(),
+            transcript_text: "reviewed transcript".into(),
+            content_hash: "hash-1".into(),
+            detected_language: Some("en".into()),
+            provenance_json: "{\"provider\":\"fake\"}".into(),
+            transcribed_at: "2026-11-16T09:02:00Z".parse().unwrap(),
+        };
+        store.store_transcript(&episode, &transcript).unwrap();
+        store.store_transcript(&episode, &transcript).unwrap();
+        assert_eq!(
+            store.discovered_episodes(&episode.source_id).unwrap()[0].state,
+            PodcastEpisodeState::Transcribed
+        );
+        let count: i64 = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM nip_podcast_transcripts", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn parquet_snapshot_round_trip_preserves_events_and_manifest() {
+        let temp = tempdir().unwrap();
+        let source_path = temp.path().join("source.duckdb");
+        let mut source = Store::open(&source_path).unwrap();
+        let captured_at = "2026-11-16T09:00:00Z".parse().unwrap();
+        source
+            .import_local_event(
+                &LocalEventImport {
+                    source_id: SourceId::new("manual-source").unwrap(),
+                    source_display_name: "Rights-cleared fixture".into(),
+                    source_native_id: Some("fixture-1".into()),
+                    canonical_url: Some("https://example.test/fixture-1".into()),
+                    title: Some("Fixture event".into()),
+                    content_text: "A retained event for snapshot testing.".into(),
+                    published_at: Some("2026-11-15T12:00:00Z".parse().unwrap()),
+                    source_updated_at: None,
+                    rights_statement: "User confirmed rights for this fixture".into(),
+                    user_confirmed_rights: true,
+                },
+                captured_at,
+            )
+            .unwrap();
+        let (snapshot, manifest) = source
+            .export_parquet_snapshot(temp.path().join("lake"))
+            .unwrap();
+        assert_eq!(manifest.event_count, 1);
+        assert!(snapshot.join("nip-snapshot-manifest.json").exists());
+
+        let restored_path = temp.path().join("restored.duckdb");
+        let restored_manifest = Store::restore_parquet_snapshot(&snapshot, &restored_path).unwrap();
+        assert_eq!(restored_manifest, manifest);
+        let restored = Store::open(&restored_path).unwrap();
+        let events = restored
+            .search_events(&EventSearchQuery {
+                text: Some("retained event".into()),
+                source_id: None,
+                as_of: None,
+                cursor: None,
+                limit: 10,
+            })
+            .unwrap()
+            .events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].content_hash,
+            hex_digest(b"A retained event for snapshot testing.")
+        );
+    }
+
+    #[test]
     fn refuses_to_open_a_database_with_a_future_schema() {
         let temp = tempdir().unwrap();
         let path = temp.path().join("future.duckdb");
@@ -664,7 +1687,7 @@ mod tests {
             error,
             StoreError::FutureSchema {
                 found: 99,
-                supported: 2
+                supported: 7
             }
         ));
     }

@@ -106,6 +106,11 @@ pub fn get_tac_engine_path(app: AppHandle) -> Result<String, String> {
     resolve_engine_binary(Some(&app), "TAC_ENGINE_BIN", "tac-engine", "tac-engine")
 }
 
+#[tauri::command]
+pub fn get_nip_engine_path(app: AppHandle) -> Result<String, String> {
+    resolve_engine_binary(Some(&app), "NIP_ENGINE_BIN", "..", "nip-engine")
+}
+
 /// Parse a `.env` file: `KEY=VALUE` lines, `#` comments, optional quotes and an
 /// optional `export ` prefix. Blank/malformed lines are skipped.
 pub fn parse_dotenv(contents: &str) -> Vec<(String, String)> {
@@ -304,6 +309,42 @@ pub async fn tac_mcp_call_tool(
 #[tauri::command]
 pub fn tac_mcp_reset(state: State<'_, McpState>) -> Result<(), String> {
     state.runtime.try_reset("tac");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn nip_mcp_list_tools(
+    app: AppHandle,
+    state: State<'_, McpState>,
+) -> Result<Value, String> {
+    let binary = get_nip_engine_path(app)?;
+    let mcp = state.runtime.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (server, version, tools) = mcp.list_tools("nip", &binary)?;
+        Ok::<Value, String>(json!({ "server": server, "version": version, "tools": tools }))
+    })
+    .await
+    .map_err(|e| format!("MCP worker failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn nip_mcp_call_tool(
+    app: AppHandle,
+    state: State<'_, McpState>,
+    name: String,
+    arguments: Option<Value>,
+) -> Result<crate::mcp::McpCallResult, String> {
+    let binary = get_nip_engine_path(app)?;
+    let mcp = state.runtime.clone();
+    let arguments = arguments.unwrap_or_else(|| json!({}));
+    tauri::async_runtime::spawn_blocking(move || mcp.call_tool("nip", &binary, &name, arguments))
+        .await
+        .map_err(|e| format!("MCP worker failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn nip_mcp_reset(state: State<'_, McpState>) -> Result<(), String> {
+    state.runtime.try_reset("nip");
     Ok(())
 }
 
