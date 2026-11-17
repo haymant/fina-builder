@@ -45,8 +45,50 @@ export interface NipClaim {
   provider: string
   model: string
   prompt_version: string
+  provider_kind?: string | null
+  provider_profile_id?: string | null
+  reasoning_effort?: string | null
   extracted_at: string
   evidence: NipClaimEvidence[]
+}
+
+export interface NipProviderStatus {
+  configured: boolean
+  bridge_state: 'not_configured' | 'unavailable' | 'ready' | string
+  provider_kind: string | null
+  provider_id: string | null
+  model: string | null
+  reasoning_effort: string | null
+  provider_api: string | null
+  remote: boolean
+  consent: 'granted' | 'missing' | 'revoked' | 'not_required' | string
+  consent_recorded_at: string | null
+  disclosure: string | null
+  extraction_state: 'available' | 'consent_required' | 'unavailable' | string
+  warnings: string[]
+}
+
+export interface NipProviderConsent {
+  consent_id: string
+  action: 'granted' | 'revoked' | string
+  provider_kind: string
+  provider_id: string | null
+  model: string
+  scope: string
+  disclosure: string
+  actor: string
+  reason: string | null
+  recorded_at: string
+}
+
+export interface NipEditorialReviewAudit {
+  review_id: string
+  candidate_id: string
+  review_status: string
+  review_reason: string
+  reviewer: string
+  reviewed_at: string
+  recorded_at: string
 }
 
 export interface NipApiError {

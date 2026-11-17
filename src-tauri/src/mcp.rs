@@ -188,6 +188,22 @@ impl Drop for McpProcess {
     }
 }
 
+/// Merge shared and server-specific environment entries. Server-specific values
+/// replace a shared value for the same key; the child process still inherits the
+/// parent environment through `Command`.
+fn merge_env(
+    shared: Vec<(String, String)>,
+    specific: Vec<(String, String)>,
+) -> Vec<(String, String)> {
+    let mut merged: HashMap<String, String> = shared.into_iter().collect();
+    for (key, value) in specific {
+        merged.insert(key, value);
+    }
+    let mut entries: Vec<(String, String)> = merged.into_iter().collect();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    entries
+}
+
 /// Registry of named MCP stdio connections owned by the Tauri runtime.
 ///
 /// `riga` is `riga-mcp`; `tac` is `tac-engine`. Each server is spawned lazily
@@ -198,6 +214,10 @@ pub struct McpRuntime {
     /// Extra environment (loaded from `.env` files) forwarded to child servers.
     /// Process env always wins; this only fills gaps.
     env: OnceLock<Vec<(String, String)>>,
+    /// Server-specific environment (for example NIP's bridge token). It is
+    /// merged over the shared environment for that named server only, so a
+    /// credential injected for NIP never reaches RIGA or TAC.
+    server_env: Mutex<HashMap<String, Vec<(String, String)>>>,
 }
 
 impl McpRuntime {
@@ -206,8 +226,23 @@ impl McpRuntime {
         let _ = self.env.set(env);
     }
 
-    fn child_env(&self) -> Vec<(String, String)> {
-        self.env.get().cloned().unwrap_or_default()
+    /// Attach environment variables to one named server. Replacing the map does
+    /// not restart an already-running child; call `try_reset` first.
+    pub fn configure_server_env(&self, server: &str, env: Vec<(String, String)>) {
+        if let Ok(mut guard) = self.server_env.lock() {
+            guard.insert(server.to_string(), env);
+        }
+    }
+
+    fn child_env(&self, server: &str) -> Vec<(String, String)> {
+        merge_env(
+            self.env.get().cloned().unwrap_or_default(),
+            self.server_env
+                .lock()
+                .ok()
+                .and_then(|guard| guard.get(server).cloned())
+                .unwrap_or_default(),
+        )
     }
 
     fn with_process<F, R>(&self, server: &str, binary: &str, run: F) -> Result<R, String>
@@ -221,7 +256,7 @@ impl McpRuntime {
         if !guard.contains_key(server) {
             guard.insert(
                 server.to_string(),
-                McpProcess::spawn(binary, &self.child_env())?,
+                McpProcess::spawn(binary, &self.child_env(server))?,
             );
         }
         let process = guard.get_mut(server).ok_or("MCP process is unavailable")?;
@@ -376,6 +411,69 @@ mod tests {
             }
         }
         None
+    }
+
+    #[test]
+    fn server_specific_environment_overrides_shared_values_without_leaking() {
+        let merged = merge_env(
+            vec![
+                ("NIP_DATA_DIR".into(), "shared".into()),
+                ("TAC_LAKE_DIR".into(), "/tac".into()),
+            ],
+            vec![
+                ("NIP_DATA_DIR".into(), "nip-only".into()),
+                ("NIP_RIGA_BRIDGE_TOKEN".into(), "fixture-token".into()),
+            ],
+        );
+        let map: HashMap<_, _> = merged.into_iter().collect();
+        assert_eq!(
+            map.get("NIP_DATA_DIR").map(String::as_str),
+            Some("nip-only")
+        );
+        assert_eq!(map.get("TAC_LAKE_DIR").map(String::as_str), Some("/tac"));
+        assert_eq!(
+            map.get("NIP_RIGA_BRIDGE_TOKEN").map(String::as_str),
+            Some("fixture-token")
+        );
+        let nip_only = merge_env(
+            Vec::new(),
+            vec![("NIP_RIGA_BRIDGE_TOKEN".into(), "fixture-token".into())],
+        );
+        let shared = merge_env(Vec::new(), Vec::new());
+        assert_eq!(shared.len(), 0);
+        assert_eq!(nip_only.len(), 1);
+    }
+
+    #[test]
+    fn restarting_the_app_replaces_the_nip_bridge_token_for_the_nip_server_only() {
+        let runtime = McpRuntime::default();
+        runtime.configure_server_env(
+            "nip",
+            vec![("NIP_RIGA_BRIDGE_TOKEN".into(), "first-run-token".into())],
+        );
+        runtime.configure_env(vec![("TAC_LAKE_DIR".into(), "/tac".into())]);
+        let first: HashMap<_, _> = runtime.child_env("nip").into_iter().collect();
+        assert_eq!(
+            first.get("NIP_RIGA_BRIDGE_TOKEN").map(String::as_str),
+            Some("first-run-token")
+        );
+
+        // A new app process starts a new loopback bridge and rotates the token.
+        runtime.configure_server_env(
+            "nip",
+            vec![("NIP_RIGA_BRIDGE_TOKEN".into(), "second-run-token".into())],
+        );
+        let second: HashMap<_, _> = runtime.child_env("nip").into_iter().collect();
+        assert_eq!(
+            second.get("NIP_RIGA_BRIDGE_TOKEN").map(String::as_str),
+            Some("second-run-token")
+        );
+        assert_eq!(second.get("TAC_LAKE_DIR").map(String::as_str), Some("/tac"));
+        let other: HashMap<_, _> = runtime.child_env("riga").into_iter().collect();
+        assert!(
+            !other.contains_key("NIP_RIGA_BRIDGE_TOKEN"),
+            "the rotated token must never reach a non-NIP child"
+        );
     }
 
     #[test]

@@ -1,17 +1,19 @@
 pub mod asr;
 pub mod config;
 pub mod podcast;
+pub mod provider;
 pub mod semantic;
 
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use nip_domain::{
-    CapabilitiesResponse, ClaimEvidence, ClaimRecord, EditorialCandidate, EmbeddingIndexManifest,
-    EtfMapping, EventRecord, EventSearchPage, EventSearchQuery, ExtractionStatus,
-    FeatureCapabilities, HealthResponse, LocalEventImport, NarrativeCluster, NarrativeGraph,
-    NarrativeGraphEdge, NarrativeGraphNode, NarrativeSignal, NarrativeSignalSnapshot,
-    PodcastEpisode, PodcastEpisodeState, PodcastRefreshReport, PodcastSubscription,
-    PodcastSubscriptionState, PodcastTranscript, Readiness, ResourceStatus, SemanticSearchResult,
-    SourceId, API_VERSION, DOMAIN_SCHEMA_VERSION, SERVICE_NAME,
+    CapabilitiesResponse, ClaimEvidence, ClaimRecord, EditorialCandidate, EditorialReviewAudit,
+    EmbeddingIndexManifest, EtfMapping, EventRecord, EventSearchPage, EventSearchQuery,
+    ExtractionStatus, FeatureCapabilities, HealthResponse, LocalEventImport, NarrativeCluster,
+    NarrativeGraph, NarrativeGraphEdge, NarrativeGraphNode, NarrativeSignal,
+    NarrativeSignalSnapshot, PodcastEpisode, PodcastEpisodeState, PodcastRefreshReport,
+    PodcastSubscription, PodcastSubscriptionState, PodcastTranscript, ProviderConsent,
+    ProviderStatus, Readiness, ResourceStatus, SemanticSearchResult, SourceId, API_VERSION,
+    DOMAIN_SCHEMA_VERSION, SERVICE_NAME,
 };
 use nip_store::{SnapshotManifest, Store, StoreError, SubscriptionFetchStateUpdate};
 use serde::{Deserialize, Serialize};
@@ -19,6 +21,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fs,
+    sync::atomic::{AtomicU64, Ordering},
 };
 use thiserror::Error;
 
@@ -28,6 +31,7 @@ use podcast::{
     parse_rss_feed, scheduled_next_poll, validate_feed_url, AudioClient, FeedClient, FeedRequest,
     FeedValidationError,
 };
+use provider::{RigaBridgeClaimProvider, RigaBridgeProviderStatus, REMOTE_EXTRACTION_SCOPE};
 use semantic::{cluster_events, event_map, manifest, EmbeddingProvider, QdrantIndex};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +70,9 @@ impl ClaimExtractionProvider for DeterministicFakeClaimProvider {
             provider: "deterministic_fake".into(),
             model: "fixture-claims-v1".into(),
             prompt_version: "nip-claims-v1".into(),
+            provider_kind: Some("local".into()),
+            provider_profile_id: None,
+            reasoning_effort: None,
             extracted_at: Utc::now(),
             evidence: vec![ClaimEvidence {
                 event_id: event.event_id.clone(),
@@ -113,6 +120,16 @@ pub enum NipError {
     UnsupportedAudio,
     #[error("semantic search is unavailable; configure a local embedding provider and Qdrant")]
     SemanticUnavailable,
+    #[error("event was not found in the local ledger")]
+    EventNotFound,
+    #[error("the configured RIGA provider is unavailable")]
+    ProviderUnavailable,
+    #[error("remote transcript extraction requires NIP-specific consent for the selected provider/model")]
+    RemoteConsentRequired,
+    #[error("no remote provider is configured; remote consent does not apply")]
+    RemoteProviderRequired,
+    #[error("remote consent requires a non-empty acting user")]
+    InvalidConsentRequest,
 }
 
 /// Owns startup configuration and the local canonical store. Business logic
@@ -148,7 +165,7 @@ impl NipService {
                 duckdb_store: true,
                 podcast_rss_subscriptions: true,
                 local_audio_transcription: false,
-                claim_extraction: false,
+                claim_extraction: self.config.riga_bridge().is_some(),
                 parquet_export: true,
                 semantic_search: true,
             },
@@ -410,6 +427,276 @@ impl NipService {
             self.store.store_claim(claim)?;
         }
         Ok(claims)
+    }
+
+    /// Safe provider/consent view for the workspace. A missing or unreachable
+    /// bridge is reported explicitly; NIP never substitutes a different model or
+    /// falls back to the deterministic fake provider.
+    pub fn provider_status(&self) -> Result<ProviderStatus, NipError> {
+        let Some(bridge) = self.bridge_provider() else {
+            return Ok(ProviderStatus {
+                configured: false,
+                bridge_state: "not_configured".into(),
+                provider_kind: None,
+                provider_id: None,
+                model: None,
+                reasoning_effort: None,
+                provider_api: None,
+                remote: false,
+                consent: "not_required".into(),
+                consent_recorded_at: None,
+                disclosure: None,
+                extraction_state: "unavailable".into(),
+                warnings: vec!["riga_bridge_not_configured".into()],
+            });
+        };
+        let status = match bridge.provider_status() {
+            Ok(status) => status,
+            Err(_) => {
+                return Ok(ProviderStatus {
+                    configured: false,
+                    bridge_state: "unavailable".into(),
+                    provider_kind: None,
+                    provider_id: None,
+                    model: None,
+                    reasoning_effort: None,
+                    provider_api: None,
+                    remote: false,
+                    consent: "not_required".into(),
+                    consent_recorded_at: None,
+                    disclosure: None,
+                    extraction_state: "unavailable".into(),
+                    warnings: vec!["riga_bridge_unavailable".into()],
+                })
+            }
+        };
+        self.status_from_bridge(status)
+    }
+
+    fn status_from_bridge(
+        &self,
+        status: RigaBridgeProviderStatus,
+    ) -> Result<ProviderStatus, NipError> {
+        let mut warnings = status.warnings.clone();
+        let remote = status.remote();
+        let (consent, consent_recorded_at, disclosure) = if !status.configured {
+            warnings.push("provider_not_configured".into());
+            ("not_required".to_owned(), None, None)
+        } else if !remote {
+            ("not_required".to_owned(), None, None)
+        } else {
+            let model = status.model.clone().unwrap_or_default();
+            match self.store.latest_provider_consent(
+                "remote",
+                status.provider_id.as_deref(),
+                &model,
+                REMOTE_EXTRACTION_SCOPE,
+            )? {
+                Some(consent) if consent.action == "granted" => (
+                    "granted".to_owned(),
+                    Some(consent.recorded_at),
+                    Some(consent.disclosure),
+                ),
+                Some(consent) => {
+                    warnings.push("remote_consent_revoked".into());
+                    (
+                        "revoked".to_owned(),
+                        Some(consent.recorded_at),
+                        Some(consent.disclosure),
+                    )
+                }
+                None => {
+                    warnings.push("remote_consent_missing".into());
+                    (
+                        "missing".to_owned(),
+                        None,
+                        Some(status.consent_disclosure()),
+                    )
+                }
+            }
+        };
+        let extraction_state = if !status.configured || status.model.is_none() {
+            "unavailable"
+        } else if remote && consent != "granted" {
+            "consent_required"
+        } else {
+            "available"
+        };
+        Ok(ProviderStatus {
+            configured: status.configured,
+            bridge_state: "ready".into(),
+            provider_kind: status.provider_kind,
+            provider_id: status.provider_id,
+            model: status.model,
+            reasoning_effort: status.reasoning_effort,
+            provider_api: status.provider_api,
+            remote,
+            consent,
+            consent_recorded_at,
+            disclosure,
+            extraction_state: extraction_state.into(),
+            warnings,
+        })
+    }
+
+    /// Grant consent for the exact remote provider/model currently selected in
+    /// RIGA. The audit row is append-only; switching profile or model requires
+    /// a new grant because the binding no longer matches.
+    pub fn grant_remote_consent(
+        &mut self,
+        actor: &str,
+        reason: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Result<ProviderConsent, NipError> {
+        let actor = actor.trim();
+        if actor.is_empty() {
+            return Err(NipError::InvalidConsentRequest);
+        }
+        let provider = self
+            .bridge_provider()
+            .ok_or(NipError::ProviderUnavailable)?;
+        let status = provider
+            .provider_status()
+            .map_err(|_| NipError::ProviderUnavailable)?;
+        if !status.configured || !status.remote() {
+            return Err(NipError::RemoteProviderRequired);
+        }
+        let model = status
+            .model
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(NipError::RemoteProviderRequired)?;
+        static CONSENT_COUNTER: AtomicU64 = AtomicU64::new(1);
+        let sequence = CONSENT_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let consent = ProviderConsent {
+            consent_id: format!(
+                "consent-{}-{}",
+                now.timestamp_millis(),
+                &transcript_hash(&format!(
+                    "grant\0{}\0{}\0{}\0{sequence}",
+                    status.provider_id.as_deref().unwrap_or("legacy"),
+                    model,
+                    actor
+                ))[..12]
+            ),
+            action: "granted".into(),
+            provider_kind: "remote".into(),
+            provider_id: status.provider_id.clone(),
+            model,
+            scope: REMOTE_EXTRACTION_SCOPE.into(),
+            disclosure: status.consent_disclosure(),
+            actor: actor.to_owned(),
+            reason: reason
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned),
+            recorded_at: now,
+        };
+        self.store.record_provider_consent(&consent)?;
+        Ok(consent)
+    }
+
+    pub fn revoke_remote_consent(
+        &mut self,
+        actor: &str,
+        reason: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Result<ProviderConsent, NipError> {
+        let actor = actor.trim();
+        if actor.is_empty() {
+            return Err(NipError::InvalidConsentRequest);
+        }
+        let provider = self
+            .bridge_provider()
+            .ok_or(NipError::ProviderUnavailable)?;
+        let status = provider
+            .provider_status()
+            .map_err(|_| NipError::ProviderUnavailable)?;
+        if !status.configured || !status.remote() {
+            return Err(NipError::RemoteProviderRequired);
+        }
+        let model = status
+            .model
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(NipError::RemoteProviderRequired)?;
+        static CONSENT_COUNTER: AtomicU64 = AtomicU64::new(1);
+        let sequence = CONSENT_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let consent = ProviderConsent {
+            consent_id: format!(
+                "consent-{}-{}",
+                now.timestamp_millis(),
+                &transcript_hash(&format!(
+                    "revoke\0{}\0{}\0{}\0{sequence}",
+                    status.provider_id.as_deref().unwrap_or("legacy"),
+                    model,
+                    actor
+                ))[..12]
+            ),
+            action: "revoked".into(),
+            provider_kind: "remote".into(),
+            provider_id: status.provider_id.clone(),
+            model,
+            scope: REMOTE_EXTRACTION_SCOPE.into(),
+            disclosure: status.consent_disclosure(),
+            actor: actor.to_owned(),
+            reason: reason
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned),
+            recorded_at: now,
+        };
+        self.store.record_provider_consent(&consent)?;
+        Ok(consent)
+    }
+
+    /// Extract claims from a retained event through the configured provider.
+    /// Remote extraction performs no provider request until consent exists for
+    /// the exact provider/model binding.
+    pub fn extract_claims_from_event(
+        &mut self,
+        event_id: &str,
+    ) -> Result<Vec<ClaimRecord>, NipError> {
+        let event = self.store.event(event_id)?.ok_or(NipError::EventNotFound)?;
+        let provider = self
+            .bridge_provider()
+            .ok_or(NipError::ProviderUnavailable)?;
+        let status = provider
+            .provider_status()
+            .map_err(|_| NipError::ProviderUnavailable)?;
+        if !status.configured {
+            return Err(NipError::ProviderUnavailable);
+        }
+        if status.remote() {
+            let model = status.model.clone().unwrap_or_default();
+            let consent = self.store.latest_provider_consent(
+                "remote",
+                status.provider_id.as_deref(),
+                &model,
+                REMOTE_EXTRACTION_SCOPE,
+            )?;
+            if consent.as_ref().map(|value| value.action.as_str()) != Some("granted") {
+                return Err(NipError::RemoteConsentRequired);
+            }
+        }
+        let claims = provider.extract_with_status(&event, &status)?;
+        for claim in &claims {
+            self.store.store_claim(claim)?;
+        }
+        Ok(claims)
+    }
+
+    fn bridge_provider(&self) -> Option<RigaBridgeClaimProvider> {
+        self.config
+            .riga_bridge()
+            .and_then(|bridge| RigaBridgeClaimProvider::new(bridge.url(), bridge.token()).ok())
+    }
+
+    pub fn editorial_review_audit(
+        &self,
+        candidate_id: &str,
+    ) -> Result<Vec<EditorialReviewAudit>, NipError> {
+        Ok(self.store.editorial_review_audit(candidate_id)?)
     }
 
     pub fn claims(&self) -> Result<Vec<ClaimRecord>, NipError> {
@@ -961,7 +1248,9 @@ fn observed_persistence(events: &[(EventRecord, String)], current_start: DateTim
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{json, Value};
     use std::collections::BTreeMap;
+    use std::thread;
     use tempfile::tempdir;
 
     #[test]
@@ -983,7 +1272,7 @@ mod tests {
         let health = service.health();
         assert_eq!(health.service, "nip-engine");
         assert_eq!(health.readiness, Readiness::Ready);
-        assert_eq!(health.schema_version, 7);
+        assert_eq!(health.schema_version, 8);
 
         let capabilities = service.capabilities();
         assert!(capabilities.features.duckdb_store);
@@ -1426,5 +1715,304 @@ mod tests {
         assert!(snapshot.signals.iter().all(|signal| signal
             .data_quality_flags
             .contains(&"coverage_manifest_missing".into())));
+    }
+
+    #[derive(Clone)]
+    struct BridgeFixture {
+        token: String,
+        status: std::sync::Arc<std::sync::Mutex<RigaBridgeProviderStatus>>,
+        extraction_requests: std::sync::Arc<AtomicU64>,
+        status_requests: std::sync::Arc<AtomicU64>,
+    }
+
+    fn remote_status(provider_id: &str, model: &str) -> RigaBridgeProviderStatus {
+        RigaBridgeProviderStatus {
+            configured: true,
+            provider_kind: Some("remote".into()),
+            provider_id: Some(provider_id.into()),
+            model: Some(model.into()),
+            reasoning_effort: Some("low".into()),
+            provider_api: Some("chat".into()),
+            provider_type: Some("open_ai_compatible".into()),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn start_bridge_fixture(status: RigaBridgeProviderStatus) -> (BridgeFixture, String) {
+        let fixture = BridgeFixture {
+            token: "fixture-bearer-token".into(),
+            status: std::sync::Arc::new(std::sync::Mutex::new(status)),
+            extraction_requests: std::sync::Arc::new(AtomicU64::new(0)),
+            status_requests: std::sync::Arc::new(AtomicU64::new(0)),
+        };
+        let server = fixture.clone();
+        let (address_tx, address_rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                    .await
+                    .unwrap();
+                let port = listener.local_addr().unwrap().port();
+                address_tx.send(port).unwrap();
+                let router = axum::Router::new()
+                    .route(
+                        "/provider_status",
+                        axum::routing::get(bridge_fixture_status),
+                    )
+                    .route(
+                        "/claims/extract",
+                        axum::routing::post(bridge_fixture_extract),
+                    )
+                    .with_state(server);
+                let _ = axum::serve(listener, router).await;
+            });
+        });
+        let port = address_rx.recv().unwrap();
+        (fixture, format!("http://127.0.0.1:{port}"))
+    }
+
+    fn authorized(headers: &axum::http::HeaderMap, token: &str) -> bool {
+        headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            == Some(&format!("Bearer {token}"))
+    }
+
+    async fn bridge_fixture_status(
+        axum::extract::State(state): axum::extract::State<BridgeFixture>,
+        headers: axum::http::HeaderMap,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        if !authorized(&headers, &state.token) {
+            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        }
+        state.status_requests.fetch_add(1, Ordering::Relaxed);
+        axum::Json(state.status.lock().unwrap().clone()).into_response()
+    }
+
+    async fn bridge_fixture_extract(
+        axum::extract::State(state): axum::extract::State<BridgeFixture>,
+        headers: axum::http::HeaderMap,
+        axum::Json(body): axum::Json<Value>,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        if !authorized(&headers, &state.token) {
+            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        }
+        state.extraction_requests.fetch_add(1, Ordering::Relaxed);
+        let status = state.status.lock().unwrap().clone();
+        let claim_text = body
+            .get("content_text")
+            .and_then(Value::as_str)
+            .and_then(|text| text.lines().next())
+            .unwrap_or("fixture claim")
+            .to_owned();
+        axum::Json(json!({
+            "extraction_run_id": "bridge-run-1",
+            "provider_kind": status.provider_kind,
+            "provider_id": status.provider_id,
+            "model": status.model,
+            "reasoning_effort": status.reasoning_effort,
+            "prompt_version": body.get("prompt_version"),
+            "claims": [{
+                "text": claim_text,
+                "speaker_or_author": "Fixture analyst",
+                "confidence_millis": 900,
+                "quote": body.get("content_text"),
+            }],
+        }))
+        .into_response()
+    }
+
+    fn service_with_bridge(root: &std::path::Path, bridge_url: &str, token: &str) -> NipService {
+        let config = NipConfig::resolve(
+            &BTreeMap::from([
+                (
+                    "NIP_DATA_DIR".to_owned(),
+                    root.join("data").to_string_lossy().into_owned(),
+                ),
+                ("NIP_RIGA_BRIDGE_URL".to_owned(), bridge_url.to_owned()),
+                ("NIP_RIGA_BRIDGE_TOKEN".to_owned(), token.to_owned()),
+            ]),
+            root,
+            None,
+            true,
+        )
+        .unwrap();
+        NipService::open(config).unwrap()
+    }
+
+    fn import_bridge_event(service: &mut NipService) -> EventRecord {
+        service
+            .import_local_event(
+                &LocalEventImport {
+                    source_id: SourceId::new("bridge-fixture").unwrap(),
+                    source_display_name: "Synthetic bridge fixture".into(),
+                    source_native_id: Some("bridge-event-1".into()),
+                    canonical_url: None,
+                    title: None,
+                    content_text: "Policy remains restrictive until inflation cools.".into(),
+                    published_at: Some("2026-11-16T12:00:00Z".parse().unwrap()),
+                    source_updated_at: None,
+                    rights_statement: "Synthetic fixture approved for local testing".into(),
+                    user_confirmed_rights: true,
+                },
+                "2026-11-17T09:00:00Z".parse().unwrap(),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn remote_extraction_makes_no_bridge_request_before_consent() {
+        let temp = tempdir().unwrap();
+        let (fixture, url) = start_bridge_fixture(remote_status("provider-a", "model-a"));
+        let mut service = service_with_bridge(temp.path(), &url, &fixture.token);
+        let event = import_bridge_event(&mut service);
+
+        let status = service.provider_status().unwrap();
+        assert!(status.configured);
+        assert_eq!(status.bridge_state, "ready");
+        assert_eq!(status.consent, "missing");
+        assert_eq!(status.extraction_state, "consent_required");
+        assert!(status.warnings.contains(&"remote_consent_missing".into()));
+        assert_eq!(fixture.extraction_requests.load(Ordering::Relaxed), 0);
+
+        let error = service
+            .extract_claims_from_event(event.event_id.as_str())
+            .unwrap_err();
+        assert!(matches!(error, NipError::RemoteConsentRequired));
+        assert_eq!(fixture.extraction_requests.load(Ordering::Relaxed), 0);
+        assert!(service.claims().unwrap().is_empty());
+
+        let consent = service
+            .grant_remote_consent(
+                "local-user",
+                Some("reviewed disclosure"),
+                "2026-11-17T10:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(consent.action, "granted");
+        assert_eq!(consent.provider_id.as_deref(), Some("provider-a"));
+        assert!(consent.disclosure.contains("model-a"));
+
+        let claims = service
+            .extract_claims_from_event(event.event_id.as_str())
+            .unwrap();
+        assert_eq!(fixture.extraction_requests.load(Ordering::Relaxed), 1);
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].provider, "riga_bridge");
+        assert_eq!(claims[0].provider_kind.as_deref(), Some("remote"));
+        assert_eq!(claims[0].provider_profile_id.as_deref(), Some("provider-a"));
+        assert_eq!(claims[0].model, "model-a");
+        assert_eq!(claims[0].reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(claims[0].prompt_version, provider::BRIDGE_PROMPT_VERSION);
+        assert_eq!(claims[0].evidence[0].event_id, event.event_id);
+        assert_eq!(service.claims().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn revoked_consent_blocks_remote_extraction_without_a_request() {
+        let temp = tempdir().unwrap();
+        let (fixture, url) = start_bridge_fixture(remote_status("provider-a", "model-a"));
+        let mut service = service_with_bridge(temp.path(), &url, &fixture.token);
+        let event = import_bridge_event(&mut service);
+        service
+            .grant_remote_consent("local-user", None, "2026-11-17T10:00:00Z".parse().unwrap())
+            .unwrap();
+        service
+            .revoke_remote_consent(
+                "local-user",
+                Some("user changed mind"),
+                "2026-11-17T10:05:00Z".parse().unwrap(),
+            )
+            .unwrap();
+
+        let status = service.provider_status().unwrap();
+        assert_eq!(status.consent, "revoked");
+        assert_eq!(status.extraction_state, "consent_required");
+        assert!(matches!(
+            service.extract_claims_from_event(event.event_id.as_str()),
+            Err(NipError::RemoteConsentRequired)
+        ));
+        assert_eq!(fixture.extraction_requests.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn local_provider_needs_no_remote_consent_and_records_provenance() {
+        let temp = tempdir().unwrap();
+        let mut status = remote_status("local-model", "qwen-local");
+        status.provider_kind = Some("local".into());
+        status.provider_id = None;
+        status.provider_api = None;
+        status.provider_type = None;
+        let (fixture, url) = start_bridge_fixture(status);
+        let mut service = service_with_bridge(temp.path(), &url, &fixture.token);
+        let event = import_bridge_event(&mut service);
+
+        let view = service.provider_status().unwrap();
+        assert!(view.configured);
+        assert!(!view.remote);
+        assert_eq!(view.consent, "not_required");
+        assert_eq!(view.extraction_state, "available");
+        assert!(matches!(
+            service.grant_remote_consent(
+                "local-user",
+                None,
+                "2026-11-17T10:00:00Z".parse().unwrap()
+            ),
+            Err(NipError::RemoteProviderRequired)
+        ));
+
+        let claims = service
+            .extract_claims_from_event(event.event_id.as_str())
+            .unwrap();
+        assert_eq!(fixture.extraction_requests.load(Ordering::Relaxed), 1);
+        assert_eq!(claims[0].provider_kind.as_deref(), Some("local"));
+        assert!(claims[0].provider_profile_id.is_none());
+    }
+
+    #[test]
+    fn changing_the_selected_model_rebinds_remote_consent() {
+        let temp = tempdir().unwrap();
+        let (fixture, url) = start_bridge_fixture(remote_status("provider-a", "model-a"));
+        let mut service = service_with_bridge(temp.path(), &url, &fixture.token);
+        let event = import_bridge_event(&mut service);
+        service
+            .grant_remote_consent("local-user", None, "2026-11-17T10:00:00Z".parse().unwrap())
+            .unwrap();
+        *fixture.status.lock().unwrap() = remote_status("provider-a", "model-b");
+
+        let status = service.provider_status().unwrap();
+        assert_eq!(status.model.as_deref(), Some("model-b"));
+        assert_eq!(status.consent, "missing");
+        assert_eq!(status.extraction_state, "consent_required");
+        assert!(matches!(
+            service.extract_claims_from_event(event.event_id.as_str()),
+            Err(NipError::RemoteConsentRequired)
+        ));
+        assert_eq!(fixture.extraction_requests.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn missing_bridge_reports_explicit_unavailable_state_without_fallback() {
+        let temp = tempdir().unwrap();
+        let mut service = service_at(temp.path());
+        let event = import_bridge_event(&mut service);
+
+        let status = service.provider_status().unwrap();
+        assert!(!status.configured);
+        assert_eq!(status.bridge_state, "not_configured");
+        assert_eq!(status.extraction_state, "unavailable");
+        assert!(status
+            .warnings
+            .contains(&"riga_bridge_not_configured".into()));
+        assert!(matches!(
+            service.extract_claims_from_event(event.event_id.as_str()),
+            Err(NipError::ProviderUnavailable)
+        ));
     }
 }

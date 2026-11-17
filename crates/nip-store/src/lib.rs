@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use duckdb::{params, Connection, OptionalExt};
 use nip_domain::{
-    ClaimRecord, EditorialCandidate, EmbeddingIndexManifest, EtfMapping, EventRecord,
-    EventSearchPage, EventSearchQuery, LocalEventImport, NarrativeCluster, NarrativeClusterMember,
-    NarrativeGraph, PodcastEpisode, PodcastEpisodeState, PodcastSubscription,
-    PodcastSubscriptionState, PodcastTranscript, SourceId,
+    ClaimRecord, EditorialCandidate, EditorialReviewAudit, EmbeddingIndexManifest, EtfMapping,
+    EventRecord, EventSearchPage, EventSearchQuery, LocalEventImport, NarrativeCluster,
+    NarrativeClusterMember, NarrativeGraph, PodcastEpisode, PodcastEpisodeState,
+    PodcastSubscription, PodcastSubscriptionState, PodcastTranscript, ProviderConsent, SourceId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -21,7 +21,8 @@ const MIGRATION_4: &str = include_str!("../migrations/0004_claims.sql");
 const MIGRATION_5: &str = include_str!("../migrations/0005_semantic_indexes.sql");
 const MIGRATION_6: &str = include_str!("../migrations/0006_phase3_research.sql");
 const MIGRATION_7: &str = include_str!("../migrations/0007_phase2_graph.sql");
-const LATEST_SCHEMA_VERSION: u32 = 7;
+const MIGRATION_8: &str = include_str!("../migrations/0008_provider_consent_audit.sql");
+const LATEST_SCHEMA_VERSION: u32 = 8;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -517,7 +518,7 @@ impl Store {
             )?;
         }
         transaction.commit()?;
-        self.event_by_id(&event_id)?.ok_or(StoreError::InvalidEvent)
+        self.event(&event_id)?.ok_or(StoreError::InvalidEvent)
     }
 
     pub fn save_etf_mapping(&mut self, mapping: &EtfMapping) -> Result<(), StoreError> {
@@ -527,6 +528,7 @@ impl Store {
             || mapping.author.trim().is_empty()
             || mapping.evidence_event_ids.is_empty()
             || !valid_ticker(&mapping.ticker)
+            || mapping.version == 0
             || mapping
                 .effective_to
                 .is_some_and(|end| end <= mapping.effective_from)
@@ -540,6 +542,33 @@ impl Store {
                 |row| row.get(0),
             )?;
             if !exists {
+                return Err(StoreError::InvalidResearchRecord);
+            }
+        }
+        if let Some(previous_id) = mapping.supersedes_mapping_id.as_deref() {
+            let previous: Option<(String, String, i32)> = self
+                .connection
+                .query_row(
+                    "SELECT narrative_id, ticker, version FROM nip_etf_mappings WHERE mapping_id = ?",
+                    params![previous_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            let Some((narrative_id, ticker, version)) = previous else {
+                return Err(StoreError::InvalidResearchRecord);
+            };
+            if narrative_id != mapping.narrative_id
+                || ticker != mapping.ticker
+                || mapping.version != (version.max(0) as u32).saturating_add(1)
+            {
+                return Err(StoreError::InvalidResearchRecord);
+            }
+            let already_superseded: bool = self.connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM nip_etf_mappings WHERE supersedes_mapping_id = ?)",
+                params![previous_id],
+                |row| row.get(0),
+            )?;
+            if already_superseded {
                 return Err(StoreError::InvalidResearchRecord);
             }
         }
@@ -581,6 +610,24 @@ impl Store {
     ) -> Result<(), StoreError> {
         let transaction = self.connection.transaction()?;
         if let Some(first) = candidates.first() {
+            // A derivation run may be regenerated only before any human review
+            // exists. Once reviewed, the prior run is immutable and the caller
+            // must create a new derivation run instead of erasing the audit.
+            let reviewed: bool = transaction.query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM nip_editorial_review_audit a
+                     JOIN nip_editorial_candidates c ON c.candidate_id = a.candidate_id
+                     WHERE c.derivation_run_id = ?
+                 ) OR EXISTS(
+                     SELECT 1 FROM nip_editorial_candidates
+                     WHERE derivation_run_id = ? AND review_status <> 'unreviewed'
+                 )",
+                params![first.derivation_run_id, first.derivation_run_id],
+                |row| row.get(0),
+            )?;
+            if reviewed {
+                return Err(StoreError::InvalidResearchRecord);
+            }
             transaction.execute(
                 "DELETE FROM nip_editorial_candidates WHERE derivation_run_id = ?",
                 params![first.derivation_run_id],
@@ -589,6 +636,16 @@ impl Store {
         for candidate in candidates {
             if candidate.title_angle.trim().is_empty() || candidate.evidence_event_ids.is_empty() {
                 return Err(StoreError::InvalidResearchRecord);
+            }
+            for event_id in &candidate.evidence_event_ids {
+                let exists: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM nip_events WHERE event_id = ?)",
+                    params![event_id],
+                    |row| row.get(0),
+                )?;
+                if !exists {
+                    return Err(StoreError::InvalidResearchRecord);
+                }
             }
             transaction.execute("INSERT INTO nip_editorial_candidates (candidate_id, title_angle, narrative_ids, claim_ids, evidence_event_ids, rank, component_values, derivation_run_id, review_status, review_reason, reviewer, reviewed_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", params![candidate.candidate_id, candidate.title_angle, serde_json::to_string(&candidate.narrative_ids)?, serde_json::to_string(&candidate.claim_ids)?, serde_json::to_string(&candidate.evidence_event_ids)?, candidate.rank as i32, serde_json::to_string(&candidate.component_values)?, candidate.derivation_run_id, candidate.review_status, candidate.review_reason, candidate.reviewer, candidate.reviewed_at, candidate.created_at])?;
         }
@@ -641,11 +698,139 @@ impl Store {
         {
             return Err(StoreError::InvalidResearchRecord);
         }
-        let changed = self.connection.execute("UPDATE nip_editorial_candidates SET review_status = ?, review_reason = ?, reviewer = ?, reviewed_at = ? WHERE candidate_id = ?", params![status, reason, reviewer, reviewed_at, candidate_id])?;
-        if changed == 0 {
+        let transaction = self.connection.transaction()?;
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM nip_editorial_candidates WHERE candidate_id = ?)",
+            params![candidate_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
             return Err(StoreError::InvalidResearchRecord);
         }
+        let recorded_at = Utc::now();
+        let review_id = format!(
+            "review-{}",
+            &hex_digest(
+                format!("{candidate_id}\0{status}\0{reviewed_at}\0{recorded_at}").as_bytes()
+            )[..32]
+        );
+        transaction.execute(
+            "INSERT INTO nip_editorial_review_audit
+                (review_id, candidate_id, review_status, review_reason, reviewer, reviewed_at, recorded_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![
+                review_id,
+                candidate_id,
+                status,
+                reason,
+                reviewer,
+                reviewed_at,
+                recorded_at
+            ],
+        )?;
+        transaction.execute(
+            "UPDATE nip_editorial_candidates SET review_status = ?, review_reason = ?, reviewer = ?, reviewed_at = ? WHERE candidate_id = ?",
+            params![status, reason, reviewer, reviewed_at, candidate_id],
+        )?;
+        transaction.commit()?;
         Ok(())
+    }
+
+    pub fn editorial_review_audit(
+        &self,
+        candidate_id: &str,
+    ) -> Result<Vec<EditorialReviewAudit>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT review_id, candidate_id, review_status, review_reason, reviewer,
+                    reviewed_at, recorded_at
+             FROM nip_editorial_review_audit WHERE candidate_id = ?
+             ORDER BY recorded_at, review_id",
+        )?;
+        let rows = statement.query_map(params![candidate_id], |row| {
+            Ok(EditorialReviewAudit {
+                review_id: row.get(0)?,
+                candidate_id: row.get(1)?,
+                review_status: row.get(2)?,
+                review_reason: row.get(3)?,
+                reviewer: row.get(4)?,
+                reviewed_at: row.get(5)?,
+                recorded_at: row.get(6)?,
+            })
+        })?;
+        rows.collect::<duckdb::Result<Vec<_>>>()
+            .map_err(StoreError::from)
+    }
+
+    /// Append one consent audit event. `consent_id` is unique and the table is
+    /// never updated in place, so granting and revoking preserve history.
+    pub fn record_provider_consent(&mut self, consent: &ProviderConsent) -> Result<(), StoreError> {
+        if consent.consent_id.trim().is_empty()
+            || !matches!(consent.action.as_str(), "granted" | "revoked")
+            || consent.provider_kind.trim().is_empty()
+            || consent.model.trim().is_empty()
+            || consent.scope.trim().is_empty()
+            || consent.disclosure.trim().is_empty()
+            || consent.actor.trim().is_empty()
+        {
+            return Err(StoreError::InvalidResearchRecord);
+        }
+        self.connection.execute(
+            "INSERT INTO nip_provider_consents
+                (consent_id, action, provider_kind, provider_id, model, scope, disclosure,
+                 actor, reason, recorded_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                consent.consent_id,
+                consent.action,
+                consent.provider_kind,
+                consent.provider_id,
+                consent.model,
+                consent.scope,
+                consent.disclosure,
+                consent.actor,
+                consent.reason,
+                consent.recorded_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Latest consent event for one provider/model/scope binding. `None` means
+    /// no consent was ever recorded for that exact binding.
+    pub fn latest_provider_consent(
+        &self,
+        provider_kind: &str,
+        provider_id: Option<&str>,
+        model: &str,
+        scope: &str,
+    ) -> Result<Option<ProviderConsent>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT consent_id, action, provider_kind, provider_id, model, scope,
+                        disclosure, actor, reason, recorded_at
+                 FROM nip_provider_consents
+                 WHERE provider_kind = ? AND provider_id IS NOT DISTINCT FROM ?
+                   AND model = ? AND scope = ?
+                 ORDER BY recorded_at DESC, consent_id DESC
+                 LIMIT 1",
+                params![provider_kind, provider_id, model, scope],
+                |row| {
+                    Ok(ProviderConsent {
+                        consent_id: row.get(0)?,
+                        action: row.get(1)?,
+                        provider_kind: row.get(2)?,
+                        provider_id: row.get(3)?,
+                        model: row.get(4)?,
+                        scope: row.get(5)?,
+                        disclosure: row.get(6)?,
+                        actor: row.get(7)?,
+                        reason: row.get(8)?,
+                        recorded_at: row.get(9)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
     }
 
     pub fn search_events(&self, query: &EventSearchQuery) -> Result<EventSearchPage, StoreError> {
@@ -727,14 +912,19 @@ impl Store {
         let transaction = self.connection.transaction()?;
         transaction.execute(
             "INSERT INTO nip_claims (claim_id, claim_text, speaker_or_author, confidence_millis,
-                extraction_run_id, provider, model, prompt_version, extracted_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                extraction_run_id, provider, model, prompt_version, provider_kind,
+                provider_profile_id, reasoning_effort, extracted_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (claim_id) DO UPDATE SET claim_text = excluded.claim_text,
                 speaker_or_author = excluded.speaker_or_author,
                 confidence_millis = excluded.confidence_millis,
                 extraction_run_id = excluded.extraction_run_id,
                 provider = excluded.provider, model = excluded.model,
-                prompt_version = excluded.prompt_version, extracted_at = excluded.extracted_at",
+                prompt_version = excluded.prompt_version,
+                provider_kind = excluded.provider_kind,
+                provider_profile_id = excluded.provider_profile_id,
+                reasoning_effort = excluded.reasoning_effort,
+                extracted_at = excluded.extracted_at",
             params![
                 claim.claim_id,
                 claim.claim_text,
@@ -744,6 +934,9 @@ impl Store {
                 claim.provider,
                 claim.model,
                 claim.prompt_version,
+                claim.provider_kind,
+                claim.provider_profile_id,
+                claim.reasoning_effort,
                 claim.extracted_at,
             ],
         )?;
@@ -769,7 +962,8 @@ impl Store {
     pub fn claims(&self) -> Result<Vec<ClaimRecord>, StoreError> {
         let mut statement = self.connection.prepare(
             "SELECT claim_id, claim_text, speaker_or_author, confidence_millis,
-                    extraction_run_id, provider, model, prompt_version, extracted_at
+                    extraction_run_id, provider, model, prompt_version, extracted_at,
+                    provider_kind, provider_profile_id, reasoning_effort
              FROM nip_claims ORDER BY extracted_at, claim_id",
         )?;
         let mut claims = Vec::new();
@@ -784,6 +978,9 @@ impl Store {
                 row.get::<_, String>(6)?,
                 row.get::<_, String>(7)?,
                 row.get(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<String>>(10)?,
+                row.get::<_, Option<String>>(11)?,
             ))
         })? {
             let (
@@ -796,6 +993,9 @@ impl Store {
                 model,
                 prompt,
                 extracted_at,
+                provider_kind,
+                provider_profile_id,
+                reasoning_effort,
             ) = row?;
             let mut evidence_statement = self.connection.prepare(
                 "SELECT event_id, quote, start_offset, end_offset FROM nip_claim_evidence WHERE claim_id = ? ORDER BY event_id",
@@ -831,6 +1031,9 @@ impl Store {
                 provider,
                 model,
                 prompt_version: prompt,
+                provider_kind,
+                provider_profile_id,
+                reasoning_effort,
                 extracted_at,
                 evidence,
             });
@@ -1019,7 +1222,7 @@ impl Store {
             .transpose()
     }
 
-    fn event_by_id(&self, event_id: &str) -> Result<Option<EventRecord>, StoreError> {
+    pub fn event(&self, event_id: &str) -> Result<Option<EventRecord>, StoreError> {
         self.connection.query_row(
             "SELECT event_id, source_id, source_native_id, canonical_url, content_hash,
                     content_text, published_at, source_updated_at, captured_at, ingested_at, revision_of
@@ -1083,6 +1286,9 @@ fn apply_migrations(connection: &mut Connection) -> Result<u32, StoreError> {
     }
     if current_version < 7 {
         apply_migration(connection, 7, "phase2_graph", MIGRATION_7)?;
+    }
+    if current_version < 8 {
+        apply_migration(connection, 8, "provider_consent_audit", MIGRATION_8)?;
     }
     Ok(LATEST_SCHEMA_VERSION)
 }
@@ -1389,6 +1595,7 @@ impl TryFrom<RawEpisode> for PodcastEpisode {
 mod tests {
     use super::*;
     use duckdb::Connection;
+    use std::collections::BTreeMap;
     use tempfile::tempdir;
 
     fn subscription(source_id: &str) -> PodcastSubscription {
@@ -1428,7 +1635,7 @@ mod tests {
 
         {
             let store = Store::open(&path).unwrap();
-            assert_eq!(store.schema_version(), 7);
+            assert_eq!(store.schema_version(), 8);
             assert!(store.has_table("nip_schema_migrations").unwrap());
             assert!(store.has_table("nip_sources").unwrap());
             assert!(store.has_table("nip_events").unwrap());
@@ -1438,14 +1645,14 @@ mod tests {
         }
 
         let reopened = Store::open(&path).unwrap();
-        assert_eq!(reopened.schema_version(), 7);
+        assert_eq!(reopened.schema_version(), 8);
         let migration_count: i64 = reopened
             .connection
             .query_row("SELECT COUNT(*) FROM nip_schema_migrations", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 7);
+        assert_eq!(migration_count, 8);
     }
 
     #[test]
@@ -1474,7 +1681,7 @@ mod tests {
         drop(connection);
 
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version(), 7);
+        assert_eq!(store.schema_version(), 8);
         assert!(store.has_table("nip_events").unwrap());
         assert!(store.has_table("nip_podcast_subscriptions").unwrap());
     }
@@ -1687,22 +1894,259 @@ mod tests {
             error,
             StoreError::FutureSchema {
                 found: 99,
-                supported: 7
+                supported: 8
             }
         ));
     }
 
     #[test]
-    fn databases_in_distinct_test_directories_are_isolated() {
-        let first_dir = tempdir().unwrap();
-        let second_dir = tempdir().unwrap();
-        let first_path = first_dir.path().join("nip.duckdb");
-        let second_path = second_dir.path().join("nip.duckdb");
-        let first = Store::open(&first_path).unwrap();
-        let second = Store::open(&second_path).unwrap();
-        assert_ne!(first.database_path(), second.database_path());
-        assert_eq!(first.schema_version(), second.schema_version());
-        assert!(first_path.exists());
-        assert!(second_path.exists());
+    fn provider_consent_is_append_only_and_binding_specific() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let grant = ProviderConsent {
+            consent_id: "consent-1".into(),
+            action: "granted".into(),
+            provider_kind: "remote".into(),
+            provider_id: Some("provider-a".into()),
+            model: "model-a".into(),
+            scope: "remote_transcript_extraction".into(),
+            disclosure: "Transcript text and prompt leave the device.".into(),
+            actor: "local-user".into(),
+            reason: None,
+            recorded_at: "2026-11-17T09:00:00Z".parse().unwrap(),
+        };
+        store.record_provider_consent(&grant).unwrap();
+        let active = store
+            .latest_provider_consent(
+                "remote",
+                Some("provider-a"),
+                "model-a",
+                "remote_transcript_extraction",
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(active.action, "granted");
+        assert!(store
+            .latest_provider_consent(
+                "remote",
+                Some("provider-b"),
+                "model-a",
+                "remote_transcript_extraction"
+            )
+            .unwrap()
+            .is_none());
+        assert!(store
+            .latest_provider_consent(
+                "remote",
+                Some("provider-a"),
+                "model-b",
+                "remote_transcript_extraction"
+            )
+            .unwrap()
+            .is_none());
+
+        let revoke = ProviderConsent {
+            consent_id: "consent-2".into(),
+            action: "revoked".into(),
+            reason: Some("user revoked".into()),
+            recorded_at: "2026-11-17T10:00:00Z".parse().unwrap(),
+            ..grant
+        };
+        store.record_provider_consent(&revoke).unwrap();
+        let active = store
+            .latest_provider_consent(
+                "remote",
+                Some("provider-a"),
+                "model-a",
+                "remote_transcript_extraction",
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(active.action, "revoked");
+        let rows: i64 = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM nip_provider_consents", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 2);
+    }
+
+    #[test]
+    fn claim_provenance_and_editorial_review_audit_are_persisted() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let event = store
+            .import_local_event(
+                &LocalEventImport {
+                    source_id: SourceId::new("audit-source").unwrap(),
+                    source_display_name: "Synthetic audit fixture".into(),
+                    source_native_id: Some("audit-1".into()),
+                    canonical_url: None,
+                    title: None,
+                    content_text: "Rates remain restrictive.".into(),
+                    published_at: None,
+                    source_updated_at: None,
+                    rights_statement: "synthetic".into(),
+                    user_confirmed_rights: true,
+                },
+                "2026-11-17T09:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        store
+            .store_claim(&ClaimRecord {
+                claim_id: "claim-audit-1".into(),
+                claim_text: "Rates remain restrictive.".into(),
+                speaker_or_author: None,
+                confidence_millis: 800,
+                extraction_run_id: "run-audit-1".into(),
+                provider: "riga_bridge".into(),
+                model: "model-a".into(),
+                prompt_version: "nip-claims-v1".into(),
+                provider_kind: Some("remote".into()),
+                provider_profile_id: Some("provider-a".into()),
+                reasoning_effort: Some("low".into()),
+                extracted_at: "2026-11-17T09:01:00Z".parse().unwrap(),
+                evidence: vec![nip_domain::ClaimEvidence {
+                    event_id: event.event_id.clone(),
+                    quote: Some("Rates remain restrictive.".into()),
+                    start_offset: Some(0),
+                    end_offset: Some(24),
+                }],
+            })
+            .unwrap();
+        let claim = store.claims().unwrap().remove(0);
+        assert_eq!(claim.provider_kind.as_deref(), Some("remote"));
+        assert_eq!(claim.provider_profile_id.as_deref(), Some("provider-a"));
+        assert_eq!(claim.reasoning_effort.as_deref(), Some("low"));
+
+        store
+            .replace_editorial_candidates(&[EditorialCandidate {
+                candidate_id: "candidate-audit-1".into(),
+                title_angle: "A synthetic topic".into(),
+                narrative_ids: vec!["narrative-1".into()],
+                claim_ids: vec![claim.claim_id.clone()],
+                evidence_event_ids: vec![event.event_id.as_str().to_owned()],
+                rank: 1,
+                component_values: BTreeMap::new(),
+                derivation_run_id: "editorial-run-1".into(),
+                review_status: "unreviewed".into(),
+                review_reason: None,
+                reviewer: None,
+                reviewed_at: None,
+                created_at: "2026-11-17T09:02:00Z".parse().unwrap(),
+            }])
+            .unwrap();
+        store
+            .review_editorial_candidate(
+                "candidate-audit-1",
+                "deferred",
+                "Needs another source.",
+                "editor-a",
+                "2026-11-17T09:03:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        store
+            .review_editorial_candidate(
+                "candidate-audit-1",
+                "relevant",
+                "Correction after review.",
+                "editor-b",
+                "2026-11-17T09:04:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        let audit = store.editorial_review_audit("candidate-audit-1").unwrap();
+        assert_eq!(audit.len(), 2);
+        assert_eq!(audit[0].review_status, "deferred");
+        assert_eq!(audit[1].review_status, "relevant");
+        // A reviewed derivation run cannot be regenerated in place.
+        assert!(matches!(
+            store.replace_editorial_candidates(&[EditorialCandidate {
+                candidate_id: "candidate-audit-1".into(),
+                title_angle: "Overwrite attempt".into(),
+                narrative_ids: vec![],
+                claim_ids: vec![],
+                evidence_event_ids: vec![event.event_id.as_str().to_owned()],
+                rank: 1,
+                component_values: BTreeMap::new(),
+                derivation_run_id: "editorial-run-1".into(),
+                review_status: "unreviewed".into(),
+                review_reason: None,
+                reviewer: None,
+                reviewed_at: None,
+                created_at: "2026-11-17T09:05:00Z".parse().unwrap(),
+            }]),
+            Err(StoreError::InvalidResearchRecord)
+        ));
+    }
+
+    #[test]
+    fn etf_revisions_require_a_valid_supersession_chain() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let event = store
+            .import_local_event(
+                &LocalEventImport {
+                    source_id: SourceId::new("etf-source").unwrap(),
+                    source_display_name: "Synthetic ETF fixture".into(),
+                    source_native_id: Some("etf-1".into()),
+                    canonical_url: None,
+                    title: None,
+                    content_text: "A thematic observation.".into(),
+                    published_at: None,
+                    source_updated_at: None,
+                    rights_statement: "synthetic".into(),
+                    user_confirmed_rights: true,
+                },
+                "2026-11-17T09:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        let base = EtfMapping {
+            mapping_id: "mapping-v1".into(),
+            narrative_id: "narrative-1".into(),
+            ticker: "TLT".into(),
+            rationale: "First hypothesis".into(),
+            evidence_event_ids: vec![event.event_id.as_str().to_owned()],
+            author: "analyst".into(),
+            reviewer: None,
+            version: 1,
+            effective_from: "2026-11-17T09:00:00Z".parse().unwrap(),
+            effective_to: None,
+            known_at: "2026-11-17T09:00:00Z".parse().unwrap(),
+            review_status: "unreviewed".into(),
+            ticker_status: "unknown".into(),
+            market_data_coverage: "unavailable".into(),
+            mapping_validity: "pending_review".into(),
+            supersedes_mapping_id: None,
+            created_at: "2026-11-17T09:00:00Z".parse().unwrap(),
+        };
+        store.save_etf_mapping(&base).unwrap();
+        let mut revision = EtfMapping {
+            mapping_id: "mapping-v2".into(),
+            version: 2,
+            supersedes_mapping_id: Some("mapping-v1".into()),
+            rationale: "Revised hypothesis".into(),
+            ..base.clone()
+        };
+        store.save_etf_mapping(&revision).unwrap();
+        revision.mapping_id = "mapping-v3".into();
+        revision.version = 3;
+        revision.supersedes_mapping_id = Some("mapping-v1".into());
+        // v1 is already superseded, so it cannot be the base of another revision.
+        assert!(matches!(
+            store.save_etf_mapping(&revision),
+            Err(StoreError::InvalidResearchRecord)
+        ));
+        let mut bad_version = EtfMapping {
+            mapping_id: "mapping-bad".into(),
+            version: 5,
+            supersedes_mapping_id: Some("mapping-v2".into()),
+            ..base
+        };
+        bad_version.rationale = "Skipped a version".into();
+        assert!(matches!(
+            store.save_etf_mapping(&bad_version),
+            Err(StoreError::InvalidResearchRecord)
+        ));
     }
 }

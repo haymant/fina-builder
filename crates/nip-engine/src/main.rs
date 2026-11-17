@@ -101,6 +101,96 @@ impl NipMcp {
         }
     }
 
+    #[tool(
+        description = "Report the configured RIGA provider/model, local or remote boundary, NIP-specific remote-consent state, and whether claim extraction is currently available. Credentials and endpoints are never returned."
+    )]
+    fn nip_provider_status(&self) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.provider_status() {
+                Ok(value) => structured_success(serde_json::to_value(value).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Grant NIP-specific consent to send transcript text and the claim-extraction prompt to the exact remote provider/model currently selected in RIGA. Revocation is a new audit event."
+    )]
+    fn nip_grant_remote_consent(
+        &self,
+        Parameters(params): Parameters<ConsentParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(mut service) => match service.grant_remote_consent(
+                &params.actor,
+                params.reason.as_deref(),
+                Utc::now(),
+            ) {
+                Ok(consent) => structured_success(serde_json::to_value(consent).unwrap()),
+                Err(error) => structured_error("consent_not_recorded", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Revoke NIP-specific remote transcript extraction consent for the currently selected remote provider/model. The transcript stays local and extraction becomes blocked."
+    )]
+    fn nip_revoke_remote_consent(
+        &self,
+        Parameters(params): Parameters<ConsentParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(mut service) => match service.revoke_remote_consent(
+                &params.actor,
+                params.reason.as_deref(),
+                Utc::now(),
+            ) {
+                Ok(consent) => structured_success(serde_json::to_value(consent).unwrap()),
+                Err(error) => structured_error("consent_not_recorded", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Extract evidence-linked claims from one retained event with the configured RIGA provider. Remote providers require active NIP-specific consent; no fallback provider is used."
+    )]
+    fn extract_claims_from_event(
+        &self,
+        Parameters(params): Parameters<EventIdParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(mut service) => match service.extract_claims_from_event(&params.event_id) {
+                Ok(claims) => structured_success(serde_json::to_value(claims).unwrap()),
+                Err(error) => structured_error("extraction_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "List the append-only editorial review audit for one candidate, including corrections after the latest review state."
+    )]
+    fn list_editorial_review_audit(
+        &self,
+        Parameters(params): Parameters<CandidateParams>,
+    ) -> CallToolResult {
+        match self
+            .service
+            .lock()
+            .map_err(|_| "NIP service lock failed".to_owned())
+            .and_then(|service| {
+                service
+                    .editorial_review_audit(&params.candidate_id)
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok(value) => structured_success(serde_json::to_value(value).unwrap()),
+            Err(error) => structured_error("storage_unavailable", error),
+        }
+    }
+
     #[tool(description = "List user-approved podcast subscriptions and their polling state.")]
     fn list_podcast_subscriptions(&self) -> CallToolResult {
         match self
@@ -628,6 +718,30 @@ impl NipMcp {
 #[serde(deny_unknown_fields)]
 struct EtfMappingParams {
     mapping: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ConsentParams {
+    #[serde(default = "default_actor")]
+    actor: String,
+    reason: Option<String>,
+}
+
+fn default_actor() -> String {
+    "local-user".into()
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EventIdParams {
+    event_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CandidateParams {
+    candidate_id: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

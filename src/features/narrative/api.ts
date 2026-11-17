@@ -1,6 +1,6 @@
 import { nip } from '../../api/nipTransport'
 import { toSnakeKeys } from '../../api/keyCase'
-import type { NipClaim, NipEditorialCandidate, NipEmbeddingManifest, NipEtfMapping, NipEventSearchPage, NipExtractionStatus, NipHealth, NipNarrativeCluster, NipNarrativeGraph, NipNarrativeSignalSnapshot, NipPodcastEpisode, NipPodcastSubscription, NipResourceStatus, NipSemanticResult } from './types'
+import type { NipClaim, NipEditorialCandidate, NipEditorialReviewAudit, NipEmbeddingManifest, NipEtfMapping, NipEventSearchPage, NipExtractionStatus, NipHealth, NipNarrativeCluster, NipNarrativeGraph, NipNarrativeSignalSnapshot, NipPodcastEpisode, NipPodcastSubscription, NipProviderConsent, NipProviderStatus, NipResourceStatus, NipSemanticResult } from './types'
 
 function fromTransport<T>(value: unknown): T {
   return toSnakeKeys(value) as T
@@ -42,6 +42,13 @@ export const narrativeApi = {
   listNarrativeGraph: () => nip.callTool('list_narrative_graph').then((value) => fromTransport<NipNarrativeGraph | null>(value)),
   resourceStatus: () => nip.callTool('nip_resource_status').then((value) => fromTransport<NipResourceStatus>(value)),
   extractionStatus: () => nip.callTool('nip_extraction_status').then((value) => fromTransport<NipExtractionStatus>(value)),
+  providerStatus: () => nip.callTool('nip_provider_status').then((value) => fromTransport<NipProviderStatus>(value)),
+  grantRemoteConsent: (args: { actor?: string; reason?: string } = {}) =>
+    nip.callTool('nip_grant_remote_consent', { actor: args.actor ?? 'local-user', reason: args.reason }).then((value) => fromTransport<NipProviderConsent>(value)),
+  revokeRemoteConsent: (args: { actor?: string; reason?: string } = {}) =>
+    nip.callTool('nip_revoke_remote_consent', { actor: args.actor ?? 'local-user', reason: args.reason }).then((value) => fromTransport<NipProviderConsent>(value)),
+  extractClaimsFromEvent: (eventId: string) => nip.callTool('extract_claims_from_event', { event_id: eventId }).then((value) => fromTransport<NipClaim[]>(value)),
+  listEditorialReviewAudit: (candidateId: string) => nip.callTool('list_editorial_review_audit', { candidate_id: candidateId }).then((value) => fromTransport<NipEditorialReviewAudit[]>(value)),
   signalSnapshot: (asOf?: string) => nip.callTool('narrative_signal_snapshot', { as_of: asOf }).then((value) => fromTransport<NipNarrativeSignalSnapshot>(value)),
   listEtfMappings: () => nip.callTool('list_etf_mappings').then((value) => fromTransport<NipEtfMapping[]>(value)),
   saveEtfMapping: (mapping: NipEtfMapping) => nip.callTool('save_etf_mapping', { mapping }).then((value) => fromTransport<NipEtfMapping>(value)),

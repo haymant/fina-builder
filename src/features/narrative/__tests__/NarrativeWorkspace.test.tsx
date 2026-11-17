@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { ClaimExplorer, OperationalMonitor } from '../components/NarrativeWorkspace'
-import type { NipClaim, NipEvent, NipExtractionStatus, NipResourceStatus } from '../types'
+import { ClaimExplorer, OperationalMonitor, ProviderStatusPanel } from '../components/NarrativeWorkspace'
+import type { NipClaim, NipEvent, NipExtractionStatus, NipProviderStatus, NipResourceStatus } from '../types'
 
 const event: NipEvent = {
   schema_version: 1,
@@ -43,6 +43,40 @@ describe('ClaimExplorer', () => {
     render(<ClaimExplorer claims={[claim, second]} events={[event]} onSelectClaim={onSelectClaim} />)
     fireEvent.click(screen.getByRole('button', { name: /Inflation is cooling/ }))
     expect(onSelectClaim).toHaveBeenCalledWith(second)
+  })
+})
+
+const providerStatus: NipProviderStatus = {
+  configured: true,
+  bridge_state: 'ready',
+  provider_kind: 'remote',
+  provider_id: 'provider-a',
+  model: 'model-a',
+  reasoning_effort: 'low',
+  provider_api: 'chat',
+  remote: true,
+  consent: 'missing',
+  consent_recorded_at: null,
+  disclosure: 'Transcript text and the claim-extraction prompt will be sent to provider-a (model-a) for remote claim extraction.',
+  extraction_state: 'consent_required',
+  warnings: ['remote_consent_missing'],
+}
+
+describe('ProviderStatusPanel', () => {
+  it('shows the selected remote binding, disclosure, and consent action before extraction', () => {
+    render(<ProviderStatusPanel status={providerStatus} busy={false} onGrant={vi.fn()} onRevoke={vi.fn()} />)
+    expect(screen.getByText('model-a')).toBeTruthy()
+    expect(screen.getByText('provider-a')).toBeTruthy()
+    expect(screen.getByText('remote')).toBeTruthy()
+    expect(screen.getByText(/will be sent to provider-a \(model-a\)/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Allow remote extraction/ })).toBeTruthy()
+  })
+
+  it('shows unavailable bridge state without falling back to a fake provider', () => {
+    render(<ProviderStatusPanel status={{ ...providerStatus, configured: false, bridge_state: 'not_configured', provider_kind: null, provider_id: null, model: null, remote: false, consent: 'not_required', extraction_state: 'unavailable', warnings: ['riga_bridge_not_configured'] }} busy={false} onGrant={vi.fn()} onRevoke={vi.fn()} />)
+    expect(screen.getByText('Provider bridge not configured')).toBeTruthy()
+    expect(screen.getByText(/does not fall back/)).toBeTruthy()
+    expect(screen.getByText(/riga_bridge_not_configured/)).toBeTruthy()
   })
 })
 

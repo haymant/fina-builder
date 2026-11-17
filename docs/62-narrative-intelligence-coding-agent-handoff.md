@@ -6,7 +6,7 @@ Continue the Narrative Intelligence Platform (NIP) in `/home/ubuntu/fina-builder
 
 ## Verified baseline
 
-- Rust crates: `nip-domain`, `nip-store`, and `nip-engine` are implemented with DuckDB schema v7, Streamable HTTP MCP, stdio MCP, RSS subscriptions, local ASR boundary, claims/evidence, Parquet snapshot/restore, optional Qdrant semantic search, deterministic signals, clusters, evidence-linked graph projection, ETF mappings, and editorial review records.
+- Rust crates: `nip-domain`, `nip-store`, and `nip-engine` are implemented with DuckDB schema v8, Streamable HTTP MCP, stdio MCP, RSS subscriptions, local ASR boundary, claims/evidence, Parquet snapshot/restore, optional Qdrant semantic search, deterministic signals, clusters, evidence-linked graph projection, ETF mappings, editorial review records, configured RIGA provider bridging, and append-only remote-consent audit.
 - Frontend: `src/features/narrative/` contains Event Review, Claim Explorer, Radar, Timeline, Graph, ETF Themes, Editorial Planning, subscription/run status, and the Operational Monitor.
 - Operational MCP tools: `nip_resource_status`, `nip_extraction_status`, `rebuild_narrative_graph`, and `list_narrative_graph`.
 - Resource/extraction UI tests cover populated, loading, empty/unavailable, and degraded-warning states.
@@ -18,7 +18,7 @@ PLAYWRIGHT_NIP_STARTUP_TIMEOUT=600000 \
 npm run test:e2e:demo -- --grep @demo-narrative-research
 ```
 
-- Current expected focused UI result: 13 tests passing. The narrated recording is `playwright/recordings/narrative-intelligence/final.mp4`.
+- Current expected focused UI result: 15 tests passing. The narrated recording is `playwright/recordings/narrative-intelligence/final.mp4`.
 - Plans and evidence: `docs/56-narrative-intelligence-implementation-plan.md` and `docs/57-narrative-intelligence-testing-plan.md`.
 
 ## Remaining work, in priority order
@@ -67,3 +67,11 @@ git diff --check
 ```
 
 For any new narrated milestone, use the existing demo runner, keep the recording at 1280×720, and update doc 57 with the exact command, result, artifact path, and known non-blocking warnings.
+
+## Completion status — 2026-11-17
+
+- **Item 2 (configured RIGA provider bridge + NIP consent): implemented.** Schema v8 adds append-only `nip_provider_consents`, claim provider provenance, and `nip_editorial_review_audit`. The host bridge is `src-tauri/src/nip_bridge.rs`; NIP config binds `NIP_RIGA_BRIDGE_URL`/`NIP_RIGA_BRIDGE_TOKEN` (loopback-only, token required, redacted `Debug`) and injects them into the `nip` child only. New MCP tools: `nip_provider_status`, `nip_grant_remote_consent`, `nip_revoke_remote_consent`, `extract_claims_from_event`, `list_editorial_review_audit`. Loopback tests prove no request before consent, revocation blocking, model-change rebinding, provenance persistence, and explicit unavailable states. No credential enters NIP config, Vite variables, logs or the repository.
+- **Item 3 (Phase 3 persistence/review audit): hardened.** Editorial review corrections append to `nip_editorial_review_audit`; reviewed derivation runs cannot be regenerated in place; ETF revisions must reference an existing same-narrative/ticker mapping and extend its supersession chain exactly one version.
+- **Item 4 (production desktop integration): partially verified.** The host bridge starts in Tauri setup, the NIP-only environment is injected per server, and restart tests confirm token rotation and non-leakage. A packaged desktop smoke and installed-build restart/recovery run remains unexecuted.
+- **Item 1 (ComfyUI ASR) and item 5 (real BGE-M3 benchmark): still blocked.** No local ComfyUI runtime, ASR node, weights or accelerator/CPU runtime is available; only the deterministic 8-dim fixture benchmark exists. Neither quality nor 100M-event capacity is claimed.
+- Gate evidence is recorded in doc 57. `cargo fmt --all -- --check` fails only in the untouched vendored `modules/riga` checkout; the focused formatter, NIP crate tests/clippy, `payoff-explorer` tests/clippy, focused frontend tests, production build, and `git diff --check` all pass.

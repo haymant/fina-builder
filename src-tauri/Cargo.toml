@@ -39,4 +39,6 @@ log = "0.4"
 tauri = { version = "2.12.1", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-opener = "2"
-tokio = { version = "1", features = ["sync"] }
+tokio = { version = "1", features = ["sync", "net", "time", "rt-multi-thread"] }
+axum = "0.8"
+uuid = { version = "1", features = ["v4"] }

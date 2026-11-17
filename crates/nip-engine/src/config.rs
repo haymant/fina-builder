@@ -27,6 +27,40 @@ pub enum ConfigError {
     AppDataUnavailable,
     #[error("NIP_COMFYUI_URL must be an HTTP(S) loopback URL without credentials")]
     InvalidComfyUiUrl,
+    #[error("NIP_RIGA_BRIDGE_URL must be an HTTP(S) loopback URL without credentials")]
+    InvalidRigaBridgeUrl,
+    #[error("NIP_RIGA_BRIDGE_TOKEN is required when NIP_RIGA_BRIDGE_URL is configured")]
+    MissingRigaBridgeToken,
+    #[error("NIP_RIGA_BRIDGE_TOKEN requires NIP_RIGA_BRIDGE_URL")]
+    RigaBridgeTokenWithoutUrl,
+}
+
+/// Loopback provider bridge credentials. `Debug` redacts the bearer token so a
+/// configuration dump can never leak the credential NIP uses to reach the host.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RigaBridgeConfig {
+    url: LoopbackUrl,
+    token: String,
+}
+
+impl std::fmt::Debug for RigaBridgeConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RigaBridgeConfig")
+            .field("url", &self.url.as_str())
+            .field("token", &"[redacted]")
+            .finish()
+    }
+}
+
+impl RigaBridgeConfig {
+    pub fn url(&self) -> &str {
+        self.url.as_str()
+    }
+
+    pub fn token(&self) -> &str {
+        &self.token
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +69,7 @@ pub struct NipConfig {
     lake_dir: PathBuf,
     test_mode: bool,
     comfyui_url: Option<LoopbackUrl>,
+    riga_bridge: Option<RigaBridgeConfig>,
 }
 
 impl NipConfig {
@@ -47,6 +82,8 @@ impl NipConfig {
             "TAC_LAKE_DIR",
             "NIP_TEST_MODE",
             "NIP_COMFYUI_URL",
+            "NIP_RIGA_BRIDGE_URL",
+            "NIP_RIGA_BRIDGE_TOKEN",
         ]
         .into_iter()
         .filter_map(|key| env::var(key).ok().map(|value| (key.to_owned(), value)))
@@ -79,6 +116,7 @@ impl NipConfig {
             .filter(|value| !value.trim().is_empty())
             .map(|value| LoopbackUrl::parse(value).map_err(|_| ConfigError::InvalidComfyUiUrl))
             .transpose()?;
+        let riga_bridge = resolve_riga_bridge(values)?;
 
         let configured_data = configured_path(values, "NIP_DATA_DIR")?;
         if test_mode && configured_data.is_none() {
@@ -142,6 +180,7 @@ impl NipConfig {
             lake_dir,
             test_mode,
             comfyui_url,
+            riga_bridge,
         })
     }
 
@@ -163,6 +202,32 @@ impl NipConfig {
 
     pub fn comfyui_url(&self) -> Option<&LoopbackUrl> {
         self.comfyui_url.as_ref()
+    }
+
+    pub fn riga_bridge(&self) -> Option<&RigaBridgeConfig> {
+        self.riga_bridge.as_ref()
+    }
+}
+
+fn resolve_riga_bridge(
+    values: &BTreeMap<String, String>,
+) -> Result<Option<RigaBridgeConfig>, ConfigError> {
+    let url = values
+        .get("NIP_RIGA_BRIDGE_URL")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    let token = values
+        .get("NIP_RIGA_BRIDGE_TOKEN")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    match (url, token) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(ConfigError::RigaBridgeTokenWithoutUrl),
+        (Some(_), None) => Err(ConfigError::MissingRigaBridgeToken),
+        (Some(url), Some(token)) => Ok(Some(RigaBridgeConfig {
+            url: LoopbackUrl::parse(url).map_err(|_| ConfigError::InvalidRigaBridgeUrl)?,
+            token: token.to_owned(),
+        })),
     }
 }
 
@@ -422,6 +487,62 @@ mod tests {
             )
             .unwrap_err(),
             ConfigError::InvalidComfyUiUrl
+        );
+    }
+
+    #[test]
+    fn validates_riga_bridge_url_and_token_as_one_binding_without_leaking_the_token() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let config = NipConfig::resolve(
+            &env(&[
+                ("NIP_RIGA_BRIDGE_URL", "http://127.0.0.1:49152"),
+                ("NIP_RIGA_BRIDGE_TOKEN", "fixture-bearer-token"),
+            ]),
+            root,
+            None,
+            true,
+        )
+        .unwrap();
+        let bridge = config.riga_bridge().unwrap();
+        assert_eq!(bridge.url(), "http://127.0.0.1:49152");
+        assert_eq!(bridge.token(), "fixture-bearer-token");
+        let debug = format!("{bridge:?}");
+        assert!(debug.contains("http://127.0.0.1:49152"));
+        assert!(!debug.contains("fixture-bearer-token"));
+
+        assert_eq!(
+            NipConfig::resolve(
+                &env(&[
+                    ("NIP_RIGA_BRIDGE_URL", "https://example.com"),
+                    ("NIP_RIGA_BRIDGE_TOKEN", "fixture-bearer-token"),
+                ]),
+                root,
+                None,
+                true,
+            )
+            .unwrap_err(),
+            ConfigError::InvalidRigaBridgeUrl
+        );
+        assert_eq!(
+            NipConfig::resolve(
+                &env(&[("NIP_RIGA_BRIDGE_URL", "http://127.0.0.1:49152")]),
+                root,
+                None,
+                true,
+            )
+            .unwrap_err(),
+            ConfigError::MissingRigaBridgeToken
+        );
+        assert_eq!(
+            NipConfig::resolve(
+                &env(&[("NIP_RIGA_BRIDGE_TOKEN", "fixture-bearer-token")]),
+                root,
+                None,
+                true,
+            )
+            .unwrap_err(),
+            ConfigError::RigaBridgeTokenWithoutUrl
         );
     }
 }

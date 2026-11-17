@@ -8,6 +8,7 @@
 
 pub mod mcp;
 pub mod mcp_commands;
+pub mod nip_bridge;
 pub mod riga_agent;
 
 use riga_kernel::Agent;
@@ -41,6 +42,24 @@ pub fn run() {
                 .configure_env(engine_env);
             // The RIGA agent host: one IpcService powering the chat panel.
             riga_agent::install(app);
+            // The NIP sidecar may use the user's configured RIGA provider only
+            // through this loopback bridge. Inject its URL/token and NIP-owned
+            // app-data paths into the NIP child alone.
+            let nip_service = app
+                .state::<riga_server::ipc::IpcService>()
+                .inner()
+                .clone();
+            match nip_bridge::start(nip_service) {
+                Ok(bridge) => {
+                    let nip_env = mcp_commands::nip_engine_env(app.handle(), &bridge);
+                    app.state::<mcp_commands::McpState>()
+                        .runtime
+                        .configure_server_env("nip", nip_env);
+                }
+                Err(error) => {
+                    eprintln!("NIP: provider bridge unavailable; remote extraction stays disabled: {error}");
+                }
+            }
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

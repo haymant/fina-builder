@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
 use crate::mcp::McpRuntime;
+use crate::nip_bridge::NipBridgeInfo;
 
 /// Managed state for the MCP registry.
 #[derive(Default)]
@@ -109,6 +110,36 @@ pub fn get_tac_engine_path(app: AppHandle) -> Result<String, String> {
 #[tauri::command]
 pub fn get_nip_engine_path(app: AppHandle) -> Result<String, String> {
     resolve_engine_binary(Some(&app), "NIP_ENGINE_BIN", "..", "nip-engine")
+}
+
+/// NIP-owned app-data paths plus the loopback bridge credentials. These entries
+/// are attached to the `nip` server only; RIGA and TAC children never receive
+/// the token.
+pub fn nip_engine_env(app: &AppHandle, bridge: &NipBridgeInfo) -> Vec<(String, String)> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map(|dir| dir.join("NIP"))
+        .unwrap_or_else(|_| std::path::PathBuf::from(".nip-data"));
+    nip_engine_env_values(&data_dir, bridge)
+}
+
+pub fn nip_engine_env_values(
+    data_dir: &std::path::Path,
+    bridge: &NipBridgeInfo,
+) -> Vec<(String, String)> {
+    vec![
+        (
+            "NIP_DATA_DIR".to_string(),
+            data_dir.to_string_lossy().into_owned(),
+        ),
+        (
+            "NIP_LAKE_DIR".to_string(),
+            data_dir.join("lake").to_string_lossy().into_owned(),
+        ),
+        ("NIP_RIGA_BRIDGE_URL".to_string(), bridge.url.clone()),
+        ("NIP_RIGA_BRIDGE_TOKEN".to_string(), bridge.token.clone()),
+    ]
 }
 
 /// Parse a `.env` file: `KEY=VALUE` lines, `#` comments, optional quotes and an
@@ -351,6 +382,25 @@ pub fn nip_mcp_reset(state: State<'_, McpState>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nip_environment_is_scoped_to_nip_paths_and_bridge_credentials() {
+        let bridge = NipBridgeInfo {
+            url: "http://127.0.0.1:49152".into(),
+            token: "fixture-bridge-token".into(),
+        };
+        let env = nip_engine_env_values(std::path::Path::new("/tmp/nip-data"), &bridge);
+        assert_eq!(
+            env,
+            vec![
+                ("NIP_DATA_DIR".into(), "/tmp/nip-data".into()),
+                ("NIP_LAKE_DIR".into(), "/tmp/nip-data/lake".into()),
+                ("NIP_RIGA_BRIDGE_URL".into(), bridge.url.clone()),
+                ("NIP_RIGA_BRIDGE_TOKEN".into(), bridge.token.clone()),
+            ]
+        );
+        assert!(!env.iter().any(|(key, _)| key.contains("TAC_")));
+    }
 
     #[test]
     fn dotenv_parser_handles_quotes_comments_and_exports() {

@@ -263,8 +263,78 @@ pub struct ClaimRecord {
     pub provider: String,
     pub model: String,
     pub prompt_version: String,
+    /// Local or remote RIGA provider boundary used for this derivation.
+    #[serde(default)]
+    pub provider_kind: Option<String>,
+    /// Saved RIGA provider profile ID, omitted for a local model or a legacy
+    /// one-off configuration.
+    #[serde(default)]
+    pub provider_profile_id: Option<String>,
+    /// Reasoning setting resolved from the RIGA configuration at run time.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
     pub extracted_at: DateTime<Utc>,
     pub evidence: Vec<ClaimEvidence>,
+}
+
+/// Which side of the RIGA provider boundary produced a derivation. Remote
+/// processing of transcript text requires NIP-specific consent; a local model
+/// does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    Local,
+    Remote,
+}
+
+/// Append-only consent event. The newest event for a provider binding decides
+/// whether remote transcript extraction is currently allowed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderConsent {
+    pub consent_id: String,
+    pub action: String,
+    pub provider_kind: String,
+    pub provider_id: Option<String>,
+    pub model: String,
+    pub scope: String,
+    pub disclosure: String,
+    pub actor: String,
+    pub reason: Option<String>,
+    pub recorded_at: DateTime<Utc>,
+}
+
+/// Safe provider/consent view for the workspace. It never contains an endpoint
+/// path, API key, or other credential material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderStatus {
+    pub configured: bool,
+    pub bridge_state: String,
+    pub provider_kind: Option<String>,
+    pub provider_id: Option<String>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub provider_api: Option<String>,
+    pub remote: bool,
+    /// `granted`, `missing`, `revoked`, or `not_required`.
+    pub consent: String,
+    pub consent_recorded_at: Option<DateTime<Utc>>,
+    pub disclosure: Option<String>,
+    /// `available`, `consent_required`, or `unavailable`.
+    pub extraction_state: String,
+    pub warnings: Vec<String>,
+}
+
+/// Append-only editorial review audit row. The candidate row carries the latest
+/// review state for convenience; corrections are retained here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditorialReviewAudit {
+    pub review_id: String,
+    pub candidate_id: String,
+    pub review_status: String,
+    pub review_reason: String,
+    pub reviewer: String,
+    pub reviewed_at: DateTime<Utc>,
+    pub recorded_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
