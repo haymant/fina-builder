@@ -1415,9 +1415,9 @@ impl NipService {
                     AsrError::Unavailable | AsrError::Timeout | AsrError::Cancelled => {
                         PodcastEpisodeState::TranscriptionUnavailable
                     }
-                    AsrError::InvalidInput | AsrError::MalformedOutput => {
-                        PodcastEpisodeState::Failed
-                    }
+                    AsrError::InvalidInput
+                    | AsrError::MalformedOutput
+                    | AsrError::AudioPreparation => PodcastEpisodeState::Failed,
                 };
                 self.store.set_episode_state(episode, state)?;
                 return Err(match state {
@@ -1478,7 +1478,9 @@ impl NipService {
             AsrError::Unavailable | AsrError::Timeout | AsrError::Cancelled => {
                 PodcastEpisodeState::TranscriptionUnavailable
             }
-            AsrError::InvalidInput | AsrError::MalformedOutput => PodcastEpisodeState::Failed,
+            AsrError::InvalidInput
+            | AsrError::MalformedOutput
+            | AsrError::AudioPreparation => PodcastEpisodeState::Failed,
         };
         self.store.set_episode_state(episode, state)?;
         Ok(())

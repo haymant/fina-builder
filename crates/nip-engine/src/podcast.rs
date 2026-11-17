@@ -60,6 +60,8 @@ pub enum AudioClientError {
     InvalidBody,
 }
 
+const MAX_AUDIO_REDIRECTS: usize = 8;
+
 pub trait AudioClient {
     fn fetch(&self, url: &str) -> Result<AudioResponse, AudioClientError>;
 }
@@ -97,34 +99,52 @@ impl HttpAudioClient {
 
 impl AudioClient for HttpAudioClient {
     fn fetch(&self, value: &str) -> Result<AudioResponse, AudioClientError> {
-        let url = validate_audio_url(value, self.allow_loopback)
+        // Podcast CDNs commonly redirect through tracking hosts (podtrac,
+        // anchor, …). Redirects are followed manually so every hop is
+        // re-validated and a public enclosure cannot pivot to a private host.
+        let mut url = validate_audio_url(value, self.allow_loopback)
             .map_err(|_| AudioClientError::Request)?;
-        let mut response = self
-            .agent
-            .get(url.as_str())
-            .call()
-            .map_err(|_| AudioClientError::Request)?;
-        let status = response.status().as_u16();
-        let content_type = response
-            .headers()
-            .get("content-type")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        let body = if status == 200 {
-            response
-                .body_mut()
-                .with_config()
-                .limit(MAX_AUDIO_BYTES)
-                .read_to_vec()
-                .map_err(|_| AudioClientError::InvalidBody)?
-        } else {
-            Vec::new()
-        };
-        Ok(AudioResponse {
-            status,
-            content_type,
-            body,
-        })
+        for _ in 0..=MAX_AUDIO_REDIRECTS {
+            let mut response = self
+                .agent
+                .get(url.as_str())
+                .header("User-Agent", "fina-nip/0.1")
+                .call()
+                .map_err(|_| AudioClientError::Request)?;
+            let status = response.status().as_u16();
+            if matches!(status, 301 | 302 | 303 | 307 | 308) {
+                let location = response
+                    .headers()
+                    .get("location")
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or(AudioClientError::Request)?;
+                let next = url.join(location).map_err(|_| AudioClientError::Request)?;
+                url = validate_audio_url(next.as_str(), self.allow_loopback)
+                    .map_err(|_| AudioClientError::Request)?;
+                continue;
+            }
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            let body = if status == 200 {
+                response
+                    .body_mut()
+                    .with_config()
+                    .limit(MAX_AUDIO_BYTES)
+                    .read_to_vec()
+                    .map_err(|_| AudioClientError::InvalidBody)?
+            } else {
+                Vec::new()
+            };
+            return Ok(AudioResponse {
+                status,
+                content_type,
+                body,
+            });
+        }
+        Err(AudioClientError::Request)
     }
 }
 
@@ -647,6 +667,44 @@ mod tests {
         assert_eq!(second.status, 304);
         assert_eq!(second.retry_after.as_deref(), Some("120"));
         assert!(rx.recv().unwrap().contains("if-none-match: \"v1\""));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn audio_client_follows_bounded_redirects_and_reads_the_audio() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for (index, stream) in listener.incoming().take(2).enumerate() {
+                let mut stream = stream.unwrap();
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request).unwrap();
+                if index == 0 {
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 302 Found\r\nLocation: /audio.mp3\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                } else {
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Length: 5\r\nConnection: close\r\n\r\naudio",
+                        )
+                        .unwrap();
+                }
+            }
+        });
+        let client = HttpAudioClient::for_test();
+        let response = client
+            .fetch(&format!("http://{address}/redirect"))
+            .unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type.as_deref(), Some("audio/mpeg"));
+        assert_eq!(response.body, b"audio");
         server.join().unwrap();
     }
 }

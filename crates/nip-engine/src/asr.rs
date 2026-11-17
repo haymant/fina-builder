@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::net::{IpAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
@@ -16,6 +17,9 @@ const MAX_TRANSCRIPT_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 const HISTORY_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_HISTORY_POLLS: usize = 3_600; // 30 minutes for a long local episode
+/// Long episodes are split into short mono 16 kHz WAV chunks. A full hour in
+/// one prompt exhausts an 8 GB GPU even with the 0.6B model.
+const ASR_CHUNK_SECONDS: u32 = 300;
 const WORKFLOW_VERSION: &str = "qwen3-asr-local-v1";
 const WORKFLOW_JSON: &str =
     include_str!("../../../modules/comfy/workflows/api/qwen3_asr_local.api.json");
@@ -65,6 +69,8 @@ pub enum AsrError {
     Timeout,
     #[error("ASR provider returned malformed or empty output")]
     MalformedOutput,
+    #[error("audio could not be prepared for the ASR provider")]
+    AudioPreparation,
     #[error("ASR operation was cancelled")]
     Cancelled,
 }
@@ -320,17 +326,103 @@ impl AsrProvider for ComfyUiAsrProvider {
         }
         let directory = self.job_dir(&request.job_id)?;
         fs::create_dir_all(&directory).map_err(|_| AsrError::Unavailable)?;
-        let file_name = safe_file_name(&request.file_name);
-        let path = directory.join(&file_name);
         let result = (|| {
-            fs::write(&path, &request.audio).map_err(|_| AsrError::Unavailable)?;
-            self.upload_audio(&path, &file_name, &request.mime_type)?;
-            let prompt_id = self.submit_workflow(&file_name, request)?;
-            self.read_history(&prompt_id)
+            let chunks = self.prepare_chunks(&directory, request)?;
+            let mut texts = Vec::new();
+            let mut language = None;
+            for chunk in &chunks {
+                let file_name = chunk
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(safe_file_name)
+                    .ok_or(AsrError::AudioPreparation)?;
+                self.upload_audio(chunk, &file_name, "audio/wav")?;
+                let prompt_id = self.submit_workflow(&file_name, request)?;
+                let result = self.read_history(&prompt_id)?;
+                if !result.text.trim().is_empty() {
+                    texts.push(result.text.trim().to_owned());
+                }
+                if language.is_none() {
+                    language = result.language;
+                }
+            }
+            if texts.is_empty() {
+                return Err(AsrError::MalformedOutput);
+            }
+            Ok(AsrResult {
+                text: texts.join("\n\n"),
+                language,
+                timings: Vec::new(),
+                provenance: AsrProvenance {
+                    workflow_version: WORKFLOW_VERSION.into(),
+                    workflow_hash: stable_hash(WORKFLOW_JSON.as_bytes()),
+                    device: None,
+                    precision: None,
+                    model: "Qwen/Qwen3-ASR-0.6B".into(),
+                    node: "DarioFT/ComfyUI-Qwen3-ASR".into(),
+                },
+            })
         })();
-        let _ = fs::remove_file(&path);
-        let _ = fs::remove_dir(&directory);
+        let _ = fs::remove_dir_all(&directory);
         result
+    }
+}
+
+impl ComfyUiAsrProvider {
+    fn prepare_chunks(
+        &self,
+        directory: &Path,
+        request: &AsrRequest,
+    ) -> Result<Vec<PathBuf>, AsrError> {
+        let input = directory.join(safe_file_name(&request.file_name));
+        fs::write(&input, &request.audio).map_err(|_| AsrError::Unavailable)?;
+        let pattern = directory.join("chunk-%03d.wav");
+        let ffmpeg = env::var("NIP_FFMPEG_BIN")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "ffmpeg".to_owned());
+        let output = Command::new(ffmpeg)
+            .arg("-hide_banner")
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-y")
+            .arg("-i")
+            .arg(&input)
+            .arg("-ac")
+            .arg("1")
+            .arg("-ar")
+            .arg("16000")
+            .arg("-f")
+            .arg("segment")
+            .arg("-segment_time")
+            .arg(ASR_CHUNK_SECONDS.to_string())
+            .arg("-reset_timestamps")
+            .arg("1")
+            .arg(&pattern)
+            .output()
+            .map_err(|_| AsrError::AudioPreparation)?;
+        if !output.status.success() {
+            eprintln!(
+                "NIP ASR: ffmpeg could not prepare audio: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            return Err(AsrError::AudioPreparation);
+        }
+        let mut chunks = fs::read_dir(directory)
+            .map_err(|_| AsrError::Unavailable)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("chunk-") && name.ends_with(".wav"))
+            })
+            .collect::<Vec<_>>();
+        chunks.sort();
+        if chunks.is_empty() {
+            return Err(AsrError::AudioPreparation);
+        }
+        Ok(chunks)
     }
 }
 

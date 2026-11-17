@@ -1190,6 +1190,10 @@ fn asr_error(error: AsrError) -> CallToolResult {
             "transcription_failed",
             "the local ASR provider rejected the audio or returned a malformed transcript",
         ),
+        AsrError::AudioPreparation => structured_error(
+            "transcription_failed",
+            "audio could not be split for local ASR; install ffmpeg and retry",
+        ),
     }
 }
 
