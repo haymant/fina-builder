@@ -426,6 +426,19 @@ describe('claim extraction feedback', () => {
     await waitFor(() => expect(narrativeApiMock.providerStatus).toHaveBeenCalledTimes(2))
   })
 
+  it('shows elapsed time while the provider run is in flight', async () => {
+    stubWorkspaceApi()
+    narrativeApiMock.providerStatus.mockResolvedValue(availableProvider)
+    narrativeApiMock.extractClaimsFromEvent.mockReturnValue(new Promise(() => {}))
+    render(<NarrativeWorkspace />)
+    await waitFor(() => expect(screen.getByText('episode-1')).toBeTruthy())
+    fireEvent.click(screen.getByText('episode-1'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Extract claims' }))
+    const waiting = await screen.findByTestId('extraction-waiting')
+    expect(waiting.textContent).toContain('Waiting for the model')
+    expect(waiting.textContent).toContain('aborts after 10 minutes')
+  })
+
   it('shows a failed extraction inside the transcript dialog as an alert', () => {
     render(<TranscriptDialog event={event} busy={false} status="the provider run did not complete" statusIsError extractionAvailable onClose={vi.fn()} onExtract={vi.fn()} onOpenInList={vi.fn()} />)
     expect(screen.getByRole('alert').textContent).toContain('the provider run did not complete')
