@@ -35,9 +35,29 @@
 .dashboard-title:focus { border-color: var(--theme-primary); }
 .ghost-button { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; font-size: 11px; color: var(--theme-muted); border-radius: 7px; }
 .ghost-button:hover { color: var(--theme-text); background: color-mix(in oklab, var(--theme-primary) 10%, transparent); }
+/* Simulation-path rotator (path-dependent tiles share one selection). */
+.path-stepper { display: inline-flex; align-items: center; gap: 1px; height: 28px; padding: 0 3px 0 8px; border: 1px solid var(--theme-grid); border-radius: 7px; background: var(--theme-panel); color: var(--theme-text); }
+.path-stepper-label { margin-right: 4px; font-size: 9px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--theme-muted); }
+.path-stepper-button { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 5px; color: var(--theme-muted); }
+.path-stepper-button:hover:not(:disabled) { color: var(--theme-primary); background: color-mix(in oklab, var(--theme-primary) 12%, transparent); }
+.path-stepper-button:disabled { opacity: .35; cursor: default; }
+.path-stepper-value { display: inline-flex; align-items: baseline; gap: 3px; min-width: 92px; padding: 2px 4px; border-radius: 5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; font-variant-numeric: tabular-nums; cursor: ew-resize; user-select: none; touch-action: none; }
+.path-stepper-value:hover, .path-stepper-value:focus-visible { background: color-mix(in oklab, var(--theme-primary) 10%, transparent); color: var(--theme-primary); outline: none; }
+.path-stepper-hash { font-size: 9px; color: var(--theme-muted); }
+.path-stepper-count { font-size: 9px; color: var(--theme-muted); }
+.path-stepper-input { width: 58px; padding: 0; border: 0; border-bottom: 1px solid var(--theme-primary); background: transparent; color: var(--theme-text); font: inherit; text-align: right; outline: none; }
+.path-stepper-busy .path-stepper-number { opacity: .45; }
+
 .more-tiles { margin-top: 16px; padding: 12px 14px; border: 1px dashed var(--theme-grid); border-radius: 12px; display: flex; flex-direction: column; gap: 10px; }
 .more-tiles-head { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--theme-muted); }
 .more-tiles-head:hover { color: var(--theme-text); }
 .tile-chip { height: 26px; padding: 0 10px; font-size: 11px; border-radius: 999px; border: 1px solid var(--theme-grid); color: var(--theme-text); background: var(--theme-panel); }
 .tile-chip:hover { border-color: var(--theme-primary); }
 .help-modal { height: auto; max-height: 80vh; width: min(560px, 94vw); }
+.confirm-modal { height: auto; width: min(420px, 94vw); }
+.confirm-body { padding: 16px; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.danger-button { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 7px; border: 1px solid color-mix(in oklab, var(--theme-danger) 55%, transparent); background: color-mix(in oklab, var(--theme-danger) 18%, transparent); color: var(--theme-danger); font-size: 11px; }
+.danger-button:hover { background: color-mix(in oklab, var(--theme-danger) 30%, transparent); }
+.undo-bar { position: fixed; left: 50%; bottom: 22px; z-index: 60; display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 14px; border: 1px solid var(--theme-border); border-radius: 10px; background: var(--theme-panel); color: var(--theme-muted); font-size: 11px; box-shadow: 0 10px 30px rgb(0 0 0 / .35); transform: translateX(-50%); }
+.undo-bar .ghost-button { color: var(--theme-primary); }

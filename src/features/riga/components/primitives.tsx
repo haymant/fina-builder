@@ -158,11 +158,16 @@ export function DataTable<Row>({
   rows,
   empty = 'No rows',
   onRowClick,
+  rowClassName,
+  rowTestId,
 }: {
   columns: Array<Column<Row>>
   rows: Row[]
   empty?: string
   onRowClick?: (row: Row, index: number) => void
+  /** Extra classes per row — e.g. to mark the shared selected path. */
+  rowClassName?: (row: Row, index: number) => string
+  rowTestId?: (row: Row, index: number) => string
 }) {
   if (rows.length === 0) return <div className="p-3 text-xs text-muted">{empty}</div>
   return (
@@ -180,7 +185,8 @@ export function DataTable<Row>({
         {rows.map((row, index) => (
           <tr
             key={index}
-            className={`border-t border-line/60 ${onRowClick ? 'cursor-pointer hover:bg-surface' : ''}`}
+            data-testid={rowTestId ? rowTestId(row, index) : undefined}
+            className={`border-t border-line/60 ${onRowClick ? 'cursor-pointer hover:bg-surface' : ''} ${rowClassName ? rowClassName(row, index) : ''}`}
             onClick={onRowClick ? () => onRowClick(row, index) : undefined}
           >
             {columns.map((column) => (

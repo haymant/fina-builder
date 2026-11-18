@@ -321,26 +321,39 @@ it **computes nothing**: it holds inputs and UI state and renders responses.
 
 ### Dashboards, templates, tiles, theme
 
-- Six built-in dashboards: Payoff Explorer, PathCube Analytics, Risk Diagnostics, Monte
-  Carlo Diagnostics, Trade Design, Market & Risk.
+- Nine built-in dashboards: Payoff Explorer, PathCube Analytics, Risk Diagnostics, Monte
+  Carlo Diagnostics, Trade Design, Market & Risk, Path Effects, riga-flow Lineage &
+  Explainability Workspace, and Market Data Workbench (tac-engine).
 - Nine role templates (searchable, filterable by role): Trade Structuring Workspace, Trader
   Workspace, Model Validation Workspace, Cashflow Workspace, Desk Quant Workspace, Market
   Risk Workspace, Product Control Workspace, P&L Explain Workspace, Executive Dashboard.
-- **51 tile types** in the catalog, grouped as Payoff Analysis, Path Analysis, Risk
-  Analytics, Distribution Analysis, Monte Carlo Diagnostics, Trade Design, Market & Risk,
-  Market Data, Lifecycle, Cashflow & P&L, and Valuation Explain. (An earlier count of 52 was
-  wrong; see Part II §3.)
-- Dark/light theme toggle with design tokens; path selection (one of 100 paths, next /
-  previous / random) shared across the path-related views.
+- 68 tile types in the catalog, grouped by engine (`riga-flow`, `tac-engine`).
+- Dark/light theme toggle with design tokens.
+- One shared simulation-path selection drives every path-dependent tile: a compact
+  rotator in the dashboard bar (drag to scrub, click to type an index, step, or random)
+  over the bounded `path_series` cube, mirrored by the *Path Effects* dashboard.
 
 ### Payoff explorer and path views
 
-XYFlow payoff-graph with traversal/state highlighting for the selected path; 60-point
-worst-of performance timeline with KI/KO and coupon-range context; node details for the
-current event/decision; branch-population Sankey; selected-path attribution waterfall;
+Payoff Graph with a table ↔ graph toggle over the product payoff Petri net (`input → transition →
+output`); a row selects both its execution transition and the place it produces, while a place
+chip or graph place node selects the place alone — Transition Detail and Place Detail update
+together. The **Payoff Tree** draws the P01–P08 terminal tree as a Petri net: arc width is the
+population share, dashed nodes/arcs are unreachable for the trade's rails, and the selected path's
+route is highlighted. The **Path Timeline** draws one dot per fixing with barrier lines, an
+engine-reported KO diamond, a derived first-KI-breach triangle, a dashed post-KO tail, and a
+click-to-inspect observation strip (step/year/worst-of/distance to each barrier); clicking an
+event marker also pins the transition that fired. Node details for the current event/decision;
+branch-population Sankey; selected-path attribution waterfall;
 payoff histogram and distribution explorer (normalized payoff, coupon, put, worst-of);
 quantile fan; state occupancy; barrier-crossing heatmap; worst-of percentile evolution;
 selected path's position in the population.
+
+The **Path Effects** dashboard puts every path-dependent view on one screen: the
+`get_path` detail for the selected path, its Path Timeline, the Quantile Fan with the
+selected path drawn over the population bands, the Branch Flow Sankey with the selected
+path's KO/KI/no-KI branch highlighted, the Execution Tape as a click-to-select path
+picker, and the Cashflow Summary with the selected row marked.
 
 ### Trade design and market controls
 

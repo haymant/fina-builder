@@ -1,6 +1,6 @@
 export type TileType =
   // riga-flow tiles (additive; handoff §5.1b)
-  | 'RigaPayoffPetriNet' | 'RigaTransitionDetail' | 'RigaTokenDetail' | 'RigaRiskNet' | 'RigaExplainNet'
+  | 'RigaPayoffPetriNet' | 'RigaTransitionDetail' | 'RigaPlaceDetail' | 'RigaTokenDetail' | 'RigaRiskNet' | 'RigaExplainNet'
   | 'RigaDataLineage' | 'RigaPathCubeQuery' | 'RigaExecutionTape' | 'RigaBookRisk' | 'RigaScenarioComparison'
   | 'RigaTaylorExplain' | 'RigaStatisticsSummary' | 'RigaAttribution' | 'RigaCashflowSummary' | 'RigaCashflowTimeline' | 'RigaRiskSummary' | 'RigaDistributionSummary' | 'RigaSelectedPath'
   | 'RigaPvConvergence' | 'RigaCiShrinkage' | 'RigaErrorVsPaths' | 'RigaKiConvergence' | 'RigaKoConvergence' | 'RigaConvergenceHealth'
@@ -9,7 +9,9 @@ export type TileType =
   | 'RigaEconomicsImpactSummary' | 'RigaSensitivityTornado' | 'RigaParameterImpactMatrix'
   | 'RigaMasterExplainWaterfall'
   | 'RigaPathTimeline' | 'RigaQuantileFan' | 'RigaWorstOfEvolution' | 'RigaBarrierHeatmap' | 'RigaStateOccupancy'
-  | 'RigaBranchFlow' | 'RigaMarketExplorer' | 'RigaVolSurface' | 'RigaPayoffGraph'
+  | 'RigaSelectedPathDetail'
+  | 'RigaBranchFlow' | 'RigaMarketExplorer' | 'RigaVolSurface' | 'RigaPayoffGraph' | 'RigaPayoffTree'
+  | 'RigaCouponEngine'
   | 'RigaObservationSchedule' | 'RigaScheduleExplorer' | 'RigaPercentileConvergence' | 'RigaDistributionStability'
   | 'RigaGovernanceEvidence' | 'RigaRootCause' | 'RigaRegressionTriage' | 'RigaGreeksSanity'
   | 'RigaStressBands' | 'RigaMarketSnapshot' | 'RigaHealthRun' | 'RigaTradeEconomics' | 'RigaMarketData'

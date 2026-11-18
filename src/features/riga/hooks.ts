@@ -3,12 +3,14 @@
 // change re-runs risk / valuation / ledger — the reactivity gap §9.2 closes.
 // Calls are debounced (§9.3); `refresh` is the immediate path.
 
+import { useEffect } from 'react'
 import { riga } from '../../api/rigaTransport'
 import type { RigaTask } from '../../api/rigaTransport'
 import { useDebouncedAsync } from '../../hooks/useDebouncedAsync'
 import type { AsyncState } from '../../hooks/useAsync'
 import { useRigaRequestStore } from '../../store/rigaRequestStore'
 import { useObservabilityStore } from '../../store/observabilityStore'
+import { useRigaSelectionStore } from '../../store/rigaSelectionStore'
 import type {
   ExecutionNet,
   ExecutionTape,
@@ -197,15 +199,15 @@ export function useRigaExecutionTape(maxPaths = 16): AsyncState<ExecutionTape> {
   })
 }
 
-export function useRigaPath(pathId: string | null): AsyncState<PathRecord> {
+export function useRigaPath(pathId: number | null): AsyncState<PathRecord> {
   const level = useObservabilityStore((s) => s.level)
   return useRigaTool<PathRecord>('get_path', () => ({ pathId }), {
-    enabled: level !== 'off' && Boolean(pathId),
+    enabled: level !== 'off' && pathId !== null,
     deps: [pathId],
   })
 }
 
-export async function replayRigaPath(pathId: string): Promise<PathRecord> {
+export async function replayRigaPath(pathId: number): Promise<PathRecord> {
   return riga.callTool<PathRecord>('replay_path', {
     pathId,
     request: useRigaRequestStore.getState().request,
@@ -254,6 +256,54 @@ export function useRigaTradeDesign(): AsyncState<RigaTradeDesign> {
 /** Bounded-path GBM diagnostics: path/quantile/state series (`path_series`). */
 export function useRigaPathSeries(pathId = 0): AsyncState<RigaPathSeries> {
   return useRigaTool<RigaPathSeries>('path_series', () => ({ path_id: pathId }), { deps: [pathId] })
+}
+
+/**
+ * `path_series` for the path selected in `rigaSelectionStore`. Also publishes the
+ * cube size back to the store, so the stepper navigates the window the engine
+ * actually renders instead of the full corpus.
+ */
+export function useSelectedPathSeries(): AsyncState<RigaPathSeries> {
+  const pathId = useRigaSelectionStore((s) => s.selectedPathId)
+  const setPathCount = useRigaSelectionStore((s) => s.setPathCount)
+  const state = useRigaPathSeries(pathId)
+  const paths = state.data?.paths
+  useEffect(() => {
+    if (paths !== undefined) setPathCount(paths)
+  }, [paths, setPathCount])
+  return state
+}
+
+/**
+ * The `get_path` record for the selected path. The engine reconstructs the corpus
+ * per call, so the record is cached in the store and shared by every tile that
+ * needs it (selected-path detail, branch-flow highlight); switching tiles does
+ * not re-run the corpus.
+ */
+export function useSelectedPathRecord(): AsyncState<PathRecord> {
+  const pathId = useRigaSelectionStore((s) => s.selectedPathId)
+  const cached = useRigaSelectionStore((s) => s.cachedPath)
+  const cachePath = useRigaSelectionStore((s) => s.cachePath)
+  const requestKey = useRigaRequestStore((s) => s.key)
+  const level = useObservabilityStore((s) => s.level)
+  const key = `${requestKey}:${pathId}`
+  const hit = cached !== null && cached.key === key ? cached.record : null
+  const state = useRigaTool<PathRecord>('get_path', () => ({ pathId }), {
+    enabled: level !== 'off' && hit === null,
+    deps: [pathId, requestKey, level, hit === null],
+  })
+  const data = state.data
+  useEffect(() => {
+    // `useDebouncedAsync` keeps the previous payload while the next one loads, so
+    // after a path change `data` can still belong to the old index. Only cache a
+    // record whose identity matches the requested path, otherwise the stale
+    // record is cached under the new key and the real fetch never happens.
+    if (data === null) return
+    if (Number(data.identity?.pathId) !== pathId) return
+    cachePath(key, data)
+  }, [data, pathId, key, cachePath])
+  if (hit) return { data: hit, status: 'ready', error: null, refresh: state.refresh }
+  return state
 }
 
 /** Terminal worst-of percentile bands across a path ladder (`percentile_convergence`). */

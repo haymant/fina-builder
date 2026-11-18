@@ -28,6 +28,7 @@ import {
 } from '../hooks'
 import { useTheme } from '../../themes/ThemeProvider'
 import { useObservabilityStore } from '../../../store/observabilityStore'
+import { useRigaSelectionStore } from '../../../store/rigaSelectionStore'
 import { chartBase, DataTable, EmptyTile, Kpi, num, pathIdentity, pct, RigaPanel } from './primitives'
 import { PanelCard } from '../../shared/components/PanelCard'
 import type { RigaFactorContribution } from '../types'
@@ -535,11 +536,12 @@ export const RigaPathCubeTile = memo(function RigaPathCubeTile() {
 export const RigaExecutionTapeTile = memo(function RigaExecutionTapeTile() {
   const state = useRigaExecutionTape()
   const level = useObservabilityStore((s) => s.level)
-  const [selected, setSelected] = useState<string | null>(null)
+  const selectedPathId = useRigaSelectionStore((s) => s.selectedPathId)
+  const selectPath = useRigaSelectionStore((s) => s.selectPath)
   return (
     <RigaPanel
       title="Execution Tape"
-      subtitle="bounded event tape"
+      subtitle="bounded event tape · click a row to select the path"
       tool="execution_events"
       state={state}
       empty={level === 'off' ? 'trace off — aggregate only.' : null}
@@ -557,10 +559,14 @@ export const RigaExecutionTapeTile = memo(function RigaExecutionTapeTile() {
               { key: 'pv', label: 'PV', render: (row) => num(row.pv) },
             ]}
             rows={data.tape}
-            onRowClick={(row) => setSelected(row.pathId === selected ? null : row.pathId)}
+            rowClassName={(row) => (String(row.pathId) === String(selectedPathId) ? 'bg-primary/10 text-primary' : '')}
+            rowTestId={(row) => `tape-path-${row.pathId}`}
+            onRowClick={(row) => selectPath(Number(row.pathId))}
             empty="No tape"
           />
-          {selected ? <p className="text-[10px] text-muted">selected path {selected}</p> : null}
+          <p className="text-[10px] text-muted">
+            Shared selection: path #{selectedPathId} — the timeline, branch flow and detail tiles follow it.
+          </p>
         </div>
       )}
     </RigaPanel>
@@ -724,8 +730,8 @@ export const RigaSelectedPathTile = memo(function RigaSelectedPathTile() {
   const { tokens } = useTheme()
   return (
     <RigaPanel
-      title="Selected Path"
-      subtitle="query_path_cube · worst-percentile sample"
+      title="Worst-percentile Sample"
+      subtitle="query_path_cube · worst-tail paths (not the shared selection)"
       tool="query_path_cube"
       state={state}
     >

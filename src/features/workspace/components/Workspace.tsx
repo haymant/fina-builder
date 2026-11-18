@@ -1,11 +1,14 @@
-import { BookOpen, ChevronDown, ChevronRight, LayoutGrid, MessageSquare, Moon, Plus, Sun } from 'lucide-react'
-import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
+import { BookOpen, ChevronDown, ChevronRight, LayoutGrid, MessageSquare, Moon, Plus, RotateCcw, Sun } from 'lucide-react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppMenuBar } from './AppMenuBar'
+import { ConfirmDialog } from './ConfirmDialog'
 import { loadLocation, saveLocation, splitPrimary, TRADE_VIEWS, type Location, type TradeView } from '../navigation'
 import { Responsive, WidthProvider, type Layout, type ResponsiveLayouts } from 'react-grid-layout/legacy'
-import { useExplorerStore } from '../../../store/explorerStore'
+import { useExplorerStore, BUILT_IN_DASHBOARDS } from '../../../store/explorerStore'
 import { TILE_CATALOG, tileFromType } from '../../dashboards/catalog'
-import type { TileType } from '../../dashboards/types'
+import { PATH_TILE_TYPES } from '../../dashboards/pathTiles'
+import type { TileLayout, TileType } from '../../dashboards/types'
+import { PathStepper } from '../../riga/components/PathStepper'
 import { TileRenderer } from '../../tiles/components/TileRenderer'
 import { TileCard } from './TileCard'
 import { TileGallery } from './TileGallery'
@@ -33,6 +36,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
   const renameDashboard = useExplorerStore((s) => s.renameDashboard)
   const deleteDashboard = useExplorerStore((s) => s.deleteDashboard)
   const duplicateDashboard = useExplorerStore((s) => s.duplicateDashboard)
+  const resetDashboardLayout = useExplorerStore((s) => s.resetDashboardLayout)
   const theme = useExplorerStore((s) => s.theme)
   const toggleTheme = useExplorerStore((s) => s.toggleTheme)
   const [galleryOpen, setGalleryOpen] = useState(false)
@@ -41,6 +45,9 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
   const [expanded, setExpanded] = useState<string | null>(null)
   const [help, setHelp] = useState<'shortcuts' | 'about' | null>(null)
   const [newTradeSignal, setNewTradeSignal] = useState(0)
+  const [undo, setUndo] = useState<{ item: TileLayout; label: string } | null>(null)
+  const [confirmAction, setConfirmAction] = useState<null | 'delete-dashboard' | 'reset-layout'>(null)
+  const undoTimer = useRef<number | null>(null)
   // Where the user is: a tile dashboard or a trade repository view. Navigation is via the
   // menu bar / command palette; persisted so a reload (or desktop relaunch) restores it.
   const [location, setLocationState] = useState<Location>(() => {
@@ -75,27 +82,52 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
   const addTile = (type: TileType) => {
     const tile = tileFromType(type)
     const next: Layout[number] = { i: tile.id, x: 0, y: Infinity, w: 6, h: 4, minW: 3, minH: 3 }
-    updateLayout([...layout, next])
+    updateLayout([...layout, next], dashboard.id)
     setGalleryOpen(false)
   }
+  // Tile removal is reversible, so it never blocks on a dialog: remove now and
+  // offer Undo. (Two stacked native `window.confirm`s were the reason removal
+  // looked broken — the second one returns false in some Tauri webviews.)
   const removeTile = (id: string) => {
-    const tile = TILE_CATALOG.find((meta) => id === meta.id || id.startsWith(`${meta.id}-`))
-    if (!window.confirm(`Remove the ${tile?.title ?? 'selected'} tile from this dashboard?`)) return
-    if (!window.confirm('Please confirm again. This tile will be removed from the current dashboard layout.')) return
-    updateLayout(layout.filter((item) => item.i !== id))
+    const meta = TILE_CATALOG.find((entry) => id === entry.id || id.startsWith(`${entry.id}-`))
+    const item = layout.find((entry) => entry.i === id)
+    if (!item) return
+    if (expanded === id) setExpanded(null)
+    updateLayout(layout.filter((entry) => entry.i !== id), dashboard.id)
+    setUndo({ item, label: meta?.title ?? 'Tile' })
+    if (undoTimer.current !== null) window.clearTimeout(undoTimer.current)
+    undoTimer.current = window.setTimeout(() => {
+      setUndo(null)
+      undoTimer.current = null
+    }, 8000)
   }
-  const confirmDeleteDashboard = () => {
-    if (!window.confirm(`Delete dashboard “${dashboard.name}”?`)) return
-    if (!window.confirm('Please confirm again. This dashboard and its layout will be deleted.')) return
-    deleteDashboard(selectedId)
+  const undoRemove = () => {
+    if (!undo) return
+    if (undoTimer.current !== null) {
+      window.clearTimeout(undoTimer.current)
+      undoTimer.current = null
+    }
+    updateLayout([...layout, undo.item], dashboard.id)
+    setUndo(null)
   }
+  useEffect(() => () => {
+    if (undoTimer.current !== null) window.clearTimeout(undoTimer.current)
+  }, [])
+  const confirmDeleteDashboard = () => deleteDashboard(selectedId)
   const tileType = (id: string): TileType | undefined =>
     TILE_CATALOG.find((meta) => id === meta.id || id.startsWith(`${meta.id}-`))?.type
+  // The path stepper is only meaningful on dashboards with path-dependent tiles
+  // (and needs trace on: path replay is a sampled/full-trace feature, §10).
+  const hasPathTiles = layout.some((item) => {
+    const type = tileType(item.i)
+    return type !== undefined && PATH_TILE_TYPES.has(type)
+  })
+  const isBuiltIn = BUILT_IN_DASHBOARDS.some((entry) => entry.id === dashboard.id)
   // In focus mode only the primary tiles are laid out; hidden tiles keep their positions.
   const onLayoutChange = (next: Layout) => {
     const moved = next.map(({ i, x, y, w, h, minW, minH }) => ({ i, x, y, w, h, minW, minH }))
     const ids = new Set(moved.map((m) => m.i))
-    updateLayout([...moved, ...layout.filter((l) => !ids.has(l.i))])
+    updateLayout([...moved, ...layout.filter((l) => !ids.has(l.i))], dashboard.id)
   }
   const goTrades = (view: TradeView) => navigate({ kind: 'trades', view })
 
@@ -112,7 +144,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
           onNewDashboard={() => setTemplateOpen(true)}
           onFromTemplate={() => setTemplateOpen(true)}
           onDuplicateDashboard={() => duplicateDashboard(selectedId)}
-          onDeleteDashboard={confirmDeleteDashboard}
+          onDeleteDashboard={() => setConfirmAction('delete-dashboard')}
           onToggleTheme={toggleTheme}
           onTraceLevel={(l) => setTraceLevel(l as ObservabilityLevel)}
           onToggleShowAllTiles={toggleShowAll}
@@ -141,9 +173,15 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
             />
             <span className="text-[11px] text-muted" data-testid="tile-count">{showAll ? `${layout.length} tiles` : `${visible.length} of ${layout.length} tiles`}</span>
             <div className="ml-auto flex items-center gap-2">
+              {hasPathTiles && traceLevel !== 'off' ? <PathStepper /> : null}
               {secondary.length ? (
                 <button type="button" className="ghost-button" data-testid="toggle-all-tiles" aria-pressed={showAll} onClick={toggleShowAll}>
                   {showAll ? <ChevronDown size={13} /> : <ChevronRight size={13} />} {showAll ? 'Focus on primary tiles' : `Show ${secondary.length} more`}
+                </button>
+              ) : null}
+              {isBuiltIn ? (
+                <button type="button" className="ghost-button" data-testid="reset-layout" onClick={() => setConfirmAction('reset-layout')}>
+                  <RotateCcw size={13} /> Reset layout
                 </button>
               ) : null}
               <button type="button" onClick={() => setGalleryOpen(true)} className="ghost-button" data-testid="add-tile"><Plus size={13} /> Add tile</button>
@@ -278,6 +316,35 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
           setNotebookOpen(true)
         }}
       />
+      <ConfirmDialog
+        open={confirmAction !== null}
+        title={confirmAction === 'reset-layout' ? `Reset “${dashboard.name}” layout?` : `Delete “${dashboard.name}”?`}
+        message={
+          confirmAction === 'reset-layout'
+            ? 'Restore the built-in tile set and positions for this dashboard. Other dashboards are not affected.'
+            : 'This dashboard and its layout will be deleted. Tiles in other dashboards are not affected.'
+        }
+        confirmLabel={confirmAction === 'reset-layout' ? 'Reset layout' : 'Delete dashboard'}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={() => {
+          if (confirmAction === 'reset-layout') resetDashboardLayout(dashboard.id)
+          if (confirmAction === 'delete-dashboard') confirmDeleteDashboard()
+          setConfirmAction(null)
+        }}
+      />
+      {undo ? (
+        <div className="undo-bar" role="status" data-testid="undo-bar">
+          <span>
+            Removed <span className="font-semibold text-main">{undo.label}</span>.
+          </span>
+          <button type="button" className="ghost-button" onClick={undoRemove} data-testid="undo-remove">
+            Undo
+          </button>
+          <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setUndo(null)}>
+            ×
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 }

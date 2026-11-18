@@ -3,12 +3,15 @@
 
 import { memo } from 'react'
 import { useRigaCashflows } from '../hooks'
+import { useRigaSelectionStore } from '../../../store/rigaSelectionStore'
 import { useTheme } from '../../themes/ThemeProvider'
 import Chart from '../../shared/components/Chart'
 import { chartBase, DataTable, Kpi, num, pct, RigaPanel } from './primitives'
 
 export const RigaCashflowSummaryTile = memo(function RigaCashflowSummaryTile() {
   const state = useRigaCashflows()
+  const selectedPathId = useRigaSelectionStore((s) => s.selectedPathId)
+  const selectPath = useRigaSelectionStore((s) => s.selectPath)
   return (
     <RigaPanel
       title="Cashflow Summary"
@@ -35,8 +38,16 @@ export const RigaCashflowSummaryTile = memo(function RigaCashflowSummaryTile() {
                 { key: 'putPayoff', label: 'Put payoff', render: (row) => num(row.putPayoff) },
               ]}
               rows={data.samplePaths ?? []}
+              rowClassName={(row) => (String(row.pathId) === String(selectedPathId) ? 'bg-primary/10 text-primary' : '')}
+              onRowClick={(row) => selectPath(Number(row.pathId))}
               empty="No sampled paths"
             />
+            <p className="mt-1 text-[10px] text-muted">
+              Selected path #{selectedPathId}
+              {(data.samplePaths ?? []).some((row) => String(row.pathId) === String(selectedPathId))
+                ? ' is highlighted in this sample.'
+                : ' is outside this 3-path sample — open Selected Path Detail for its cashflows.'}
+            </p>
           </div>
         </div>
       )}

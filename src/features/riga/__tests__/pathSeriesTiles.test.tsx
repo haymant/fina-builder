@@ -9,10 +9,12 @@ import {
   RigaStateOccupancyTile,
   RigaWorstOfEvolutionTile,
 } from '../components/RigaPathSeriesTiles'
+import { useRigaSelectionStore } from '../../../store/rigaSelectionStore'
 import { installRigaTranscript, resetTranscripts } from '../../../tests/mocks/transcripts'
 
 beforeEach(() => {
   installRigaTranscript()
+  useRigaSelectionStore.setState({ selectedPathId: 0, pathCount: 1024, cachedPath: null, selectedObservation: null })
 })
 afterEach(() => {
   resetTranscripts()
@@ -35,5 +37,14 @@ describe('riga path-series tiles', () => {
     expect(await screen.findByText('Barrier Crossings')).toBeTruthy()
     render(<RigaStateOccupancyTile />)
     expect(await screen.findByText('State Occupancy')).toBeTruthy()
+  })
+
+  it('shows the fixing-step detail for the selected observation', async () => {
+    useRigaSelectionStore.setState({ selectedPathId: 0, selectedObservation: { pathId: 0, step: 3 } })
+    render(<RigaPathTimelineTile />)
+    const strip = await screen.findByTestId('path-observation')
+    expect(strip.textContent).toContain('Step')
+    expect(strip.textContent).toContain('Worst-of')
+    expect(strip.textContent).toMatch(/above KI|below KI/)
   })
 })

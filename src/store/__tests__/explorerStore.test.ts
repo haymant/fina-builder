@@ -70,8 +70,49 @@ describe('explorerStore', () => {
     expect(after.selectedDashboardId).toBe(after.dashboards[0]!.id)
   })
 
-  it('restored dashboards merge with the built-ins without duplicates', async () => {
-    // A previous session renamed one built-in and added one custom dashboard.
+  it('updateLayout targets the dashboard it is given, not just the selection', () => {
+    const next = [{ i: 'riga-path-timeline', x: 0, y: 0, w: 4, h: 4 }]
+    useExplorerStore.getState().updateLayout(next, 'risk-diagnostics')
+    const dashboard = useExplorerStore.getState().dashboards.find((d) => d.id === 'risk-diagnostics')
+    expect(dashboard?.layout).toEqual(next)
+    // The selection is untouched when the target is explicit.
+    expect(useExplorerStore.getState().selectedDashboardId).toBe('payoff-explorer')
+    const saved = persisted()
+    const savedTarget = (saved.dashboards as Array<{ id: string; layout: unknown[] }>).find((d) => d.id === 'risk-diagnostics')
+    expect(savedTarget?.layout).toHaveLength(1)
+  })
+
+  it('updateLayout repairs a stale selectedDashboardId instead of silently no-oping', () => {
+    useExplorerStore.setState({ selectedDashboardId: 'deleted-elsewhere' })
+    const next = [{ i: 'riga-payoff-tree', x: 0, y: 0, w: 6, h: 4 }]
+    useExplorerStore.getState().updateLayout(next)
+    const state = useExplorerStore.getState()
+    expect(state.selectedDashboardId).toBe(state.dashboards[0]!.id)
+    expect(state.dashboards[0]!.layout).toEqual(next)
+    // The write is persisted, so a reload keeps the removal.
+    expect(persisted().selectedDashboardId).toBe(state.dashboards[0]!.id)
+  })
+
+  it('resetDashboardLayout restores a built-in dashboard and persists it', () => {
+    useExplorerStore.getState().updateLayout([], 'payoff-explorer')
+    expect(useExplorerStore.getState().dashboards.find((d) => d.id === 'payoff-explorer')?.layout).toHaveLength(0)
+
+    useExplorerStore.getState().resetDashboardLayout('payoff-explorer')
+    const layout = useExplorerStore.getState().dashboards.find((d) => d.id === 'payoff-explorer')!.layout
+    expect(layout.map((item) => item.i)).toContain('riga-place-detail')
+    expect(layout.map((item) => item.i)).toContain('riga-payoff-tree')
+    const saved = persisted()
+    const savedTarget = (saved.dashboards as Array<{ id: string; layout: unknown[] }>).find((d) => d.id === 'payoff-explorer')
+    expect(savedTarget?.layout).toHaveLength(layout.length)
+  })
+
+  it('resetDashboardLayout ignores custom dashboards', () => {
+    const id = useExplorerStore.getState().createDashboardFromTemplate('Custom', [])
+    useExplorerStore.getState().resetDashboardLayout(id)
+    expect(useExplorerStore.getState().dashboards.find((d) => d.id === id)?.layout).toEqual([])
+  })
+
+  it('restored dashboards merge with the built-ins without duplicates', async () => {    // A previous session renamed one built-in and added one custom dashboard.
     const next = [
       { id: 'pathcube-analytics', name: 'Renamed', layout: [] },
       { id: 'custom-one', name: 'Custom', layout: [] },
