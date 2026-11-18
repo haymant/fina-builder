@@ -18,8 +18,9 @@ use nip_domain::{
     PodcastEpisodeState, PodcastRefreshReport, PodcastSubscription, PodcastSubscriptionState,
     PodcastTranscript, ProviderConsent, ProviderStatus, Readiness, ResourceStatus,
     SemanticSearchResult, SourceId, SourceKind, SourceState, SourceUpdate, VideoAsset,
-    VideoEpisode, VideoEvidenceRef, VideoJob, VideoProject, VideoScene, VideoShot, VideoStoryboard,
-    VideoWorkflow, API_VERSION, DOMAIN_SCHEMA_VERSION, SERVICE_NAME,
+    VideoEpisode, VideoEvidenceRef, VideoExportManifest, VideoJob, VideoProject, VideoScene,
+    VideoShot, VideoStoryboard, VideoVisualSpec, VideoWorkflow, API_VERSION, DOMAIN_SCHEMA_VERSION,
+    SERVICE_NAME,
 };
 use nip_store::{SnapshotManifest, Store, StoreError, SubscriptionFetchStateUpdate};
 use serde::{Deserialize, Serialize};
@@ -303,6 +304,40 @@ impl NipService {
 
     pub fn save_video_workflow(&mut self, workflow: &VideoWorkflow) -> Result<(), NipError> {
         Ok(self.store.save_video_workflow(workflow)?)
+    }
+
+    pub fn video_visual_spec(
+        &self,
+        spec_id: &str,
+        revision: u32,
+    ) -> Result<Option<VideoVisualSpec>, NipError> {
+        Ok(self.store.video_visual_spec(spec_id, revision)?)
+    }
+
+    pub fn video_visual_specs(&self, limit: u32) -> Result<Vec<VideoVisualSpec>, NipError> {
+        Ok(self.store.video_visual_specs(limit)?)
+    }
+
+    pub fn save_video_visual_spec(&mut self, spec: &VideoVisualSpec) -> Result<(), NipError> {
+        Ok(self.store.save_video_visual_spec(spec)?)
+    }
+
+    pub fn video_export_manifest(
+        &self,
+        manifest_id: &str,
+    ) -> Result<Option<VideoExportManifest>, NipError> {
+        Ok(self.store.video_export_manifest(manifest_id)?)
+    }
+
+    pub fn video_export_manifests(&self, limit: u32) -> Result<Vec<VideoExportManifest>, NipError> {
+        Ok(self.store.video_export_manifests(limit)?)
+    }
+
+    pub fn save_video_export_manifest(
+        &mut self,
+        manifest: &VideoExportManifest,
+    ) -> Result<(), NipError> {
+        Ok(self.store.save_video_export_manifest(manifest)?)
     }
 
     pub fn video_job(&self, job_id: &str) -> Result<Option<VideoJob>, NipError> {
@@ -1956,7 +1991,7 @@ mod tests {
         let health = service.health();
         assert_eq!(health.service, "nip-engine");
         assert_eq!(health.readiness, Readiness::Ready);
-        assert_eq!(health.schema_version, 11);
+        assert_eq!(health.schema_version, 12);
 
         let capabilities = service.capabilities();
         assert!(capabilities.features.duckdb_store);

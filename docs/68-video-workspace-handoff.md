@@ -55,12 +55,22 @@ Doc 65 (`entity-claims-features-signal-research.md`) is intentionally future wor
   - `playwright/recordings/video-workspace/video-workspace-demo.mp4`
   - H.264, 1280x720, AAC stereo, 25.20 seconds, non-silent narration.
 
+### Typed visual specs and export manifests
+
+- Added schema migration 0012 for versioned visual specs, source lineage, export manifests, manifest files, and manifest evidence.
+- Added typed `VideoVisualSpec`, bounded visual templates/payloads, chart points, and source kinds in `nip-domain`.
+- Added typed `VideoExportManifest` and export-file records with deterministic/reproducibility metadata.
+- Added immutable DuckDB persistence, revision guards, canonical event/claim validation, and round-trip retrieval for both record families.
+- Added MCP and browser API surfaces for save/get/list operations.
+- Updated the Video Workspace render action to persist the canonical `VideoVisualSpec` before queuing the LinkZag execution job.
+
 ## Verification already completed
 
 - `cargo fmt --all`
-- `cargo test -p nip-store -p nip-engine`
+- `cargo test -p nip-domain -p nip-store -p nip-engine`
+  - `nip-domain`: 3 tests passed.
   - `nip-engine`: 63 tests passed plus 3 binary tests.
-  - `nip-store`: 20 tests passed, including restart recovery and retention cleanup.
+  - `nip-store`: 21 tests passed, including restart recovery, retention cleanup, and VisualSpec/export-manifest round trips.
 - `npm run build`
 - `npm run test:run -- src/features/video src/features/workspace`
   - 11 frontend tests passed.
@@ -78,10 +88,12 @@ The Playwright web server logs may show `ECONNREFUSED 127.0.0.1:8788` for the un
 
 The current foundation has project/episode/storyboard/scene/shot records, asset/workflow registry, evidence linkage, LinkZag adapter, and asynchronous jobs. Complete the remaining planning/export surface:
 
-- Add the full `VideoVisualSpec` contract for the supported NIP signal snapshot, transcript-span, and approved-claim subset. Arbitrary LinkZag scene JSON must remain non-canonical.
+- [x] Add the versioned typed `VideoVisualSpec` contract and keep arbitrary LinkZag scene JSON non-canonical.
+- Bind signal-snapshot and transcript-span source production to their NIP projections, and enforce approved-claim semantics when those upstream records are available.
 - Add the scene/shot editor rather than the current three-scene planning scaffold.
 - Add explicit lineage navigation from scene/shot/asset back to event and Claim Explorer.
-- Export storyboard JSON, shot list, asset requirements, LinkZag scene files, and timeline JSON.
+- [x] Add typed export-manifest persistence with file and evidence-lineage records.
+- Implement the actual storyboard JSON, shot list, asset requirements, LinkZag scene-file, and timeline JSON producers using those manifests.
 - Add resource monitoring UI beyond the current job banner where required by the V1 plan.
 - Add the V1 browser journey that reopens a project and proves revisions/evidence survive navigation.
 
@@ -114,7 +126,7 @@ The current foundation has project/episode/storyboard/scene/shot records, asset/
 
 ## Suggested next sequence
 
-1. Preserve this job/recovery behavior while introducing `VideoVisualSpec` and typed export manifests.
+1. Preserve the completed job/recovery, typed VisualSpec, and export-manifest contracts.
 2. Add store and MCP methods for QA reports, timeline/EDL plans, and artifact lineage queries.
 3. Expand the Video UI into editor, QA, assembly, and export panels with explicit capability states.
 4. Add the LinkZag output-matrix smoke and repeatability test.

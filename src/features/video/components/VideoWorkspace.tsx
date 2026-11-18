@@ -1,7 +1,7 @@
 import { Clapperboard, FileCheck2, Film, Plus, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { videoApi } from '../api'
-import type { VideoAsset, VideoCapabilities, VideoEpisode, VideoEvidenceRef, VideoJob, VideoProject, VideoScene, VideoShot, VideoStoryboard, VideoWorkflow } from '../types'
+import type { VideoAsset, VideoCapabilities, VideoEpisode, VideoEvidenceRef, VideoJob, VideoProject, VideoScene, VideoShot, VideoStoryboard, VideoVisualSpec, VideoWorkflow } from '../types'
 import type { VideoView } from '../../workspace/navigation'
 import './video.css'
 
@@ -105,7 +105,27 @@ function EpisodeWorkspace({ project, capabilities, onBack, onMessage }: { projec
     setRendering(true)
     setJobNotice(null)
     try {
-      const result = await videoApi.renderLinkZag({ scene_id: id('commentary'), title: project.title, subtitle: 'Evidence-linked deterministic commentary', quote: evidence[0]?.quote ?? 'Fixture visual: source evidence remains authoritative.', visual_kind: 'evidence_card', duration_ms: 12_000, width: 1280, height: 720, evidence_ids: evidence.map((item) => item.evidence_id) })
+      const timestamp = now()
+      const spec: VideoVisualSpec = {
+        spec_id: id('visual-spec'),
+        revision: 1,
+        schema_version: 'video-visual-spec-v1',
+        project_id: project.project_id,
+        episode_id: episode?.episode_id ?? id('episode'),
+        scene_id: id('commentary'),
+        shot_id: null,
+        template: 'evidence_card',
+        duration_ms: 12_000,
+        width: 1280,
+        height: 720,
+        fps: 30,
+        payload: { kind: 'evidence_card', title: project.title, body: evidence[0]?.quote ?? 'Fixture visual: source evidence remains authoritative.', disclosure: 'Evidence-linked deterministic commentary; source truth remains in NIP.' },
+        sources: evidence.map((item) => ({ source_kind: item.evidence_kind === 'claim' ? 'claim' : 'event', source_id: item.evidence_id, source_revision: null, start_offset: item.start_offset, end_offset: item.end_offset, quote: item.quote })),
+        deterministic: true,
+        created_at: timestamp,
+      }
+      await videoApi.saveVisualSpec(spec)
+      const result = await videoApi.renderLinkZag({ visual_spec_id: spec.spec_id, scene_id: spec.scene_id, title: project.title, subtitle: 'Evidence-linked deterministic commentary', quote: evidence[0]?.quote ?? 'Fixture visual: source evidence remains authoritative.', visual_kind: 'evidence_card', duration_ms: spec.duration_ms, width: spec.width, height: spec.height, evidence_ids: evidence.map((item) => item.evidence_id) })
       setActiveJob(result)
       onMessage(`Video job ${result.job_id} queued. Progress is durable and restart-safe.`)
       let current = result

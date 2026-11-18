@@ -16,7 +16,7 @@ use chrono::{DateTime, Utc};
 use nip_domain::{
     EtfMapping, EventRecord, EventSearchQuery, LocalEventImport, PodcastEpisode,
     PodcastSubscriptionState, SourceId, SourceKind, SourceState, SourceUpdate, VideoAsset,
-    VideoJob, VideoWorkflow,
+    VideoExportManifest, VideoJob, VideoVisualSpec, VideoWorkflow,
 };
 use nip_engine::{
     asr::{AsrError, AsrProvider, ComfyUiAsrProvider, DeterministicFakeAsrProvider},
@@ -187,6 +187,31 @@ struct VideoWorkflowParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct VideoVisualSpecParams {
+    spec: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoVisualSpecIdParams {
+    spec_id: String,
+    revision: u32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoExportManifestParams {
+    manifest: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoExportManifestIdParams {
+    manifest_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct VideoLimitParams {
     #[serde(default = "default_page_limit")]
     limit: u32,
@@ -286,6 +311,106 @@ impl NipMcp {
             Ok(mut service) => match service.save_video_workflow(&workflow) {
                 Ok(()) => structured_success(serde_json::to_value(workflow).unwrap()),
                 Err(error) => structured_error("video_workflow_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Save a bounded, versioned VideoVisualSpec with typed payload and source lineage. Arbitrary LinkZag scene JSON is not canonical here."
+    )]
+    fn save_video_visual_spec(
+        &self,
+        Parameters(params): Parameters<VideoVisualSpecParams>,
+    ) -> CallToolResult {
+        let spec = match parse_video_value::<VideoVisualSpec>(params.spec) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_video_visual_spec(&spec) {
+                Ok(()) => structured_success(serde_json::to_value(spec).unwrap()),
+                Err(error) => structured_error("video_visual_spec_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "Read one versioned VideoVisualSpec with its typed source lineage.")]
+    fn get_video_visual_spec(
+        &self,
+        Parameters(params): Parameters<VideoVisualSpecIdParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_visual_spec(&params.spec_id, params.revision) {
+                Ok(Some(spec)) => structured_success(serde_json::to_value(spec).unwrap()),
+                Ok(None) => structured_error("not_found", "VideoVisualSpec was not found"),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "List recent versioned VideoVisualSpec records.")]
+    fn list_video_visual_specs(
+        &self,
+        Parameters(params): Parameters<VideoLimitParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_visual_specs(params.limit) {
+                Ok(specs) => structured_success(serde_json::to_value(specs).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Save a typed Video export manifest for a project revision, including files and canonical evidence lineage."
+    )]
+    fn save_video_export_manifest(
+        &self,
+        Parameters(params): Parameters<VideoExportManifestParams>,
+    ) -> CallToolResult {
+        let manifest = match parse_video_value::<VideoExportManifest>(params.manifest) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_video_export_manifest(&manifest) {
+                Ok(()) => structured_success(serde_json::to_value(manifest).unwrap()),
+                Err(error) => structured_error("video_export_manifest_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Read one typed Video export manifest with file and evidence lineage details."
+    )]
+    fn get_video_export_manifest(
+        &self,
+        Parameters(params): Parameters<VideoExportManifestIdParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_export_manifest(&params.manifest_id) {
+                Ok(Some(manifest)) => structured_success(serde_json::to_value(manifest).unwrap()),
+                Ok(None) => structured_error("not_found", "Video export manifest was not found"),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "List recent typed Video export manifests.")]
+    fn list_video_export_manifests(
+        &self,
+        Parameters(params): Parameters<VideoLimitParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_export_manifests(params.limit) {
+                Ok(manifests) => structured_success(serde_json::to_value(manifests).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
             },
             Err(_) => structured_error("internal", "NIP service lock failed"),
         }

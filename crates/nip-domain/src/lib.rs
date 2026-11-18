@@ -485,6 +485,204 @@ pub struct VideoRenderManifest {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoVisualTemplate {
+    EvidenceCard,
+    QuoteCard,
+    KineticText,
+    ChartTransition,
+    Caption,
+    SceneTransition,
+}
+
+impl VideoVisualTemplate {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::EvidenceCard => "evidence_card",
+            Self::QuoteCard => "quote_card",
+            Self::KineticText => "kinetic_text",
+            Self::ChartTransition => "chart_transition",
+            Self::Caption => "caption",
+            Self::SceneTransition => "scene_transition",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "evidence_card" => Self::EvidenceCard,
+            "quote_card" => Self::QuoteCard,
+            "kinetic_text" => Self::KineticText,
+            "chart_transition" => Self::ChartTransition,
+            "caption" => Self::Caption,
+            "scene_transition" => Self::SceneTransition,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoVisualSourceKind {
+    Event,
+    Claim,
+    TranscriptSpan,
+    SignalSnapshot,
+}
+
+impl VideoVisualSourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Event => "event",
+            Self::Claim => "claim",
+            Self::TranscriptSpan => "transcript_span",
+            Self::SignalSnapshot => "signal_snapshot",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "event" => Self::Event,
+            "claim" => Self::Claim,
+            "transcript_span" => Self::TranscriptSpan,
+            "signal_snapshot" => Self::SignalSnapshot,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VideoVisualPayload {
+    EvidenceCard {
+        title: String,
+        body: String,
+        disclosure: Option<String>,
+    },
+    QuoteCard {
+        quote: String,
+        speaker: Option<String>,
+        source_label: Option<String>,
+    },
+    KineticText {
+        text: String,
+    },
+    ChartTransition {
+        title: String,
+        x_axis_label: Option<String>,
+        y_axis_label: Option<String>,
+        points: Vec<VideoChartPoint>,
+    },
+    Caption {
+        text: String,
+    },
+    SceneTransition {
+        label: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VideoChartPoint {
+    pub label: String,
+    pub value_millis: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoVisualSource {
+    pub source_kind: VideoVisualSourceKind,
+    pub source_id: String,
+    pub source_revision: Option<u32>,
+    pub start_offset: Option<u32>,
+    pub end_offset: Option<u32>,
+    pub quote: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VideoVisualSpec {
+    pub spec_id: String,
+    pub revision: u32,
+    pub schema_version: String,
+    pub project_id: String,
+    pub episode_id: String,
+    pub scene_id: Option<String>,
+    pub shot_id: Option<String>,
+    pub template: VideoVisualTemplate,
+    pub duration_ms: u64,
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+    pub payload: VideoVisualPayload,
+    pub sources: Vec<VideoVisualSource>,
+    pub deterministic: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoExportKind {
+    Storyboard,
+    ShotList,
+    AssetRequirements,
+    LinkZagScene,
+    Timeline,
+    MediaBundle,
+}
+
+impl VideoExportKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Storyboard => "storyboard",
+            Self::ShotList => "shot_list",
+            Self::AssetRequirements => "asset_requirements",
+            Self::LinkZagScene => "linkzag_scene",
+            Self::Timeline => "timeline",
+            Self::MediaBundle => "media_bundle",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "storyboard" => Self::Storyboard,
+            "shot_list" => Self::ShotList,
+            "asset_requirements" => Self::AssetRequirements,
+            "linkzag_scene" => Self::LinkZagScene,
+            "timeline" => Self::Timeline,
+            "media_bundle" => Self::MediaBundle,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoExportFile {
+    pub relative_path: String,
+    pub format: String,
+    pub content_hash: Option<String>,
+    pub byte_size: Option<u64>,
+    pub mime_type: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VideoExportManifest {
+    pub manifest_id: String,
+    pub schema_version: String,
+    pub project_id: String,
+    pub project_revision: u32,
+    pub episode_id: Option<String>,
+    pub storyboard_id: Option<String>,
+    pub export_kind: VideoExportKind,
+    pub deterministic: bool,
+    pub visual_spec_ids: Vec<String>,
+    pub asset_ids: Vec<String>,
+    pub files: Vec<VideoExportFile>,
+    pub evidence: Vec<VideoEvidenceRef>,
+    pub content_hash: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Which side of the RIGA provider boundary produced a derivation. Remote
 /// processing of transcript text requires NIP-specific consent; a local model
 /// does not.

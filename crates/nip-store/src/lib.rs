@@ -9,8 +9,9 @@ use nip_domain::{
     NarrativeClusterMember, NarrativeGraph, NarrativeSource, PodcastEpisode, PodcastEpisodeState,
     PodcastSubscription, PodcastSubscriptionState, PodcastTranscript, ProviderConsent, SourceId,
     SourceKind, SourceState, SourceUpdate, VideoAsset, VideoEpisode, VideoEpisodeStatus,
-    VideoEvidenceRef, VideoJob, VideoProject, VideoProjectStatus, VideoReviewStatus, VideoScene,
-    VideoShot, VideoShotStatus, VideoStoryboard, VideoWorkflow,
+    VideoEvidenceRef, VideoExportFile, VideoExportManifest, VideoJob, VideoProject,
+    VideoProjectStatus, VideoReviewStatus, VideoScene, VideoShot, VideoShotStatus, VideoStoryboard,
+    VideoVisualSource, VideoVisualSourceKind, VideoVisualSpec, VideoWorkflow,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -28,7 +29,8 @@ const MIGRATION_8: &str = include_str!("../migrations/0008_provider_consent_audi
 const MIGRATION_9: &str = include_str!("../migrations/0009_source_registry.sql");
 const MIGRATION_10: &str = include_str!("../migrations/0010_publisher_transcripts.sql");
 const MIGRATION_11: &str = include_str!("../migrations/0011_video_workspace.sql");
-const LATEST_SCHEMA_VERSION: u32 = 11;
+const MIGRATION_12: &str = include_str!("../migrations/0012_video_visual_specs_and_exports.sql");
+const LATEST_SCHEMA_VERSION: u32 = 12;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -1743,6 +1745,325 @@ impl Store {
             .collect::<duckdb::Result<Vec<_>>>()?)
     }
 
+    pub fn save_video_visual_spec(&mut self, spec: &VideoVisualSpec) -> Result<(), StoreError> {
+        if spec.spec_id.trim().is_empty()
+            || spec.revision == 0
+            || spec.schema_version.trim().is_empty()
+            || spec.project_id.trim().is_empty()
+            || spec.episode_id.trim().is_empty()
+            || spec.duration_ms == 0
+            || spec.width == 0
+            || spec.height == 0
+            || spec.fps == 0
+        {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        let current: Option<i32> = self.connection.query_row(
+            "SELECT MAX(revision) FROM video_visual_specs WHERE spec_id = ?",
+            params![spec.spec_id],
+            |row| row.get(0),
+        )?;
+        if current.is_some_and(|revision| spec.revision as i32 <= revision) {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        for source in &spec.sources {
+            if source.source_id.trim().is_empty()
+                || matches!((source.start_offset, source.end_offset), (Some(start), Some(end)) if start > end)
+            {
+                return Err(StoreError::InvalidVideoEvidence);
+            }
+            if matches!(
+                source.source_kind,
+                VideoVisualSourceKind::Event | VideoVisualSourceKind::Claim
+            ) {
+                validate_video_evidence(
+                    &self.connection,
+                    "visual-spec",
+                    1,
+                    &VideoEvidenceRef {
+                        evidence_kind: source.source_kind.as_str().into(),
+                        evidence_id: source.source_id.clone(),
+                        start_offset: source.start_offset,
+                        end_offset: source.end_offset,
+                        quote: source.quote.clone(),
+                    },
+                )?;
+            }
+        }
+        let spec_json = serde_json::to_string(spec)?;
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO video_visual_specs
+                (spec_id, revision, schema_version, project_id, episode_id, scene_id, shot_id,
+                 template, spec_json, deterministic, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                spec.spec_id,
+                spec.revision as i32,
+                spec.schema_version,
+                spec.project_id,
+                spec.episode_id,
+                spec.scene_id,
+                spec.shot_id,
+                spec.template.as_str(),
+                spec_json,
+                spec.deterministic,
+                spec.created_at,
+            ],
+        )?;
+        for source in &spec.sources {
+            transaction.execute(
+                "INSERT INTO video_visual_spec_sources
+                    (spec_id, spec_revision, source_kind, source_id, source_revision, start_offset, end_offset, quote)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    spec.spec_id,
+                    spec.revision as i32,
+                    source.source_kind.as_str(),
+                    source.source_id,
+                    source.source_revision.map(|value| value as i32).unwrap_or(-1),
+                    source.start_offset.map(|value| value as i32).unwrap_or(-1),
+                    source.end_offset.map(|value| value as i32).unwrap_or(-1),
+                    source.quote,
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn video_visual_spec(
+        &self,
+        spec_id: &str,
+        revision: u32,
+    ) -> Result<Option<VideoVisualSpec>, StoreError> {
+        let mut spec: Option<VideoVisualSpec> = self
+            .connection
+            .query_row(
+                "SELECT spec_json FROM video_visual_specs WHERE spec_id = ? AND revision = ?",
+                params![spec_id, revision as i32],
+                |row| {
+                    let text: String = row.get(0)?;
+                    serde_json::from_str(&text).map_err(|error| {
+                        duckdb::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(
+                            error.to_string(),
+                        )))
+                    })
+                },
+            )
+            .optional()?;
+        if let Some(value) = spec.as_mut() {
+            let mut statement = self.connection.prepare(
+                "SELECT source_kind, source_id, source_revision, start_offset, end_offset, quote
+                 FROM video_visual_spec_sources WHERE spec_id = ? AND spec_revision = ?
+                 ORDER BY source_kind, source_id",
+            )?;
+            value.sources = statement
+                .query_map(params![spec_id, revision as i32], |row| {
+                    Ok(VideoVisualSource {
+                        source_kind: VideoVisualSourceKind::parse(&row.get::<_, String>(0)?)
+                            .ok_or_else(|| {
+                                duckdb::Error::ToSqlConversionFailure(Box::new(
+                                    std::io::Error::other("invalid visual source kind"),
+                                ))
+                            })?,
+                        source_id: row.get(1)?,
+                        source_revision: row.get::<_, i32>(2)?.try_into().ok(),
+                        start_offset: row.get::<_, i32>(3)?.try_into().ok(),
+                        end_offset: row.get::<_, i32>(4)?.try_into().ok(),
+                        quote: row.get(5)?,
+                    })
+                })?
+                .collect::<duckdb::Result<Vec<_>>>()?;
+        }
+        Ok(spec)
+    }
+
+    pub fn video_visual_specs(&self, limit: u32) -> Result<Vec<VideoVisualSpec>, StoreError> {
+        let ids = {
+            let mut statement = self.connection.prepare(
+                "SELECT spec_id, revision FROM video_visual_specs
+                 ORDER BY created_at DESC LIMIT ?",
+            )?;
+            statement
+                .query_map(params![limit.clamp(1, 500) as i32], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)? as u32))
+                })?
+                .collect::<duckdb::Result<Vec<_>>>()?
+        };
+        ids.into_iter()
+            .map(|(spec_id, revision)| {
+                self.video_visual_spec(&spec_id, revision)?
+                    .ok_or(StoreError::InvalidVideoRecord)
+            })
+            .collect()
+    }
+
+    pub fn save_video_export_manifest(
+        &mut self,
+        manifest: &VideoExportManifest,
+    ) -> Result<(), StoreError> {
+        if manifest.manifest_id.trim().is_empty()
+            || manifest.schema_version.trim().is_empty()
+            || manifest.project_id.trim().is_empty()
+            || manifest.project_revision == 0
+            || manifest.files.is_empty()
+            || manifest
+                .files
+                .iter()
+                .any(|file| file.relative_path.trim().is_empty() || file.format.trim().is_empty())
+        {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        for evidence in &manifest.evidence {
+            validate_video_evidence(&self.connection, "export-manifest", 1, evidence)?;
+        }
+        let manifest_json = serde_json::to_string(manifest)?;
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO video_export_manifests
+                (manifest_id, schema_version, project_id, project_revision, episode_id, storyboard_id,
+                 export_kind, deterministic, manifest_json, content_hash, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                manifest.manifest_id,
+                manifest.schema_version,
+                manifest.project_id,
+                manifest.project_revision as i32,
+                manifest.episode_id,
+                manifest.storyboard_id,
+                manifest.export_kind.as_str(),
+                manifest.deterministic,
+                manifest_json,
+                manifest.content_hash,
+                manifest.created_at,
+            ],
+        )?;
+        for file in &manifest.files {
+            transaction.execute(
+                "INSERT INTO video_export_manifest_files
+                    (manifest_id, relative_path, format, content_hash, byte_size, mime_type, width, height, duration_ms)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    manifest.manifest_id,
+                    file.relative_path,
+                    file.format,
+                    file.content_hash,
+                    file.byte_size.map(|value| value as i64),
+                    file.mime_type,
+                    file.width.map(|value| value as i32),
+                    file.height.map(|value| value as i32),
+                    file.duration_ms.map(|value| value as i64),
+                ],
+            )?;
+        }
+        for evidence in &manifest.evidence {
+            transaction.execute(
+                "INSERT INTO video_export_manifest_evidence
+                    (manifest_id, evidence_kind, evidence_id, start_offset, end_offset)
+                 VALUES (?, ?, ?, ?, ?)",
+                params![
+                    manifest.manifest_id,
+                    evidence.evidence_kind,
+                    evidence.evidence_id,
+                    evidence
+                        .start_offset
+                        .map(|value| value as i32)
+                        .unwrap_or(-1),
+                    evidence.end_offset.map(|value| value as i32).unwrap_or(-1),
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn video_export_manifest(
+        &self,
+        manifest_id: &str,
+    ) -> Result<Option<VideoExportManifest>, StoreError> {
+        let mut manifest: Option<VideoExportManifest> = self
+            .connection
+            .query_row(
+                "SELECT manifest_json FROM video_export_manifests WHERE manifest_id = ?",
+                params![manifest_id],
+                |row| {
+                    let text: String = row.get(0)?;
+                    serde_json::from_str(&text).map_err(|error| {
+                        duckdb::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(
+                            error.to_string(),
+                        )))
+                    })
+                },
+            )
+            .optional()?;
+        if let Some(value) = manifest.as_mut() {
+            let mut files = self.connection.prepare(
+                "SELECT relative_path, format, content_hash, byte_size, mime_type, width, height, duration_ms
+                 FROM video_export_manifest_files WHERE manifest_id = ? ORDER BY relative_path",
+            )?;
+            value.files = files
+                .query_map(params![manifest_id], |row| {
+                    Ok(VideoExportFile {
+                        relative_path: row.get(0)?,
+                        format: row.get(1)?,
+                        content_hash: row.get(2)?,
+                        byte_size: row
+                            .get::<_, Option<i64>>(3)?
+                            .map(|value| value.max(0) as u64),
+                        mime_type: row.get(4)?,
+                        width: row
+                            .get::<_, Option<i32>>(5)?
+                            .map(|value| value.max(0) as u32),
+                        height: row
+                            .get::<_, Option<i32>>(6)?
+                            .map(|value| value.max(0) as u32),
+                        duration_ms: row
+                            .get::<_, Option<i64>>(7)?
+                            .map(|value| value.max(0) as u64),
+                    })
+                })?
+                .collect::<duckdb::Result<Vec<_>>>()?;
+            let mut evidence = self.connection.prepare(
+                "SELECT evidence_kind, evidence_id, start_offset, end_offset
+                 FROM video_export_manifest_evidence WHERE manifest_id = ?
+                 ORDER BY evidence_kind, evidence_id",
+            )?;
+            value.evidence = evidence
+                .query_map(params![manifest_id], |row| {
+                    Ok(VideoEvidenceRef {
+                        evidence_kind: row.get(0)?,
+                        evidence_id: row.get(1)?,
+                        start_offset: row.get::<_, i32>(2)?.try_into().ok(),
+                        end_offset: row.get::<_, i32>(3)?.try_into().ok(),
+                        quote: None,
+                    })
+                })?
+                .collect::<duckdb::Result<Vec<_>>>()?;
+        }
+        Ok(manifest)
+    }
+
+    pub fn video_export_manifests(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<VideoExportManifest>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT manifest_id FROM video_export_manifests ORDER BY created_at DESC LIMIT ?",
+        )?;
+        let ids = statement
+            .query_map(params![limit.clamp(1, 500) as i32], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<duckdb::Result<Vec<_>>>()?;
+        ids.into_iter()
+            .map(|id| {
+                self.video_export_manifest(&id)?
+                    .ok_or(StoreError::InvalidVideoRecord)
+            })
+            .collect()
+    }
+
     pub fn save_video_job(&mut self, job: &VideoJob) -> Result<(), StoreError> {
         if job.job_id.trim().is_empty()
             || job.operation.trim().is_empty()
@@ -2314,6 +2635,15 @@ fn apply_migrations(connection: &mut Connection) -> Result<u32, StoreError> {
         apply_migration(connection, 11, "video_workspace", MIGRATION_11)?;
         applied_any = true;
     }
+    if current_version < 12 {
+        apply_migration(
+            connection,
+            12,
+            "video_visual_specs_and_exports",
+            MIGRATION_12,
+        )?;
+        applied_any = true;
+    }
     if applied_any {
         // Migration 0009 rebuilds tables (DROP/RENAME). DuckDB cannot replay
         // those catalog records from a WAL left behind by a crashed process, so
@@ -2772,7 +3102,7 @@ mod tests {
 
         {
             let store = Store::open(&path).unwrap();
-            assert_eq!(store.schema_version(), 11);
+            assert_eq!(store.schema_version(), 12);
             assert!(store.has_table("nip_schema_migrations").unwrap());
             assert!(store.has_table("nip_sources").unwrap());
             assert!(store.has_table("nip_events").unwrap());
@@ -2785,14 +3115,14 @@ mod tests {
         }
 
         let reopened = Store::open(&path).unwrap();
-        assert_eq!(reopened.schema_version(), 11);
+        assert_eq!(reopened.schema_version(), 12);
         let migration_count: i64 = reopened
             .connection
             .query_row("SELECT COUNT(*) FROM nip_schema_migrations", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 11);
+        assert_eq!(migration_count, 12);
     }
 
     #[test]
@@ -2821,7 +3151,7 @@ mod tests {
         drop(connection);
 
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version(), 11);
+        assert_eq!(store.schema_version(), 12);
         assert!(store.has_table("nip_events").unwrap());
         assert!(store.has_table("nip_podcast_subscriptions").unwrap());
     }
@@ -3311,7 +3641,7 @@ mod tests {
             error,
             StoreError::FutureSchema {
                 found: 99,
-                supported: 11
+                supported: 12
             }
         ));
     }
@@ -3854,5 +4184,103 @@ mod tests {
             job.safe_error_message.as_deref(),
             Some("job interrupted by service restart")
         );
+    }
+    #[test]
+    fn visual_specs_and_export_manifests_round_trip_with_lineage() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let event = store
+            .import_local_event(
+                &LocalEventImport {
+                    source_id: SourceId::new("visual-spec-source").unwrap(),
+                    source_display_name: "Visual spec fixture".into(),
+                    source_native_id: Some("visual-spec-event".into()),
+                    canonical_url: None,
+                    title: Some("Policy outlook".into()),
+                    content_text: "Rates remain restrictive.".into(),
+                    published_at: None,
+                    source_updated_at: None,
+                    rights_statement: "synthetic".into(),
+                    user_confirmed_rights: true,
+                },
+                "2026-11-18T09:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        let now = "2026-11-18T09:01:00Z".parse().unwrap();
+        let spec = VideoVisualSpec {
+            spec_id: "visual-spec-1".into(),
+            revision: 1,
+            schema_version: "video-visual-spec-v1".into(),
+            project_id: "project-1".into(),
+            episode_id: "episode-1".into(),
+            scene_id: Some("scene-1".into()),
+            shot_id: Some("shot-1".into()),
+            template: nip_domain::VideoVisualTemplate::EvidenceCard,
+            duration_ms: 12_000,
+            width: 1280,
+            height: 720,
+            fps: 30,
+            payload: nip_domain::VideoVisualPayload::EvidenceCard {
+                title: "Policy outlook".into(),
+                body: "Rates remain restrictive.".into(),
+                disclosure: Some("Synthetic fixture".into()),
+            },
+            sources: vec![VideoVisualSource {
+                source_kind: VideoVisualSourceKind::Event,
+                source_id: event.event_id.as_str().into(),
+                source_revision: None,
+                start_offset: Some(0),
+                end_offset: Some(24),
+                quote: Some("Rates remain restrictive.".into()),
+            }],
+            deterministic: true,
+            created_at: now,
+        };
+        store.save_video_visual_spec(&spec).unwrap();
+        let loaded = store
+            .video_visual_spec("visual-spec-1", 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded, spec);
+        assert!(matches!(
+            store.save_video_visual_spec(&spec),
+            Err(StoreError::InvalidVideoRecord)
+        ));
+        let manifest = VideoExportManifest {
+            manifest_id: "manifest-1".into(),
+            schema_version: "video-export-manifest-v1".into(),
+            project_id: "project-1".into(),
+            project_revision: 1,
+            episode_id: Some("episode-1".into()),
+            storyboard_id: Some("storyboard-1".into()),
+            export_kind: nip_domain::VideoExportKind::LinkZagScene,
+            deterministic: true,
+            visual_spec_ids: vec!["visual-spec-1".into()],
+            asset_ids: vec!["asset-1".into()],
+            files: vec![VideoExportFile {
+                relative_path: "segments/scene-1/segment.json".into(),
+                format: "json".into(),
+                content_hash: Some("sha256:fixture".into()),
+                byte_size: Some(512),
+                mime_type: Some("application/json".into()),
+                width: None,
+                height: None,
+                duration_ms: None,
+            }],
+            evidence: vec![VideoEvidenceRef {
+                evidence_kind: "event".into(),
+                evidence_id: event.event_id.as_str().into(),
+                start_offset: None,
+                end_offset: None,
+                quote: None,
+            }],
+            content_hash: Some("sha256:manifest".into()),
+            created_at: now,
+        };
+        store.save_video_export_manifest(&manifest).unwrap();
+        let loaded_manifest = store.video_export_manifest("manifest-1").unwrap().unwrap();
+        assert_eq!(loaded_manifest, manifest);
+        assert_eq!(store.video_visual_specs(10).unwrap().len(), 1);
+        assert_eq!(store.video_export_manifests(10).unwrap().len(), 1);
     }
 }
