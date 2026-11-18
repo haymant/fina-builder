@@ -108,6 +108,22 @@ impl ClaimExtractionProvider for DeterministicFakeClaimProvider {
     }
 }
 
+/// Everything a claim extraction needs, resolved while the store is locked.
+/// The provider call itself happens with the lock released.
+pub struct PreparedExtraction {
+    event: EventRecord,
+    provider: RigaBridgeClaimProvider,
+    status: RigaBridgeProviderStatus,
+}
+
+impl PreparedExtraction {
+    /// Run the provider request. Drops neither the consent binding nor the
+    /// event: claims are validated against the same status snapshot.
+    pub fn extract(&self) -> Result<Vec<ClaimRecord>, NipError> {
+        self.provider.extract_with_status(&self.event, &self.status)
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum NipError {
     #[error("NIP configuration is invalid")]
@@ -1003,13 +1019,14 @@ impl NipService {
         Ok(consent)
     }
 
-    /// Extract claims from a retained event through the configured provider.
-    /// Remote extraction performs no provider request until consent exists for
-    /// the exact provider/model binding.
-    pub fn extract_claims_from_event(
+    /// Resolve everything a claim extraction needs: the retained event, the
+    /// bridge provider, and the consent binding. Kept separate from the call
+    /// itself because a long transcript can keep the provider busy for minutes
+    /// and must not hold the service lock while it runs.
+    pub fn prepare_claim_extraction(
         &mut self,
         event_id: &str,
-    ) -> Result<Vec<ClaimRecord>, NipError> {
+    ) -> Result<PreparedExtraction, NipError> {
         let event = self.store.event(event_id)?.ok_or(NipError::EventNotFound)?;
         let provider = self
             .bridge_provider()
@@ -1032,10 +1049,31 @@ impl NipService {
                 return Err(NipError::RemoteConsentRequired);
             }
         }
-        let claims = provider.extract_with_status(&event, &status)?;
-        for claim in &claims {
+        Ok(PreparedExtraction {
+            event,
+            provider,
+            status,
+        })
+    }
+
+    /// Commit claims produced by [`PreparedExtraction::extract`].
+    pub fn commit_extracted_claims(&mut self, claims: &[ClaimRecord]) -> Result<(), NipError> {
+        for claim in claims {
             self.store.store_claim(claim)?;
         }
+        Ok(())
+    }
+
+    /// Extract claims from a retained event through the configured provider.
+    /// Remote extraction performs no provider request until consent exists for
+    /// the exact provider/model binding.
+    pub fn extract_claims_from_event(
+        &mut self,
+        event_id: &str,
+    ) -> Result<Vec<ClaimRecord>, NipError> {
+        let prepared = self.prepare_claim_extraction(event_id)?;
+        let claims = prepared.extract()?;
+        self.commit_extracted_claims(&claims)?;
         Ok(claims)
     }
 

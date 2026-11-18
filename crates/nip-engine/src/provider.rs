@@ -18,7 +18,10 @@ use crate::{ClaimExtractionProvider, NipError};
 pub const REMOTE_EXTRACTION_SCOPE: &str = "remote_transcript_extraction";
 /// Versioned claim-extraction prompt/schema sent across the host bridge.
 pub const BRIDGE_PROMPT_VERSION: &str = "nip-claims-riga-bridge-v1";
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
+// Sits above the host bridge's ten-minute run cap: a full episode transcript
+// is tens of thousands of characters, and a smaller budget cancelled the run
+// while the model was still reading it.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(660);
 const MAX_CLAIMS: usize = 50;
 const MAX_CLAIM_CHARS: usize = 4_000;
 

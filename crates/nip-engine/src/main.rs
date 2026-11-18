@@ -225,10 +225,25 @@ impl NipMcp {
         &self,
         Parameters(params): Parameters<EventIdParams>,
     ) -> CallToolResult {
+        let prepared = match self.service.lock() {
+            Ok(mut service) => service.prepare_claim_extraction(&params.event_id),
+            Err(_) => return structured_error("internal", "NIP service lock failed"),
+        };
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => return structured_error("extraction_unavailable", error.to_string()),
+        };
+        // A long transcript can keep the provider busy for minutes. Holding the
+        // service lock here froze health, events and every other projection in
+        // the Narrative workspace for the whole run.
+        let claims = match prepared.extract() {
+            Ok(claims) => claims,
+            Err(error) => return structured_error("extraction_unavailable", error_chain(&error)),
+        };
         match self.service.lock() {
-            Ok(mut service) => match service.extract_claims_from_event(&params.event_id) {
-                Ok(claims) => structured_success(serde_json::to_value(claims).unwrap()),
-                Err(error) => structured_error("extraction_unavailable", error.to_string()),
+            Ok(mut service) => match service.commit_extracted_claims(&claims) {
+                Ok(()) => structured_success(serde_json::to_value(&claims).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error_chain(&error)),
             },
             Err(_) => structured_error("internal", "NIP service lock failed"),
         }

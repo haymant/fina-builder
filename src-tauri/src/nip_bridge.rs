@@ -27,7 +27,9 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 const MAX_TRANSCRIPT_CHARS: usize = 200_000;
-const RUN_TIMEOUT: Duration = Duration::from_secs(170);
+// Claim extraction sends a whole transcript. Ten minutes is slow but honest:
+// the previous 170s budget cancelled an otherwise healthy run mid-read.
+const RUN_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Clone)]
 struct BridgeState {
