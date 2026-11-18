@@ -12,6 +12,7 @@
 //!   loopback port directly (and the server stays CORS-closed).
 
 use std::{
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
     time::Duration,
@@ -271,6 +272,7 @@ pub struct NipService {
     client: NipHttpClient,
     child: Child,
     url: String,
+    pidfile: PathBuf,
 }
 
 impl NipService {
@@ -283,7 +285,67 @@ impl Drop for NipService {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        // Remove the record before the next run can mistake this pid for a
+        // stale engine, and after the kill so it cannot race a fresh spawn.
+        let _ = std::fs::remove_file(&self.pidfile);
     }
+}
+
+fn pidfile_for(data_dir: &Path) -> PathBuf {
+    data_dir.join("nip-engine.pid")
+}
+
+#[cfg(unix)]
+fn process_is_engine(pid: i32) -> bool {
+    let output = match Command::new("ps")
+        .arg("-p")
+        .arg(pid.to_string())
+        .arg("-o")
+        .arg("command=")
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return false,
+    };
+    output.status.success() && String::from_utf8_lossy(&output.stdout).contains("nip-engine")
+}
+
+/// DuckDB accepts a single writer. Killing the host (a dev restart or a crash)
+/// leaves the child alive on macOS, where a child does not die with its parent:
+/// it keeps the database lock and every new engine then fails at startup with
+/// "NIP storage could not be initialized". Reap the engine recorded by the
+/// previous run before spawning a replacement.
+#[cfg(unix)]
+fn reap_stale_engine(pidfile: &Path) {
+    let pid = std::fs::read_to_string(pidfile)
+        .ok()
+        .and_then(|text| text.trim().parse::<i32>().ok())
+        .filter(|pid| *pid > 0);
+    let Some(pid) = pid else {
+        let _ = std::fs::remove_file(pidfile);
+        return;
+    };
+    // Signal only a live process whose command line still names the engine: a
+    // recycled pid must never be killed.
+    let alive = || unsafe { libc::kill(pid, 0) } == 0;
+    if alive() && process_is_engine(pid) {
+        unsafe { libc::kill(pid, libc::SIGTERM) };
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while alive() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if alive() {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    }
+    let _ = std::fs::remove_file(pidfile);
+}
+
+#[cfg(not(unix))]
+fn reap_stale_engine(pidfile: &Path) {
+    // Windows releases the database lock with the process, so there is nothing
+    // to reap; leave the record alone rather than guess at a pid.
+    let _ = pidfile;
 }
 
 /// Tauri-managed handle. Registration can fail without preventing the app from
@@ -386,6 +448,10 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
         .app_data_dir()
         .map(|dir| dir.join("NIP"))
         .unwrap_or_else(|_| std::path::PathBuf::from(".nip-data"));
+    let pidfile = pidfile_for(&data_dir);
+    // A previous run that was killed rather than shut down still owns the
+    // DuckDB lock; starting a second engine would only fail.
+    reap_stale_engine(&pidfile);
     let mut env = vec![
         (
             "NIP_DATA_DIR".to_string(),
@@ -501,10 +567,14 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
     }
 
     let url = format!("http://{bind}");
+    // Record the pid only once the engine is ready: a failed start must not
+    // leave a pidfile that a later run would try to reap.
+    let _ = std::fs::write(&pidfile, child.id().to_string());
     Ok(NipService {
         client: NipHttpClient::new(format!("{url}/mcp")),
         child,
         url,
+        pidfile,
     })
 }
 
@@ -554,6 +624,26 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_pidfile_never_kills_an_unrelated_process() {
+        let dir = std::env::temp_dir().join(format!("nip-reap-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pidfile = pidfile_for(&dir);
+        let mut unrelated = Command::new("sleep").arg("30").spawn().unwrap();
+        std::fs::write(&pidfile, unrelated.id().to_string()).unwrap();
+
+        reap_stale_engine(&pidfile);
+
+        assert!(!pidfile.exists(), "the stale record is cleared");
+        assert!(
+            unrelated.try_wait().unwrap().is_none(),
+            "a pid that no longer names nip-engine must survive"
+        );
+        let _ = unrelated.kill();
+        let _ = unrelated.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn lists_and_calls_nip_tools_over_streamable_http() {
         let Some(binary) = engine_binary() else {
             eprintln!("skipping: nip-engine binary is not built");
@@ -592,7 +682,7 @@ mod tests {
                     .as_ref()
                     .and_then(|value| value.get("schema_version"))
                     .and_then(Value::as_u64),
-                Some(9)
+                Some(10)
             );
             Ok(())
         });
