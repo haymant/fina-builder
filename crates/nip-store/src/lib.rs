@@ -1410,8 +1410,17 @@ impl Store {
     }
 
     pub fn replace_clusters(&mut self, clusters: &[NarrativeCluster]) -> Result<(), StoreError> {
+        // DuckDB checks a parent delete against the rows that still reference
+        // it and does not account for children removed earlier in the same
+        // transaction, so clearing memberships and clusters together fails on
+        // every rebuild after the first. Clear the memberships in their own
+        // transaction first.
+        {
+            let transaction = self.connection.transaction()?;
+            transaction.execute("DELETE FROM nip_cluster_memberships", [])?;
+            transaction.commit()?;
+        }
         let transaction = self.connection.transaction()?;
-        transaction.execute("DELETE FROM nip_cluster_memberships", [])?;
         transaction.execute("DELETE FROM nip_narrative_clusters", [])?;
         for cluster in clusters {
             transaction.execute(
@@ -2000,6 +2009,39 @@ mod tests {
     use duckdb::Connection;
     use std::collections::BTreeMap;
     use tempfile::tempdir;
+
+    #[test]
+    fn clusters_can_be_replaced_once_memberships_exist() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let event_id = nip_domain::EventId::new("event-1").unwrap();
+        let cluster = |run: &str, label: &str| NarrativeCluster {
+            cluster_id: "cluster-1".into(),
+            derivation_run_id: run.into(),
+            label: label.into(),
+            algorithm_version: "centroid-v1".into(),
+            member_count: 1,
+            created_at: "2026-11-18T01:00:00Z".parse().unwrap(),
+            members: vec![NarrativeClusterMember {
+                event_id: event_id.clone(),
+                similarity_millis: 1000,
+                rank: 1,
+            }],
+        };
+        store
+            .replace_clusters(std::slice::from_ref(&cluster("run-1", "first")))
+            .unwrap();
+        // A second rebuild deletes the old run's parent rows; DuckDB refuses
+        // that while the old membership rows still exist in the same
+        // transaction, which silently froze the clusters after the first run.
+        store
+            .replace_clusters(std::slice::from_ref(&cluster("run-2", "second")))
+            .unwrap();
+        let rows = store.clusters().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].derivation_run_id, "run-2");
+        assert_eq!(rows[0].label, "second");
+    }
 
     fn subscription(source_id: &str) -> PodcastSubscription {
         PodcastSubscription {

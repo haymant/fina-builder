@@ -1213,7 +1213,7 @@ impl NipMcp {
                 format!("cluster-run-{}", Utc::now().timestamp_millis()),
             ) {
                 Ok(clusters) => structured_success(serde_json::to_value(clusters).unwrap()),
-                Err(error) => structured_error("semantic_unavailable", error.to_string()),
+                Err(error) => structured_error("derivation_failed", error_chain(&error)),
             },
             Err(_) => structured_error("internal", "NIP service lock failed"),
         }
@@ -1228,7 +1228,7 @@ impl NipMcp {
                 .rebuild_graph(format!("graph-run-{}", Utc::now().timestamp_millis()))
             {
                 Ok(graph) => structured_success(serde_json::to_value(graph).unwrap()),
-                Err(error) => structured_error("graph_unavailable", error.to_string()),
+                Err(error) => structured_error("graph_unavailable", error_chain(&error)),
             },
             Err(_) => structured_error("internal", "NIP service lock failed"),
         }
@@ -1954,6 +1954,19 @@ fn asr_error_message(error: &AsrError) -> String {
     }
 }fn structured_error(code: impl Into<String>, message: impl Into<String>) -> CallToolResult {
     CallToolResult::structured_error(json!({"code": code.into(), "message": message.into()}))
+}
+
+/// `NipError` shows a coarse label for every storage failure. Walk the source
+/// chain so a caller sees which operation actually failed instead of
+/// "NIP storage could not be initialized" for an unrelated derivation step.
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(cause) = source {
+        parts.push(cause.to_string());
+        source = cause.source();
+    }
+    parts.join(": ")
 }
 
 fn transcription_error(error: NipError) -> CallToolResult {
