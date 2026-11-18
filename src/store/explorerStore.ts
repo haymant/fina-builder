@@ -4,10 +4,13 @@ import type { Dashboard, TileLayout } from '../features/dashboards/types'
 
 const initialDashboards: Dashboard[] = [
   { id: 'payoff-explorer', name: 'Payoff Explorer', layout: [
-    { i: 'riga-payoff-graph', x: 0, y: 0, w: 8, h: 5, minW: 4, minH: 3 },
-    { i: 'riga-path-timeline', x: 8, y: 0, w: 4, h: 5, minW: 3, minH: 3 },
-    { i: 'riga-transition-detail', x: 0, y: 5, w: 4, h: 4, minW: 3, minH: 3 },
-    { i: 'riga-branch-flow', x: 4, y: 5, w: 8, h: 4, minW: 4, minH: 3 },
+    { i: 'riga-payoff-tree', x: 0, y: 0, w: 12, h: 10, minW: 6, minH: 5 },
+    { i: 'riga-transition-detail', x: 0, y: 10, w: 6, h: 4, minW: 3, minH: 3 },
+    { i: 'riga-place-detail', x: 6, y: 10, w: 6, h: 4, minW: 3, minH: 3 },
+    { i: 'riga-payoff-graph', x: 0, y: 14, w: 7, h: 6, minW: 4, minH: 3 },
+    { i: 'riga-path-timeline', x: 7, y: 14, w: 5, h: 6, minW: 3, minH: 3 },
+    { i: 'riga-branch-flow', x: 0, y: 20, w: 12, h: 6, minW: 4, minH: 3 },
+    { i: 'riga-coupon-engine', x: 0, y: 26, w: 12, h: 7, minW: 5, minH: 4 },
   ] },
   { id: 'pathcube-analytics', name: 'PathCube Analytics', layout: [
     { i: 'riga-quantile-fan', x: 0, y: 0, w: 8, h: 5, minW: 4, minH: 3 },
@@ -57,6 +60,7 @@ const initialDashboards: Dashboard[] = [
     { i: 'riga-explain-net', x: 0, y: 13, w: 8, h: 4, minW: 5, minH: 3 },
     { i: 'riga-data-lineage', x: 8, y: 13, w: 4, h: 4, minW: 3, minH: 3 },
     { i: 'riga-statistics-summary', x: 0, y: 17, w: 6, h: 4, minW: 4, minH: 3 },
+    { i: 'riga-place-detail', x: 6, y: 17, w: 6, h: 4, minW: 3, minH: 3 },
     { i: 'riga-taylor-explain', x: 0, y: 21, w: 6, h: 4, minW: 4, minH: 3 },
     { i: 'riga-scenario-comparison', x: 0, y: 25, w: 6, h: 4, minW: 4, minH: 3 },
     { i: 'riga-book-risk', x: 6, y: 25, w: 6, h: 4, minW: 4, minH: 3 },
@@ -66,6 +70,15 @@ const initialDashboards: Dashboard[] = [
     { i: 'riga-path-cube-query', x: 6, y: 33, w: 6, h: 4, minW: 4, minH: 3 },
     { i: 'riga-execution-tape', x: 0, y: 37, w: 12, h: 4, minW: 5, minH: 3 },
     { i: 'riga-attribution', x: 0, y: 41, w: 12, h: 4, minW: 5, minH: 3 },
+  ] },
+  { id: 'path-effects', name: 'Path Effects', layout: [
+    { i: 'riga-path-detail', x: 0, y: 0, w: 4, h: 6, minW: 3, minH: 4 },
+    { i: 'riga-path-timeline', x: 4, y: 0, w: 8, h: 6, minW: 4, minH: 3 },
+    { i: 'riga-branch-flow', x: 0, y: 6, w: 8, h: 5, minW: 4, minH: 3 },
+    { i: 'riga-execution-tape', x: 8, y: 6, w: 4, h: 5, minW: 3, minH: 3 },
+    { i: 'riga-quantile-fan', x: 0, y: 11, w: 7, h: 5, minW: 4, minH: 3 },
+    { i: 'riga-cashflow-summary', x: 7, y: 11, w: 5, h: 5, minW: 4, minH: 3 },
+    { i: 'riga-coupon-engine', x: 0, y: 16, w: 12, h: 7, minW: 5, minH: 4 },
   ] },
   { id: 'tac-market-data', name: 'Market Data Workbench (tac-engine)', layout: [
     { i: 'tac-market-data-panel', x: 0, y: 0, w: 6, h: 4, minW: 4, minH: 3 },
@@ -86,11 +99,16 @@ const initialDashboards: Dashboard[] = [
   ] },
 ]
 
+/** The built-in dashboards, exported so the UI can offer "reset to default". */
+export const BUILT_IN_DASHBOARDS: Dashboard[] = initialDashboards
+
 type ExplorerState = {
   theme: ThemeMode
   dashboards: Dashboard[]; selectedDashboardId: string
   toggleTheme: () => void
-  selectDashboard: (id: string) => void; createDashboard: () => void; createDashboardFromTemplate: (name: string, layout: TileLayout[]) => string; renameDashboard: (id: string, name: string) => void; deleteDashboard: (id: string) => void; duplicateDashboard: (id: string) => void; updateLayout: (layout: TileLayout[]) => void
+  selectDashboard: (id: string) => void; createDashboard: () => void; createDashboardFromTemplate: (name: string, layout: TileLayout[]) => string; renameDashboard: (id: string, name: string) => void; deleteDashboard: (id: string) => void; duplicateDashboard: (id: string) => void; updateLayout: (layout: TileLayout[], dashboardId?: string) => void
+  /** Restore a built-in dashboard's tile set and positions (keeps its name). */
+  resetDashboardLayout: (id: string) => void
 }
 
 function load() { try { return JSON.parse(localStorage.getItem('fina-workspace') ?? '{}') as Partial<ExplorerState> } catch { return {} } }
@@ -110,5 +128,26 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   renameDashboard: (id, name) => { const dashboards = get().dashboards.map((d) => d.id === id ? { ...d, name: name || 'Untitled Dashboard' } : d); set({ dashboards }); persist({ ...get(), dashboards }) },
   deleteDashboard: (id) => { if (get().dashboards.length <= 1) return; const dashboards = get().dashboards.filter((d) => d.id !== id); const selectedDashboardId = get().selectedDashboardId === id ? dashboards[0]!.id : get().selectedDashboardId; set({ dashboards, selectedDashboardId }); persist({ ...get(), dashboards, selectedDashboardId }) },
   duplicateDashboard: (id) => { const source = get().dashboards.find((d) => d.id === id); if (!source) return; const copy = { ...source, id: `dashboard-${Date.now()}`, name: `${source.name} Copy`, layout: source.layout.map((l) => ({ ...l, i: `${l.i}-copy-${Date.now()}` })) }; const dashboards = [...get().dashboards, copy]; set({ dashboards, selectedDashboardId: copy.id }); persist({ ...get(), dashboards, selectedDashboardId: copy.id }) },
-  updateLayout: (layout) => { const dashboards = get().dashboards.map((d) => d.id === get().selectedDashboardId ? { ...d, layout } : d); set({ dashboards }); persist({ ...get(), dashboards }) },
+  resetDashboardLayout: (id) => {
+    const builtIn = BUILT_IN_DASHBOARDS.find((dashboard) => dashboard.id === id)
+    if (!builtIn) return
+    const layout = builtIn.layout.map((item) => ({ ...item }))
+    const dashboards = get().dashboards.map((dashboard) => (dashboard.id === id ? { ...dashboard, layout } : dashboard))
+    set({ dashboards, selectedDashboardId: id })
+    persist({ ...get(), dashboards, selectedDashboardId: id })
+  },
+  updateLayout: (layout, dashboardId) => {
+    const state = get()
+    const target = dashboardId ?? state.selectedDashboardId
+    // A persisted selection can point at a dashboard that no longer exists (or at
+    // one deleted in another window). Without this fallback every layout write —
+    // add, move, resize, remove — silently no-ops while the workspace keeps
+    // rendering `dashboards[0]`, which looks like "no tile can be deleted".
+    const known = state.dashboards.some((dashboard) => dashboard.id === target)
+    const id = known ? target : (state.dashboards[0]?.id ?? target)
+    const selectedDashboardId = known ? state.selectedDashboardId : id
+    const dashboards = state.dashboards.map((dashboard) => (dashboard.id === id ? { ...dashboard, layout } : dashboard))
+    set({ dashboards, selectedDashboardId })
+    persist({ ...get(), dashboards, selectedDashboardId })
+  },
 }))

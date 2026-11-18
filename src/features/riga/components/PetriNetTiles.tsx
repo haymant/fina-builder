@@ -24,6 +24,7 @@ import { transitionReference } from '../data/transitionReference'
 import { useRigaSelectionStore } from '../../../store/rigaSelectionStore'
 import { useObservabilityStore } from '../../../store/observabilityStore'
 import { RigaPanel, DataTable, FormulaTag, num, pathIdentity, pct, EmptyTile, Kpi } from './primitives'
+import { AutoFit } from './AutoFit'
 import { PanelCard } from '../../shared/components/PanelCard'
 import type { ExecutionNet, LedgerEntry, PathRecord, RiskNet } from '../types'
 
@@ -269,6 +270,7 @@ function NetCanvas({ net, mode, risk, ledger }: { net: ExecutionNet; mode: NetMo
       >
         <Background />
         <Controls className="react-flow-controls-themed" showInteractive={false} />
+        <AutoFit padding={0.2} />
       </ReactFlow>
       <button
         type="button"
@@ -507,7 +509,11 @@ export const TransitionDetailTile = memo(function TransitionDetailTile() {
         ) : null}
         <div>
           <p className="eyebrow mb-1">Condition</p>
-          <p className="text-xs text-main">{live?.condition ?? ledgerEntry?.condition ?? '—'}</p>
+          <p className="text-xs text-main">
+            {live?.condition ??
+              ledgerEntry?.condition ??
+              'Not priced by query_execution_net — this stage is reference structure; only the kernel’s priced transitions carry a live condition and populations.'}
+          </p>
         </div>
         {reference ? (
           <div>
@@ -535,8 +541,104 @@ export const TransitionDetailTile = memo(function TransitionDetailTile() {
   )
 })
 
+export const RigaPlaceDetailTile = memo(function RigaPlaceDetailTile() {
+  const selectedPlaceId = useRigaSelectionStore((s) => s.selectedPlaceId)
+  const net = useRigaExecutionNet()
+
+  if (!selectedPlaceId) {
+    return (
+      <EmptyTile
+        title="Place Detail"
+        subtitle="Select a place in the net"
+        message="Click a place (the round marks) in the Payoff Petri Net — or a place row in Token Detail — to inspect its arcs, incident transitions and token count."
+      />
+    )
+  }
+  const engineId = Object.entries(ENGINE_PLACE_TO_WORKFLOW).find(([, workflow]) => workflow === selectedPlaceId)?.[0]
+  const netData = net.data
+  const place = netData?.places.find((entry) => entry.id === selectedPlaceId || entry.id === engineId)
+  // Arcs come from both graphs: the execution topology (12 stages) and the
+  // product payoff graph the engine ships (8 transitions). A place clicked in the
+  // Payoff Graph belongs to the product graph and may not exist in the execution
+  // topology at all, so a single source would show it as an isolated node.
+  type Arc = { id: string; graph: 'execution' | 'product'; output?: string }
+  const incomingByTransition = new Map<string, Arc>()
+  const outgoingByTransition = new Map<string, Arc>()
+  for (const transition of WORKFLOW_TRANSITIONS) {
+    if (transition.output === selectedPlaceId) incomingByTransition.set(transition.id, { id: transition.id, graph: 'execution' })
+    if (transition.inputs.includes(selectedPlaceId)) {
+      outgoingByTransition.set(transition.id, { id: transition.id, graph: 'execution', output: transition.output })
+    }
+  }
+  for (const transition of netData?.payoffGraph?.nodes ?? []) {
+    // Product rows win on duplicates: they are what the graph view is showing.
+    if (transition.output === selectedPlaceId) incomingByTransition.set(transition.id, { id: transition.id, graph: 'product' })
+    if (transition.inputs.includes(selectedPlaceId)) {
+      outgoingByTransition.set(transition.id, { id: transition.id, graph: 'product', output: transition.output })
+    }
+  }
+  const incoming = [...incomingByTransition.values()]
+  const outgoing = [...outgoingByTransition.values()]
+  const probability = (id: string) => (netData ? liveTransition(netData, id)?.probability : undefined)
+  const graphBadge = (graph: Arc['graph']) => (
+    <span className="rounded border border-line px-1 py-0.5 text-[8px] tracking-wide text-muted uppercase">{graph}</span>
+  )
+
+  return (
+    <PanelCard title="Place Detail" subtitle={selectedPlaceId} className="h-full" bodyClassName="overflow-auto">
+      <div className="space-y-3 p-3">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Kpi label="Tokens" value={place !== undefined ? place.tokens.toLocaleString() : '—'} tone="primary" />
+          <Kpi label="Source" value={engineId ? 'engine' : 'reference'} />
+          <Kpi label="Incoming" value={incoming.length} />
+          <Kpi label="Outgoing" value={outgoing.length} />
+        </div>
+        {engineId ? (
+          <p className="text-[10px] text-muted">
+            Engine place <span className="font-mono">{engineId}</span> — token count reported by{' '}
+            <span className="font-mono">query_execution_net</span>. Arcs are the union of the execution topology and
+            the product payoff graph.
+          </p>
+        ) : (
+          <p className="text-[10px] text-muted">
+            Reference structure — <span className="font-mono">query_execution_net</span> reports only the kernel’s
+            places, so no token count. Arcs are the union of the execution topology and the product payoff graph.
+          </p>
+        )}
+        <div>
+          <p className="eyebrow mb-1">Incoming arcs (transition → place)</p>
+          <DataTable
+            columns={[
+              { key: 'id', label: 'Transition', render: (row: Arc) => displayTransition(row.id) },
+              { key: 'graph', label: 'Graph', render: (row: Arc) => graphBadge(row.graph) },
+              { key: 'probability', label: 'Firing probability', render: (row: Arc) => pct(probability(row.id)) },
+            ]}
+            rows={incoming}
+            empty="No producing transition — this is a source place."
+          />
+        </div>
+        <div>
+          <p className="eyebrow mb-1">Outgoing arcs (place → transition)</p>
+          <DataTable
+            columns={[
+              { key: 'id', label: 'Transition', render: (row: Arc) => displayTransition(row.id) },
+              { key: 'graph', label: 'Graph', render: (row: Arc) => graphBadge(row.graph) },
+              { key: 'output', label: 'Produces' },
+              { key: 'probability', label: 'Firing probability', render: (row: Arc) => pct(probability(row.id)) },
+            ]}
+            rows={outgoing}
+            empty="No consuming transition — this is a sink place."
+          />
+        </div>
+      </div>
+    </PanelCard>
+  )
+})
+
 export const TokenDetailTile = memo(function TokenDetailTile() {
   const selectedPlaceId = useRigaSelectionStore((s) => s.selectedPlaceId)
+  const selectedPathId = useRigaSelectionStore((s) => s.selectedPathId)
+  const selectPath = useRigaSelectionStore((s) => s.selectPath)
   const level = useObservabilityStore((s) => s.level)
   const net = useRigaExecutionNet()
   const tape = useRigaExecutionTape()
@@ -604,8 +706,10 @@ export const TokenDetailTile = memo(function TokenDetailTile() {
                   className="shock-button"
                   onClick={async () => {
                     setReplayError(null)
+                    const pathId = Number(pathIdentity(row).pathId)
                     try {
-                      setReplayed(await replayRigaPath(String(pathIdentity(row).pathId)))
+                      setReplayed(await replayRigaPath(pathId))
+                      selectPath(pathId)
                     } catch (e) {
                       setReplayError((e as { message?: string }).message ?? String(e))
                     }
@@ -617,6 +721,7 @@ export const TokenDetailTile = memo(function TokenDetailTile() {
             },
           ]}
           rows={sampled}
+          rowClassName={(row) => (String(pathIdentity(row).pathId) === String(selectedPathId) ? 'bg-primary/10 text-primary' : '')}
           empty="No sampled tokens"
         />
         {replayError ? <p className="text-[10px] text-danger">{replayError}</p> : null}

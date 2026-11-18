@@ -106,7 +106,7 @@ test('drills from a position into the blotter', {
 })
 
 test('validates a bulk import as a dry run before committing', {
-  tag: [journey.tradeOperations, feature.tradeRepository, feature.tradeImport],
+  tag: [journey.tradeOperations, journey.tradeImportExport, feature.tradeRepository, feature.tradeImport],
 }, async ({ page, repository }) => {
   await repository.openView('import')
   const csv = [
@@ -157,7 +157,7 @@ test('publishes aggregated positions as the canonical portfolio-risk handoff', {
 })
 
 test('shows bitemporal read-only mode and hides writes for viewers', {
-  tag: [journey.tradeBlotter, feature.tradeRepository, feature.bitemporal, feature.entitlements],
+  tag: [journey.tradeBlotter, journey.tradeEntitlements, feature.tradeRepository, feature.bitemporal, feature.entitlements],
 }, async ({ page, repository }) => {
   await repository.openView('blotter')
   const tradeId = await repository.openFirstTrade()
@@ -175,7 +175,7 @@ test('shows bitemporal read-only mode and hides writes for viewers', {
 })
 
 test('reviews immutable trade events and field-level version differences', {
-  tag: [journey.tradeHistory, feature.tradeRepository, feature.tradeHistory, feature.tradeLifecycle],
+  tag: [journey.tradeHistory, journey.tradeLifecycle, feature.tradeRepository, feature.tradeHistory, feature.tradeLifecycle],
 }, async ({ page, repository }) => {
   await repository.openView('blotter')
   await repository.search('PHX-1006')
@@ -240,7 +240,7 @@ test('preserves a saved blotter view and applies client-side grouping', {
 })
 
 test('keeps all-or-nothing imports blocked when dry-run validation finds a bad row', {
-  tag: [journey.tradeOperations, feature.tradeRepository, feature.tradeImport],
+  tag: [journey.tradeOperations, journey.tradeImportExport, feature.tradeRepository, feature.tradeImport],
 }, async ({ page, repository }) => {
   await repository.openView('import')
   const csv = [
@@ -259,7 +259,7 @@ test('keeps all-or-nothing imports blocked when dry-run validation finds a bad r
 
 
 test('books, amends, and cancels a trade with versioned audit reasons', {
-  tag: [TAG.priority.p0, journey.tradeOperations, journey.tradeHistory, feature.tradeRepository, feature.tradeLifecycle, feature.tradeHistory],
+  tag: [TAG.priority.p0, journey.tradeOperations, journey.tradeCapture, journey.tradeLifecycle, journey.tradeHistory, feature.tradeRepository, feature.tradeCapture, feature.tradeForms, feature.tradeLifecycle, feature.tradeHistory],
 }, async ({ page, repository }) => {
   await repository.openView('blotter')
   await page.getByTestId('new-trade').click()
@@ -311,7 +311,7 @@ test('books, amends, and cancels a trade with versioned audit reasons', {
 })
 
 test('exports the filtered blotter and opens trade shortcuts from the keyboard', {
-  tag: [journey.tradeBlotter, feature.tradeRepository, feature.tradeBlotter],
+  tag: [journey.tradeBlotter, journey.tradeImportExport, journey.tradeKeyboard, feature.tradeRepository, feature.tradeBlotter, feature.tradeExport, feature.tradeKeyboard],
 }, async ({ page, repository }) => {
   await repository.openView('blotter')
   await expectBlotterLoaded(repository)

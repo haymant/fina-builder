@@ -101,7 +101,8 @@ export interface LedgerEntry {
 }
 
 export interface PathIdentity {
-  pathId: string
+  /** The engine's `path_id` is a `usize`. */
+  pathId: number
   rngSeed: number
   sobolIndex: number | null
 }
@@ -115,8 +116,30 @@ export interface PathRecord {
   putPayoff: number
   couponPv: number
   couponByPeriod: number[]
+  /** Nominal coupon strip per period (Diagram 1); absent on older engines. */
+  couponLedger?: CouponLedgerRow[]
   funding: number
   pv: number
+}
+
+/** One period of the coupon strip: C01/C02 accrual + C03 memory recovery. */
+export interface CouponLedgerRow {
+  period: number
+  /** Payment/period-end time in years; 0 for periods after termination. */
+  years: number
+  qualifiedSteps: number
+  periodSteps: number
+  /** C01/C02 accrual due (nominal). */
+  accrual: number
+  /** C03 memory recovered with this payment (nominal). */
+  memoryPaid: number
+  /** accrual + memoryPaid (nominal). */
+  paid: number
+  /** Memory added to the carry when the period paid nothing. */
+  memoryAccrued: number
+  discountFactor: number
+  pv: number
+  knockedOut: boolean
 }
 
 export interface DeterminismEnvelope {
@@ -263,7 +286,7 @@ export interface ExecutionTapeEvent {
 }
 
 export interface ExecutionTapeEntry {
-  pathId: string
+  pathId: number
   events: ExecutionTapeEvent[]
   pv: number
 }

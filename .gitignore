@@ -67,3 +67,6 @@ book.db*
 
 # Generated demo recordings, audio masters and upload receipts
 artifacts/demo/
+
+# Local TTS tooling for demo narration
+.venv-tts/

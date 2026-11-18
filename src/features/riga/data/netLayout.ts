@@ -64,8 +64,102 @@ export const ENGINE_PLACE_TO_WORKFLOW: Record<string, string> = {
   memory_coupon_out: 'memory_coupon',
 }
 
+/**
+ * Map the product payoff-graph transitions (`query_execution_net.payoff_graph`)
+ * onto the execution workflow stages, so clicking a payoff node can select the
+ * matching Transition Detail. Six of the eight ids are exact; `range_accrual`
+ * and `aggregate_legs` are structural equivalents with different ids.
+ */
+export const PRODUCT_TO_WORKFLOW: Record<string, string> = {
+  worst_of_performance: 'worst_of_performance',
+  range_accrual: 'coupon_strip',
+  global_ko_gate: 'global_ko_gate',
+  knock_in_gate: 'knock_in_gate',
+  down_and_in_put: 'down_and_in_put',
+  aggregate_legs: 'aggregate_put',
+  memory_carry: 'memory_carry',
+  aggregate_coupon: 'aggregate_coupon',
+}
+
 const COLUMN = 210
 const ROW = 86
+const PAYOFF_COLUMN = 190
+const PAYOFF_ROW = 76
+
+export interface PayoffLayoutNode {
+  id: string
+  kind: 'place' | 'transition'
+  position: Point
+}
+
+export interface PayoffLayoutEdge {
+  id: string
+  from: string
+  fromKind: 'place' | 'transition'
+  to: string
+  toKind: 'place' | 'transition'
+}
+
+/**
+ * Lay the engine's product payoff graph out as a bipartite Petri net, left→right
+ * by longest-path rank. Used by the Payoff Graph tile's graph view; it is a
+ * layout of engine data, not a second hand-maintained topology.
+ *
+ * Each edge carries the kind of both endpoints: a Petri arc alternates
+ * place→transition→place, and the view needs that to build the right React Flow
+ * node ids (a bare prefix assumption drops every transition→place arc).
+ */
+export function layoutPayoffGraph(
+  transitions: Array<{ id: string; inputs: string[]; output: string }>,
+): { nodes: PayoffLayoutNode[]; edges: PayoffLayoutEdge[] } {
+  const produced = new Set(transitions.map((transition) => transition.output))
+  const rank = new Map<string, number>()
+  for (const transition of transitions) {
+    for (const input of transition.inputs) {
+      if (!produced.has(input)) rank.set(input, 0)
+    }
+  }
+  // Relax until stable (the payoff graph is a DAG; the pass cap is defensive).
+  for (let pass = 0; pass <= transitions.length + 1; pass++) {
+    for (const transition of transitions) {
+      const next = Math.max(0, ...transition.inputs.map((input) => rank.get(input) ?? 0)) + 1
+      if ((rank.get(transition.id) ?? -1) < next) rank.set(transition.id, next)
+      if ((rank.get(transition.output) ?? -1) < next + 1) rank.set(transition.output, next + 1)
+    }
+  }
+
+  const perColumn = new Map<number, number>()
+  const nodes: PayoffLayoutNode[] = []
+  const emit = (id: string, kind: PayoffLayoutNode['kind']) => {
+    if (nodes.some((node) => node.id === id && node.kind === kind)) return
+    const column = rank.get(id) ?? 0
+    const row = perColumn.get(column) ?? 0
+    perColumn.set(column, row + 1)
+    nodes.push({ id, kind, position: { x: column * PAYOFF_COLUMN, y: row * PAYOFF_ROW } })
+  }
+  for (const transition of [...transitions].sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0))) {
+    for (const input of transition.inputs) emit(input, 'place')
+    emit(transition.output, 'place')
+    emit(transition.id, 'transition')
+  }
+  const edges: PayoffLayoutEdge[] = transitions.flatMap((transition) => [
+    ...transition.inputs.map((input) => ({
+      id: `${input}->${transition.id}`,
+      from: input,
+      fromKind: 'place' as const,
+      to: transition.id,
+      toKind: 'transition' as const,
+    })),
+    {
+      id: `${transition.id}->${transition.output}`,
+      from: transition.id,
+      fromKind: 'transition' as const,
+      to: transition.output,
+      toKind: 'place' as const,
+    },
+  ])
+  return { nodes, edges }
+}
 
 /** Longest-path rank of every place/transition in the DAG. */
 function ranks(): Map<string, number> {

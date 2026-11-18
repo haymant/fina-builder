@@ -7,24 +7,14 @@
 // (`FinalPayoff = CouponLeg + OptionLeg + ReturnRatio`), so it is a KPI, not a flow.
 
 import { memo } from 'react'
-import { useRigaExecutionNet } from '../hooks'
+import { useRigaExecutionNet, useSelectedPathRecord } from '../hooks'
 import { useInstrumentStore } from '../../../store/instrumentStore'
 import { useTheme } from '../../themes/ThemeProvider'
 import Chart from '../../shared/components/Chart'
 import { Kpi, num, RigaPanel } from './primitives'
-
-/** The Murex sentinel for a disabled call strike / barrier. */
-const DISABLED = 900
-
-type KoKind = 'global' | 'local' | 'none'
+import { DISABLED_STRIKE, koPayoffId, type KoKind } from '../data/payoffTree'
 
 /** The payoff id the current trade resolves to on the KO branch. */
-function koPayoffId(kind: KoKind, memory: boolean): string | null {
-  if (kind === 'none') return null
-  if (kind === 'global') return memory ? 'P01' : 'P03'
-  return memory ? 'P02' : 'P04'
-}
-
 function koScenario(id: string | null): string {
   switch (id) {
     case 'P01':
@@ -42,6 +32,7 @@ function koScenario(id: string | null): string {
 
 export const RigaBranchFlowTile = memo(function RigaBranchFlowTile() {
   const state = useRigaExecutionNet()
+  const selectedPath = useSelectedPathRecord()
   const document = useInstrumentStore((s) => s.document)
   const { tokens } = useTheme()
 
@@ -77,7 +68,7 @@ export const RigaBranchFlowTile = memo(function RigaBranchFlowTile() {
         const maturityBarrier = put?.rails.maturBarrier
         const knockIn = put?.knockInBarrier
         const unreachable: string[] = []
-        if (callStrike === null || callStrike === undefined || callStrike >= DISABLED) {
+        if (callStrike === null || callStrike === undefined || callStrike >= DISABLED_STRIKE) {
           unreachable.push('P05 (LowerCallStrike disabled)')
         }
         if (
@@ -91,13 +82,42 @@ export const RigaBranchFlowTile = memo(function RigaBranchFlowTile() {
         }
 
         const koNode = koId ? `${koId} ${koScenario(koId)}` : 'KO'
+
+        // The selected path covers exactly one branch: its KO / KI / no-KI route
+        // through the tree. `path_series` is population-only, so this is the one
+        // view that ties a single path back to the aggregate decision tree.
+        const path = selectedPath.data
+        const branch = path === null
+          ? null
+          : path.knockedOut && koId
+            ? { node: koNode, source: 'Paths', target: koNode, label: `KO (${koNode})` }
+            : path.kiHit && kiPaths > 0
+              ? {
+                  node: 'KI → P07 below maturity barrier',
+                  source: 'No KO → maturity',
+                  target: 'KI → P07 below maturity barrier',
+                  label: 'KI branch (P07)',
+                }
+              : {
+                  node: 'No KI → P08 no-KI region',
+                  source: 'No KO → maturity',
+                  target: 'No KI → P08 no-KI region',
+                  label: 'no-KI branch (P08)',
+                }
+
         const nodes = [
           { name: 'Paths' },
           { name: koNode },
           { name: 'No KO → maturity' },
           { name: 'KI → P07 below maturity barrier' },
           { name: 'No KI → P08 no-KI region' },
-        ]
+        ].map((node) => ({
+          ...node,
+          itemStyle:
+            branch && branch.node === node.name
+              ? { color: tokens.warning, borderColor: tokens.warning, borderWidth: 2, opacity: 1 }
+              : { borderColor: tokens.border, borderWidth: 1, opacity: branch ? 0.5 : 1 },
+        }))
         const links = [
           ...(koPaths > 0 ? [{ source: 'Paths', target: koNode, value: koPaths }] : []),
           ...(survive > 0 ? [{ source: 'Paths', target: 'No KO → maturity', value: survive }] : []),
@@ -105,7 +125,17 @@ export const RigaBranchFlowTile = memo(function RigaBranchFlowTile() {
             ? [{ source: 'No KO → maturity', target: 'KI → P07 below maturity barrier', value: kiPaths }]
             : []),
           ...(noKi > 0 ? [{ source: 'No KO → maturity', target: 'No KI → P08 no-KI region', value: noKi }] : []),
-        ]
+        ].map((link) => {
+          const hot = branch !== null && branch.source === link.source && branch.target === link.target
+          return {
+            ...link,
+            lineStyle: {
+              color: hot ? tokens.warning : branch ? tokens.border : 'gradient',
+              opacity: hot ? 0.95 : branch ? 0.25 : 0.55,
+              curveness: 0.5,
+            },
+          }
+        })
 
         const option = {
           backgroundColor: 'transparent',
@@ -123,8 +153,6 @@ export const RigaBranchFlowTile = memo(function RigaBranchFlowTile() {
               data: nodes,
               links,
               label: { fontSize: 10, color: tokens.text },
-              lineStyle: { color: 'gradient', curveness: 0.5 },
-              itemStyle: { borderColor: tokens.border, borderWidth: 1 },
             },
           ],
         }
@@ -146,6 +174,14 @@ export const RigaBranchFlowTile = memo(function RigaBranchFlowTile() {
               )}
             </div>
             <div className="shrink-0 space-y-1 border-t border-line px-3 py-2 text-[9px] text-muted">
+              {branch ? (
+                <p className="text-warning" data-testid="branch-flow-selected">
+                  Selected path #{path?.identity?.pathId ?? '—'} → {branch.label}
+                  {path?.knockedOut ? ` at t=${num(path.koTime, 4)}` : path?.kiHit ? ' · KI hit' : ' · no KI'}.
+                </p>
+              ) : (
+                <p>Select a path to highlight it on the tree.</p>
+              )}
               <p>
                 Coupon leg (C01–C03) accrues on {num(couponPaths, 0)} paths and is additive on every branch:{' '}
                 <span className="font-mono">FinalPayoff = CouponLeg + OptionLeg + ReturnRatio</span>.
