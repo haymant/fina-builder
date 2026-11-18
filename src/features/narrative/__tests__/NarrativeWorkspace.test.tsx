@@ -9,6 +9,7 @@ const narrativeApiMock = vi.hoisted(() => ({
   signalSnapshot: vi.fn(), listEtfMappings: vi.fn(), listEditorialCandidates: vi.fn(),
   resourceStatus: vi.fn(), extractionStatus: vi.fn(), listNarrativeGraph: vi.fn(),
   providerStatus: vi.fn(), listPodcastTranscriptionJobs: vi.fn(), asrStatus: vi.fn(),
+  extractClaimsFromEvent: vi.fn(),
   listMediaArtifacts: vi.fn(), listEpisodePage: vi.fn(), rebuildNarrativeClusters: vi.fn(),
   rebuildNarrativeGraph: vi.fn(), refreshDuePodcastFeeds: vi.fn(),
 }))
@@ -387,7 +388,41 @@ function stubWorkspaceApi() {
   narrativeApiMock.listEpisodePage.mockResolvedValue({ episodes: [], total: 0, limit: 50, offset: 0, next_offset: null })
   narrativeApiMock.rebuildNarrativeClusters.mockResolvedValue([])
   narrativeApiMock.rebuildNarrativeGraph.mockResolvedValue(null)
+  narrativeApiMock.extractClaimsFromEvent.mockResolvedValue([])
+  narrativeApiMock.listPodcastTranscriptionJobs.mockResolvedValue([])
 }
+
+const availableProvider = {
+  configured: true, bridge_state: 'ready' as const, provider_kind: 'remote', provider_id: 'provider-a',
+  model: 'gpt-test', reasoning_effort: 'low', provider_api: 'chat', remote: true,
+  consent: 'granted' as const, consent_recorded_at: '2026-11-18T01:00:00Z', disclosure: null,
+  extraction_state: 'available' as const, warnings: [],
+}
+
+describe('claim extraction feedback', () => {
+  it('reports a provider failure next to the action instead of failing silently', async () => {
+    stubWorkspaceApi()
+    narrativeApiMock.providerStatus.mockResolvedValue(availableProvider)
+    narrativeApiMock.extractClaimsFromEvent.mockRejectedValueOnce(new Error('the provider run did not complete'))
+    render(<NarrativeWorkspace />)
+    await waitFor(() => expect(screen.getByText('episode-1')).toBeTruthy())
+    fireEvent.click(screen.getByText('episode-1'))
+    const extract = await screen.findByRole('button', { name: 'Extract claims' })
+    fireEvent.click(extract)
+    const alerts = await screen.findAllByRole('alert')
+    const alert = alerts.find((node) => node.textContent?.includes('provider run did not complete'))!
+    expect(alert.textContent).toContain('the provider run did not complete')
+    expect(alert.textContent).toContain('Check that the active provider')
+    // The failed run re-reads the provider state instead of leaving the panel
+    // claiming extraction is ready.
+    await waitFor(() => expect(narrativeApiMock.providerStatus).toHaveBeenCalledTimes(2))
+  })
+
+  it('shows a failed extraction inside the transcript dialog as an alert', () => {
+    render(<TranscriptDialog event={event} busy={false} status="the provider run did not complete" statusIsError extractionAvailable onClose={vi.fn()} onExtract={vi.fn()} onOpenInList={vi.fn()} />)
+    expect(screen.getByRole('alert').textContent).toContain('the provider run did not complete')
+  })
+})
 
 describe('NarrativeWorkspace derived projections', () => {
   it('rebuilds clusters and the graph after a background transcription commits', async () => {

@@ -60,7 +60,8 @@ function series(option: ReturnType<typeof buildGraphOption>) {
     data: Array<{ id: string; name: string; category: number; symbolSize: number }>
     links: Array<{ label: { show: boolean }; relationship: string }>
     categories: Array<{ name: string; itemStyle: { color: string } }>
-    label: { show: boolean }
+    label: { show: boolean; color: string; textBorderWidth: number; fontSize: number }
+    edgeLabel: { show: boolean; color: string; textBorderWidth: number }
     roam: boolean
     draggable: boolean
   }
@@ -118,6 +119,25 @@ describe('buildGraphOption', () => {
     const narrative = graphSeries.data.find((node) => node.id === 'narrative:cluster-1')!
     const leaf = graphSeries.data.find((node) => node.id === 'event:event-3')!
     expect(narrative.symbolSize).toBeGreaterThan(leaf.symbolSize)
+  })
+
+  it('draws labels in the theme colour without a halo', () => {
+    const option = buildGraphOption(graph, {
+      showNodeLabels: true,
+      showEdgeLabels: true,
+      colorByCluster: true,
+      textColor: '#f4f4f5',
+      mutedColor: '#a1a1aa',
+      surfaceColor: '#18181b',
+    })
+    const { label, edgeLabel } = series(option)
+    // A tiny label with a white outline was unreadable on the dark canvas and
+    // painted black text over dark nodes.
+    expect(label.color).toBe('#f4f4f5')
+    expect(label.textBorderWidth).toBe(0)
+    expect(label.fontSize).toBeGreaterThanOrEqual(11)
+    expect(edgeLabel.color).toBe('#a1a1aa')
+    expect(edgeLabel.textBorderWidth).toBe(0)
   })
 
   it('names a relation the way a reader would say it', () => {

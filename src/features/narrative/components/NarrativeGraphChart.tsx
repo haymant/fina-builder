@@ -4,6 +4,7 @@
 
 import { useMemo, useState } from 'react'
 import Chart from '../../shared/components/Chart'
+import { useTheme } from '../../themes/ThemeProvider'
 import { buildGraphOption } from '../graph'
 import type { NipNarrativeGraph } from '../types'
 
@@ -37,10 +38,21 @@ export function NarrativeGraphChart({
   // text. Hovering an edge still names its relation through the tooltip.
   const [showEdgeLabels, setShowEdgeLabels] = useState(false)
   const [colorByCluster, setColorByCluster] = useState(true)
+  const { tokens } = useTheme()
 
   const option = useMemo(
-    () => buildGraphOption(graph, { showNodeLabels, showEdgeLabels, colorByCluster }),
-    [graph, showNodeLabels, showEdgeLabels, colorByCluster],
+    () =>
+      buildGraphOption(graph, {
+        showNodeLabels,
+        showEdgeLabels,
+        colorByCluster,
+        // Canvas colours must be sRGB; the theme provider already converted
+        // its oklch tokens, which zrender would silently render as black.
+        textColor: tokens.text,
+        mutedColor: tokens.muted,
+        surfaceColor: tokens.panel,
+      }),
+    [graph, showNodeLabels, showEdgeLabels, colorByCluster, tokens],
   )
 
   const handleClick = (params: ClickParams) => {

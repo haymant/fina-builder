@@ -8,7 +8,17 @@ export interface GraphViewSettings {
   showNodeLabels: boolean
   showEdgeLabels: boolean
   colorByCluster: boolean
+  /** sRGB colours: zrender cannot parse the app's oklch() tokens. */
+  textColor?: string
+  mutedColor?: string
+  surfaceColor?: string
 }
+
+// Readable without an outline: an outlined 9px label turns into a smear at
+// graph zoom levels, and a hard-coded black fails on the dark theme.
+const DEFAULT_TEXT = '#e5e7eb'
+const DEFAULT_MUTED = '#9aa4b2'
+const DEFAULT_SURFACE = '#1f2430'
 
 const TYPE_COLORS: Record<string, string> = {
   event: '#4f8ef7',
@@ -117,10 +127,17 @@ export function buildGraphOption(graph: NipNarrativeGraph, view: GraphViewSettin
     },
   }))
 
+  const textColor = view.textColor ?? DEFAULT_TEXT
+  const mutedColor = view.mutedColor ?? DEFAULT_MUTED
+  const surfaceColor = view.surfaceColor ?? DEFAULT_SURFACE
+
   return {
     animationDuration: 350,
     tooltip: {
       trigger: 'item',
+      backgroundColor: surfaceColor,
+      borderWidth: 0,
+      textStyle: { color: textColor, fontSize: 12 },
       formatter: (params: {
         dataType?: string
         data?: {
@@ -144,7 +161,8 @@ export function buildGraphOption(graph: NipNarrativeGraph, view: GraphViewSettin
         type: 'scroll',
         bottom: 0,
         data: categories.map((category) => category.name),
-        textStyle: { fontSize: 10 },
+        textStyle: { fontSize: 10, color: mutedColor },
+        pageTextStyle: { color: mutedColor },
       },
     ],
     series: [
@@ -166,10 +184,20 @@ export function buildGraphOption(graph: NipNarrativeGraph, view: GraphViewSettin
         label: {
           show: view.showNodeLabels,
           position: 'right',
-          fontSize: 10,
+          color: textColor,
+          fontSize: 11,
+          fontWeight: 500,
+          // No white halo: on a dense canvas the outline is what made the
+          // label unreadable, and it fights the theme in dark mode.
+          textBorderWidth: 0,
           formatter: '{b}',
         },
-        edgeLabel: { show: view.showEdgeLabels, fontSize: 9 },
+        edgeLabel: {
+          show: view.showEdgeLabels,
+          color: mutedColor,
+          fontSize: 10,
+          textBorderWidth: 0,
+        },
         emphasis: {
           focus: 'adjacency',
           edgeLabel: { show: true },

@@ -149,3 +149,7 @@ video.media-player { height:auto; max-height:180px; }
 .narrative-graph-toggle.is-on { border-color:color-mix(in srgb,var(--theme-primary) 55%,var(--theme-border)); background:color-mix(in srgb,var(--theme-primary) 14%,transparent); color:var(--theme-text); }
 .narrative-graph-toggle:focus-visible { outline:2px solid var(--theme-primary); outline-offset:1px; }
 .narrative-graph-hint { font-size:9px; color:var(--theme-muted); }
+.narrative-notice-error { border:1px solid color-mix(in srgb,var(--theme-danger) 45%,var(--theme-border)); background:color-mix(in srgb,var(--theme-danger) 10%,var(--theme-panel)); color:var(--theme-text); }
+.narrative-extraction-hint { margin:0; padding:6px 16px; font-size:10px; color:var(--theme-warning); }
+.event-detail .narrative-extraction-hint { padding:0 0 8px; }
+.narrative-dialog-status.is-error { color:var(--theme-danger); }
