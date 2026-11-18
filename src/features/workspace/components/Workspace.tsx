@@ -1,5 +1,5 @@
 import { BookOpen, ChevronDown, ChevronRight, LayoutGrid, MessageSquare, Moon, Plus, RotateCcw, Sun } from 'lucide-react'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AppMenuBar } from './AppMenuBar'
 import { ConfirmDialog } from './ConfirmDialog'
 import { loadLocation, saveLocation, splitPrimary, TRADE_VIEWS, type Location, type TradeView } from '../navigation'
@@ -23,6 +23,48 @@ import '../panels.css'
 const Grid = WidthProvider(Responsive)
 const TradeRepository = lazy(() => import('../../trade-repository/components/TradeRepository').then((m) => ({ default: m.TradeRepository })))
 const NarrativeWorkspace = lazy(() => import('../../narrative/components/NarrativeWorkspace').then((m) => ({ default: m.NarrativeWorkspace })))
+
+/**
+ * A lazy view has two failure modes the plain Suspense fallback hides: the
+ * chunk request fails outright, or it never resolves (a dev server that died
+ * while the window stayed open). Both look like an endless spinner, so say so
+ * after a few seconds and offer the only action that helps.
+ */
+function SlowModuleNotice({ label }: { label: string }) {
+  const [slow, setSlow] = useState(false)
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSlow(true), 8_000)
+    return () => window.clearTimeout(timer)
+  }, [])
+  return (
+    <div className="narrative-empty" role="status">
+      <span>Loading {label}…</span>
+      {slow ? (
+        <>
+          <span className="text-[11px]">This is taking longer than expected. The module could not be fetched — reload the window, and during development check that the Vite dev server is still running.</span>
+          <button type="button" className="ghost-button mt-2" onClick={() => window.location.reload()}>Reload window</button>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+class ViewLoadBoundary extends Component<{ label: string; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  render() {
+    if (!this.state.failed) return this.props.children
+    return (
+      <div className="narrative-empty" role="alert">
+        <span>{this.props.label} could not be loaded.</span>
+        <span className="text-[11px]">Reload the window. If this is a development build, confirm the Vite server is running.</span>
+        <button type="button" className="ghost-button mt-2" onClick={() => window.location.reload()}>Reload window</button>
+      </div>
+    )
+  }
+}
 
 const showAllKey = (id: string) => `fina.showAllTiles.${id}`
 
@@ -191,15 +233,19 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
       </header>
       {location.kind === 'trades' ? (
         <main className="workspace-canvas relative flex min-h-0 flex-1 flex-col overflow-hidden p-4">
-          <Suspense fallback={null}>
-            <TradeRepository view={location.view} onViewChange={goTrades} newTradeSignal={newTradeSignal} onOpenDashboard={(id) => navigate({ kind: 'dashboard', dashboardId: dashboards.some((d) => d.id === id) ? id : dashboards[0]!.id })} />
-          </Suspense>
+          <ViewLoadBoundary label="The trade repository">
+            <Suspense fallback={<SlowModuleNotice label="the trade repository" />}>
+              <TradeRepository view={location.view} onViewChange={goTrades} newTradeSignal={newTradeSignal} onOpenDashboard={(id) => navigate({ kind: 'dashboard', dashboardId: dashboards.some((d) => d.id === id) ? id : dashboards[0]!.id })} />
+            </Suspense>
+          </ViewLoadBoundary>
         </main>
       ) : location.kind === 'narrative' ? (
         <main className="workspace-canvas relative min-h-0 flex-1 overflow-auto p-5">
-          <Suspense fallback={<div className="narrative-empty"><span>Loading Narrative Intelligence…</span></div>}>
-            <NarrativeWorkspace view={location.view} />
-          </Suspense>
+          <ViewLoadBoundary label="Narrative Intelligence">
+            <Suspense fallback={<SlowModuleNotice label="Narrative Intelligence" />}>
+              <NarrativeWorkspace view={location.view} />
+            </Suspense>
+          </ViewLoadBoundary>
         </main>
       ) : (
       <main className="workspace-canvas relative min-h-0 flex-1 overflow-auto p-4">
