@@ -1,11 +1,11 @@
 use std::{
-    env,
-    fs,
+    collections::HashMap,
+    env, fs,
     net::SocketAddr,
     path::{Path, PathBuf},
     process::ExitCode,
     sync::{
-        atomic::Ordering,
+        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -15,7 +15,8 @@ use std::{
 use chrono::{DateTime, Utc};
 use nip_domain::{
     EtfMapping, EventRecord, EventSearchQuery, LocalEventImport, PodcastEpisode,
-    PodcastSubscriptionState, SourceId, SourceKind, SourceState, SourceUpdate,
+    PodcastSubscriptionState, SourceId, SourceKind, SourceState, SourceUpdate, VideoAsset,
+    VideoJob, VideoWorkflow,
 };
 use nip_engine::{
     asr::{AsrError, AsrProvider, ComfyUiAsrProvider, DeterministicFakeAsrProvider},
@@ -39,8 +40,11 @@ use rmcp::{
     transport::stdio,
     ServerHandler, ServiceExt,
 };
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
+
+mod linkzag;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8794";
 const IN_PROCESS_REFRESH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
@@ -49,6 +53,7 @@ const IN_PROCESS_REFRESH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 struct NipMcp {
     service: Arc<Mutex<NipService>>,
     jobs: JobRegistry,
+    video_cancel: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     /// One long GPU job at a time: SDXL covers and the ASR model share an 8 GB
     /// card, so concurrent transcriptions would fight for the same VRAM.
     gate: Arc<Mutex<()>>,
@@ -117,8 +122,497 @@ struct SignalParams {
     as_of: Option<String>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoProjectParams {
+    project: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoProjectIdParams {
+    project_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoEpisodeParams {
+    episode: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoEvidenceParams {
+    episode_id: String,
+    episode_revision: u32,
+    evidence: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoEvidenceListParams {
+    episode_id: String,
+    episode_revision: u32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoStoryboardParams {
+    storyboard: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoSceneParams {
+    scene: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoShotParams {
+    shot: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoAssetParams {
+    asset: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoWorkflowParams {
+    workflow: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoLimitParams {
+    #[serde(default = "default_page_limit")]
+    limit: u32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct LinkZagRenderParams {
+    visual_spec: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoJobIdParams {
+    job_id: String,
+}
+
+fn parse_video_value<T: DeserializeOwned>(value: Value) -> Result<T, String> {
+    serde_json::from_value(value).map_err(|error| format!("invalid Video record: {error}"))
+}
+
 #[tool_router]
 impl NipMcp {
+    #[tool(
+        description = "Report Video Workspace capability states. Deterministic planning is available without model providers."
+    )]
+    fn video_capabilities(&self) -> CallToolResult {
+        structured_success(json!({
+            "planning": "ready",
+            "evidence_linkage": "ready",
+            "deterministic_renderer": "linkzag_adapter",
+            "mock_assets": "candidate_only",
+            "generative_video": "not_configured",
+            "tts": "not_configured",
+            "asr": "not_configured",
+            "disclosure": "Evidence and planning are available; no model-generated video is executed by this surface."
+        }))
+    }
+
+    #[tool(
+        description = "List current reusable Video assets with provider, hash, capability, license, and lineage-ready metadata."
+    )]
+    fn list_video_assets(
+        &self,
+        Parameters(params): Parameters<VideoLimitParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_assets(params.limit) {
+                Ok(assets) => structured_success(serde_json::to_value(assets).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Register a reusable Video asset. The path must be managed metadata, not an arbitrary provider path."
+    )]
+    fn register_video_asset(
+        &self,
+        Parameters(params): Parameters<VideoAssetParams>,
+    ) -> CallToolResult {
+        let asset = match parse_video_value::<VideoAsset>(params.asset) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_video_asset(&asset) {
+                Ok(()) => structured_success(serde_json::to_value(asset).unwrap()),
+                Err(error) => structured_error("video_asset_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "List versioned Video workflow registry records.")]
+    fn list_video_workflows(&self) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_workflows() {
+                Ok(workflows) => structured_success(serde_json::to_value(workflows).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "Register a versioned Video workflow adapter record.")]
+    fn register_video_workflow(
+        &self,
+        Parameters(params): Parameters<VideoWorkflowParams>,
+    ) -> CallToolResult {
+        let workflow = match parse_video_value::<VideoWorkflow>(params.workflow) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_video_workflow(&workflow) {
+                Ok(()) => structured_success(serde_json::to_value(workflow).unwrap()),
+                Err(error) => structured_error("video_workflow_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Queue a bounded evidence/quote/chart visual spec for asynchronous LinkZag rendering. Poll video_job_status."
+    )]
+    fn render_video_linkzag(
+        &self,
+        Parameters(params): Parameters<LinkZagRenderParams>,
+    ) -> CallToolResult {
+        let job_id = format!(
+            "video-linkzag-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let now = Utc::now();
+        let job = VideoJob {
+            job_id: job_id.clone(),
+            operation: "linkzag.segment".into(),
+            status: "queued".into(),
+            input_revision: Some(1),
+            progress_millis: 0,
+            cancellation_requested: false,
+            resource_estimate: Some(params.visual_spec.clone()),
+            output_manifest: None,
+            safe_error_message: None,
+            started_at: None,
+            finished_at: None,
+            created_at: now,
+        };
+        if let Ok(mut service) = self.service.lock() {
+            if let Err(error) = service.save_video_job(&job) {
+                return structured_error("video_job_rejected", error.to_string());
+            }
+        } else {
+            return structured_error("internal", "NIP service lock failed");
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.video_cancel
+            .lock()
+            .ok()
+            .map(|mut flags| flags.insert(job_id.clone(), cancel.clone()));
+        spawn_video_linkzag_job(
+            self.service.clone(),
+            self.video_cancel.clone(),
+            job_id.clone(),
+            params.visual_spec,
+            cancel,
+        );
+        structured_success(
+            json!({ "job_id": job_id, "status": "queued", "poll_tool": "video_job_status" }),
+        )
+    }
+
+    #[tool(
+        description = "Read one asynchronous Video job, including progress, cancellation state, output manifest, and safe error."
+    )]
+    fn video_job_status(&self, Parameters(params): Parameters<VideoJobIdParams>) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_job(&params.job_id) {
+                Ok(Some(job)) => structured_success(serde_json::to_value(job).unwrap()),
+                Ok(None) => structured_error("not_found", "Video job was not found"),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "List recent asynchronous Video jobs.")]
+    fn list_video_jobs(&self, Parameters(params): Parameters<VideoLimitParams>) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_jobs(params.limit) {
+                Ok(jobs) => structured_success(serde_json::to_value(jobs).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "Request cooperative cancellation of an active Video job.")]
+    fn cancel_video_job(&self, Parameters(params): Parameters<VideoJobIdParams>) -> CallToolResult {
+        if let Ok(flags) = self.video_cancel.lock() {
+            if let Some(flag) = flags.get(&params.job_id) {
+                flag.store(true, Ordering::SeqCst);
+            }
+        }
+        match self.service.lock() {
+            Ok(mut service) => match service.video_job(&params.job_id) {
+                Ok(Some(mut job))
+                    if !matches!(job.status.as_str(), "succeeded" | "failed" | "cancelled") =>
+                {
+                    job.cancellation_requested = true;
+                    let _ = service.save_video_job(&job);
+                    structured_success(
+                        json!({ "job_id": job.job_id, "status": job.status, "cancellation_requested": true }),
+                    )
+                }
+                Ok(Some(job)) => structured_success(
+                    json!({ "job_id": job.job_id, "status": job.status, "cancellation_requested": false }),
+                ),
+                Ok(None) => structured_error("not_found", "Video job was not found"),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Retry a failed or cancelled Video job as a new durable attempt using its persisted visual specification."
+    )]
+    fn retry_video_job(&self, Parameters(params): Parameters<VideoJobIdParams>) -> CallToolResult {
+        let previous = match self.service.lock() {
+            Ok(service) => match service.video_job(&params.job_id) {
+                Ok(Some(job)) => job,
+                Ok(None) => return structured_error("not_found", "Video job was not found"),
+                Err(error) => return structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => return structured_error("internal", "NIP service lock failed"),
+        };
+        if !matches!(previous.status.as_str(), "failed" | "cancelled") {
+            return structured_error(
+                "invalid_request",
+                "only failed or cancelled Video jobs can be retried",
+            );
+        }
+        let visual_spec = previous
+            .resource_estimate
+            .clone()
+            .unwrap_or_else(|| json!({}));
+        let retry_id = format!(
+            "{}-retry-{}",
+            previous.job_id,
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let job = VideoJob {
+            job_id: retry_id.clone(),
+            operation: previous.operation,
+            status: "queued".into(),
+            input_revision: previous.input_revision,
+            progress_millis: 0,
+            cancellation_requested: false,
+            resource_estimate: Some(visual_spec.clone()),
+            output_manifest: None,
+            safe_error_message: None,
+            started_at: None,
+            finished_at: None,
+            created_at: Utc::now(),
+        };
+        if let Ok(mut service) = self.service.lock() {
+            if let Err(error) = service.save_video_job(&job) {
+                return structured_error("video_job_rejected", error.to_string());
+            }
+        } else {
+            return structured_error("internal", "NIP service lock failed");
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.video_cancel
+            .lock()
+            .ok()
+            .map(|mut flags| flags.insert(retry_id.clone(), cancel.clone()));
+        spawn_video_linkzag_job(
+            self.service.clone(),
+            self.video_cancel.clone(),
+            retry_id.clone(),
+            visual_spec,
+            cancel,
+        );
+        structured_success(
+            json!({ "job_id": retry_id, "retry_of": previous.job_id, "status": "queued" }),
+        )
+    }
+
+    #[tool(description = "List the current revision of every Video Workspace project.")]
+    fn list_video_projects(&self) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_projects() {
+                Ok(projects) => structured_success(serde_json::to_value(projects).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Create the first revision or append the next immutable revision of a Video project."
+    )]
+    fn create_video_project(
+        &self,
+        Parameters(params): Parameters<VideoProjectParams>,
+    ) -> CallToolResult {
+        let project = match parse_video_value(params.project) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_video_project(&project) {
+                Ok(()) => structured_success(serde_json::to_value(project).unwrap()),
+                Err(error) => structured_error("video_project_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "Get the current immutable revision of a Video project.")]
+    fn get_video_project(
+        &self,
+        Parameters(params): Parameters<VideoProjectIdParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_project(&params.project_id) {
+                Ok(Some(project)) => structured_success(serde_json::to_value(project).unwrap()),
+                Ok(None) => structured_error("not_found", "Video project was not found"),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Create the first revision or append the next immutable revision of a Video episode."
+    )]
+    fn create_video_episode(
+        &self,
+        Parameters(params): Parameters<VideoEpisodeParams>,
+    ) -> CallToolResult {
+        let episode = match parse_video_value(params.episode) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_video_episode(&episode) {
+                Ok(()) => structured_success(serde_json::to_value(episode).unwrap()),
+                Err(error) => structured_error("video_episode_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "Link an episode revision to an existing canonical NIP event or claim.")]
+    fn link_video_evidence(
+        &self,
+        Parameters(params): Parameters<VideoEvidenceParams>,
+    ) -> CallToolResult {
+        let evidence = match parse_video_value(params.evidence) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.link_video_evidence(
+                &params.episode_id,
+                params.episode_revision,
+                &evidence,
+            ) {
+                Ok(()) => structured_success(
+                    json!({ "episode_id": params.episode_id, "episode_revision": params.episode_revision, "evidence": evidence }),
+                ),
+                Err(error) => structured_error("video_evidence_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "List evidence links for an episode revision.")]
+    fn list_video_evidence(
+        &self,
+        Parameters(params): Parameters<VideoEvidenceListParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => {
+                match service.video_evidence(&params.episode_id, params.episode_revision) {
+                    Ok(evidence) => structured_success(serde_json::to_value(evidence).unwrap()),
+                    Err(error) => structured_error("storage_unavailable", error.to_string()),
+                }
+            }
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "Save a versioned Video storyboard record.")]
+    fn save_video_storyboard(
+        &self,
+        Parameters(params): Parameters<VideoStoryboardParams>,
+    ) -> CallToolResult {
+        let storyboard = match parse_video_value(params.storyboard) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_video_storyboard(&storyboard) {
+                Ok(()) => structured_success(serde_json::to_value(storyboard).unwrap()),
+                Err(error) => structured_error("video_storyboard_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "Save a versioned Video scene record.")]
+    fn save_video_scene(&self, Parameters(params): Parameters<VideoSceneParams>) -> CallToolResult {
+        let scene = match parse_video_value(params.scene) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_video_scene(&scene) {
+                Ok(()) => structured_success(serde_json::to_value(scene).unwrap()),
+                Err(error) => structured_error("video_scene_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "Save a versioned Video shot record.")]
+    fn save_video_shot(&self, Parameters(params): Parameters<VideoShotParams>) -> CallToolResult {
+        let shot = match parse_video_value(params.shot) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_video_shot(&shot) {
+                Ok(()) => structured_success(serde_json::to_value(shot).unwrap()),
+                Err(error) => structured_error("video_shot_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
     #[tool(description = "Report NIP liveness, schema version, and readiness.")]
     fn health(&self) -> CallToolResult {
         match self.service.lock() {
@@ -471,12 +965,10 @@ impl NipMcp {
         };
         let client = HttpFeedClient::default();
         match self.service.lock() {
-            Ok(mut service) => {
-                match service.create_source(draft, &client, Utc::now()) {
-                    Ok(source) => structured_success(serde_json::to_value(source).unwrap()),
-                    Err(error) => structured_error("create_failed", error.to_string()),
-                }
-            }
+            Ok(mut service) => match service.create_source(draft, &client, Utc::now()) {
+                Ok(source) => structured_success(serde_json::to_value(source).unwrap()),
+                Err(error) => structured_error("create_failed", error.to_string()),
+            },
             Err(_) => structured_error("internal", "NIP service lock failed"),
         }
     }
@@ -581,9 +1073,7 @@ impl NipMcp {
             };
             let episodes = match service.podcast_episodes(&source_id) {
                 Ok(episodes) => episodes,
-                Err(error) => {
-                    return structured_error("storage_unavailable", error.to_string())
-                }
+                Err(error) => return structured_error("storage_unavailable", error.to_string()),
             };
             let episode = episodes.into_iter().find(|episode| {
                 params
@@ -790,10 +1280,10 @@ impl NipMcp {
             )
         };
 
-        if let Some(active) =
-            self.jobs
-                .active_for(episode.source_id.as_str(), episode.source_native_id.as_deref())
-        {
+        if let Some(active) = self.jobs.active_for(
+            episode.source_id.as_str(),
+            episode.source_native_id.as_deref(),
+        ) {
             return structured_success(serde_json::to_value(active).unwrap());
         }
 
@@ -859,9 +1349,10 @@ impl NipMcp {
         &self,
         Parameters(params): Parameters<ListTranscriptionJobsParams>,
     ) -> CallToolResult {
-        let jobs = self
-            .jobs
-            .list(params.source_id.as_deref(), params.limit.unwrap_or(20) as usize);
+        let jobs = self.jobs.list(
+            params.source_id.as_deref(),
+            params.limit.unwrap_or(20) as usize,
+        );
         structured_success(serde_json::to_value(jobs).unwrap())
     }
 
@@ -876,7 +1367,11 @@ impl NipMcp {
             Some(mut job) => {
                 if !job.is_terminal() {
                     self.jobs.update(&params.job_id, |job| {
-                        job.record("warn", "cancelled", "cancellation requested; stopping the local ASR CLI");
+                        job.record(
+                            "warn",
+                            "cancelled",
+                            "cancellation requested; stopping the local ASR CLI",
+                        );
                     });
                     job = self.jobs.get(&params.job_id).unwrap_or(job);
                 }
@@ -1519,6 +2014,70 @@ fn default_page_limit() -> u32 {
     50
 }
 
+fn spawn_video_linkzag_job(
+    service: Arc<Mutex<NipService>>,
+    cancel_map: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    job_id: String,
+    visual_spec: Value,
+    cancel: Arc<AtomicBool>,
+) {
+    let _ = thread::Builder::new().name(format!("video-{job_id}")).spawn(move || {
+        let update = |mutate: &dyn Fn(&mut VideoJob)| {
+            if let Ok(mut service) = service.lock() {
+                if let Ok(Some(mut job)) = service.video_job(&job_id) {
+                    mutate(&mut job);
+                    let _ = service.save_video_job(&job);
+                }
+            }
+        };
+        update(&|job| { job.status = "running".into(); job.started_at = Some(Utc::now()); job.progress_millis = 1_000; });
+        let (media_root, workspace) = match service.lock() {
+            Ok(service) => (
+                std::env::var_os("NIP_MEDIA_DIR").map(PathBuf::from).unwrap_or_else(|| service.config().data_dir().join("media")),
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            ),
+            Err(_) => { update(&|job| { job.status = "failed".into(); job.safe_error_message = Some("NIP service lock failed".into()); job.finished_at = Some(Utc::now()); }); return; }
+        };
+        update(&|job| job.progress_millis = 5_000);
+        let result = linkzag::render(&visual_spec, &workspace, &media_root, &job_id, &cancel);
+        match result {
+            Ok(outcome) if outcome.state == "cancelled" => update(&|job| {
+                job.status = "cancelled".into(); job.cancellation_requested = true; job.safe_error_message = Some(outcome.message.clone()); job.finished_at = Some(Utc::now());
+            }),
+            Ok(outcome) if outcome.state != "ready" => update(&|job| {
+                job.status = "failed".into(); job.safe_error_message = Some(outcome.message.clone()); job.output_manifest = outcome.manifest.clone(); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000;
+            }),
+            Ok(outcome) => {
+                let asset_id = format!("linkzag-{}-{}", outcome.scene_id, &outcome.scene_checksum[..12.min(outcome.scene_checksum.len())]);
+                let relative_path = outcome.manifest.as_ref().and_then(|manifest| manifest.pointer("/files/0/path")).and_then(Value::as_str)
+                    .and_then(|path| Path::new(path).strip_prefix(&media_root).ok()).map(|path| path.to_string_lossy().replace('\\', "/"));
+                let (width, height, duration_ms) = outcome.manifest.as_ref().map(|manifest| (
+                    manifest.pointer("/scene/width").and_then(Value::as_u64).map(|value| value as u32),
+                    manifest.pointer("/scene/height").and_then(Value::as_u64).map(|value| value as u32),
+                    manifest.pointer("/scene/duration").and_then(Value::as_f64).map(|value| (value * 1000.0) as u64),
+                )).unwrap_or((None, None, None));
+                let asset = VideoAsset { asset_id, revision: 1, asset_kind: "linkzag_segment".into(), relative_path,
+                    mime_type: Some("video/mp4".into()), content_hash: Some(outcome.scene_checksum.clone()), width, height, duration_ms,
+                    provider: "linkzag".into(), workflow_id: Some("linkzag.commentary.v1".into()), model: None,
+                    reproducibility: "deterministic".into(), capability_state: outcome.state.clone(), license_state: "fixture_only".into(),
+                    job_id: Some(job_id.clone()), created_at: Utc::now() };
+                if let Ok(mut service) = service.lock() {
+                    if service.save_video_asset(&asset).is_ok() {
+                        if let Ok(Some(mut job)) = service.video_job(&job_id) {
+                            job.status = "succeeded".into(); job.progress_millis = 100_000; job.output_manifest = Some(json!({ "asset": asset, "renderer": "linkzag", "renderer_revision": outcome.renderer_revision, "scene_checksum": outcome.scene_checksum, "manifest": outcome.manifest })); job.finished_at = Some(Utc::now());
+                            let _ = service.save_video_job(&job);
+                        }
+                    } else if let Ok(Some(mut job)) = service.video_job(&job_id) {
+                        job.status = "failed".into(); job.safe_error_message = Some("render completed but asset registration failed".into()); job.finished_at = Some(Utc::now()); let _ = service.save_video_job(&job);
+                    }
+                }
+            }
+            Err(error) => update(&|job| { job.status = "failed".into(); job.safe_error_message = Some(error.clone()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; }),
+        }
+        cancel_map.lock().ok().map(|mut flags| flags.remove(&job_id));
+    });
+}
+
 #[tool_handler]
 impl ServerHandler for NipMcp {
     fn get_info(&self) -> ServerConfig {
@@ -1620,8 +2179,8 @@ fn use_publisher_transcript(
     let preview = preview_text(&transcript.transcript_text);
     let directory = registry.job_dir(job_id);
     let path = directory.join("transcript.txt");
-    if let Err(error) = fs::create_dir_all(&directory)
-        .and_then(|_| fs::write(&path, &transcript.transcript_text))
+    if let Err(error) =
+        fs::create_dir_all(&directory).and_then(|_| fs::write(&path, &transcript.transcript_text))
     {
         registry.update(job_id, |job| {
             job.fail(
@@ -1715,7 +2274,9 @@ fn run_transcription_job(
     let directory = registry.job_dir(&job_id);
     let audio_name = saved_audio_name(&request.file_name, &request.mime_type);
     let audio_path = directory.join(&audio_name);
-    if let Err(error) = fs::create_dir_all(&directory).and_then(|_| fs::write(&audio_path, &request.audio)) {
+    if let Err(error) =
+        fs::create_dir_all(&directory).and_then(|_| fs::write(&audio_path, &request.audio))
+    {
         registry.update(&job_id, |job| {
             job.fail(
                 "download",
@@ -1832,9 +2393,8 @@ fn run_transcription_job(
                     job.event_id = event.map(|event| event.event_id.as_str().to_owned());
                     job.transcript_characters = Some(characters as u64);
                     job.transcript_preview = Some(preview);
-                    job.transcript_path = Some(
-                        directory.join("transcript.txt").display().to_string(),
-                    );
+                    job.transcript_path =
+                        Some(directory.join("transcript.txt").display().to_string());
                     job.record(
                         "info",
                         "transcribed",
@@ -1865,7 +2425,11 @@ fn run_transcription_job(
 fn finish_cancelled(registry: &JobRegistry, job_id: &str) {
     cleanup_working_audio(&registry.job_dir(job_id));
     registry.update(job_id, |job| {
-        job.record("warn", "cancelled", "transcription cancelled; the episode is ready to retry");
+        job.record(
+            "warn",
+            "cancelled",
+            "transcription cancelled; the episode is ready to retry",
+        );
         job.state = "cancelled".into();
         job.finished_at = Some(Utc::now());
     });
@@ -1891,7 +2455,6 @@ fn saved_audio_name(file_name: &str, mime_type: &str) -> String {
         });
     format!("source.{extension}")
 }
-
 
 fn preview_text(text: &str) -> String {
     let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -1967,7 +2530,8 @@ fn asr_error_message(error: &AsrError) -> String {
         AsrError::Cancelled => "transcription was cancelled".into(),
         AsrError::ProviderError(message) => message.clone(),
     }
-}fn structured_error(code: impl Into<String>, message: impl Into<String>) -> CallToolResult {
+}
+fn structured_error(code: impl Into<String>, message: impl Into<String>) -> CallToolResult {
     CallToolResult::structured_error(json!({"code": code.into(), "message": message.into()}))
 }
 
@@ -2124,6 +2688,7 @@ async fn run() -> Result<(), String> {
     let server = NipMcp {
         service: Arc::new(Mutex::new(service)),
         jobs,
+        video_cancel: Arc::new(Mutex::new(HashMap::new())),
         gate: Arc::new(Mutex::new(())),
     };
     start_in_process_refresh_scheduler(server.service.clone());
@@ -2273,9 +2838,7 @@ fn serve_media(
     };
     let bytes = match fs::read(&artifact.path) {
         Ok(bytes) => bytes,
-        Err(_) => {
-            return (StatusCode::NOT_FOUND, "media file could not be read").into_response()
-        }
+        Err(_) => return (StatusCode::NOT_FOUND, "media file could not be read").into_response(),
     };
     let total = bytes.len();
     let range = headers
@@ -2353,7 +2916,10 @@ mod tests {
     #[test]
     fn cached_audio_names_stay_inside_the_job_directory() {
         assert_eq!(saved_audio_name("episode.mp3", "audio/mpeg"), "source.mp3");
-        assert_eq!(saved_audio_name("../../etc/passwd", "audio/mpeg"), "source.mp3");
+        assert_eq!(
+            saved_audio_name("../../etc/passwd", "audio/mpeg"),
+            "source.mp3"
+        );
         assert_eq!(saved_audio_name("noext", "audio/mp4"), "source.m4a");
         assert_eq!(saved_audio_name("x", "audio/ogg"), "source.ogg");
         assert_eq!(saved_audio_name("x.weird", "audio/mpeg"), "source.mp3");

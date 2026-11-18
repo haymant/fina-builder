@@ -8,7 +8,9 @@ use nip_domain::{
     EventRecord, EventSearchPage, EventSearchQuery, LocalEventImport, NarrativeCluster,
     NarrativeClusterMember, NarrativeGraph, NarrativeSource, PodcastEpisode, PodcastEpisodeState,
     PodcastSubscription, PodcastSubscriptionState, PodcastTranscript, ProviderConsent, SourceId,
-    SourceKind, SourceState, SourceUpdate,
+    SourceKind, SourceState, SourceUpdate, VideoAsset, VideoEpisode, VideoEpisodeStatus,
+    VideoEvidenceRef, VideoJob, VideoProject, VideoProjectStatus, VideoReviewStatus, VideoScene,
+    VideoShot, VideoShotStatus, VideoStoryboard, VideoWorkflow,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,7 +27,8 @@ const MIGRATION_7: &str = include_str!("../migrations/0007_phase2_graph.sql");
 const MIGRATION_8: &str = include_str!("../migrations/0008_provider_consent_audit.sql");
 const MIGRATION_9: &str = include_str!("../migrations/0009_source_registry.sql");
 const MIGRATION_10: &str = include_str!("../migrations/0010_publisher_transcripts.sql");
-const LATEST_SCHEMA_VERSION: u32 = 10;
+const MIGRATION_11: &str = include_str!("../migrations/0011_video_workspace.sql");
+const LATEST_SCHEMA_VERSION: u32 = 11;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -49,6 +52,10 @@ pub enum StoreError {
     InvalidEvent,
     #[error("manual research record is invalid")]
     InvalidResearchRecord,
+    #[error("video record is invalid")]
+    InvalidVideoRecord,
+    #[error("video evidence reference is invalid")]
+    InvalidVideoEvidence,
     #[error("snapshot path is invalid")]
     InvalidSnapshotPath,
     #[error("snapshot manifest is invalid")]
@@ -413,10 +420,7 @@ impl Store {
         if changed == 1 {
             transaction.execute(
                 "UPDATE nip_podcast_subscriptions SET state = ? WHERE source_id = ?",
-                params![
-                    registry_state_as_str(state),
-                    source_id.as_str()
-                ],
+                params![registry_state_as_str(state), source_id.as_str()],
             )?;
         }
         transaction.commit()?;
@@ -1546,6 +1550,483 @@ impl Store {
         ).optional()?.map(TryInto::try_into).transpose()
     }
 
+    pub fn save_video_project(&mut self, project: &VideoProject) -> Result<(), StoreError> {
+        if project.project_id.trim().is_empty()
+            || project.title.trim().is_empty()
+            || project.language.trim().is_empty()
+            || project.target_platform.trim().is_empty()
+            || project.revision == 0
+        {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        let transaction = self.connection.transaction()?;
+        let expected = project.revision.saturating_sub(1);
+        let current: Option<i32> = transaction
+            .query_row(
+                "SELECT revision FROM video_project_heads WHERE project_id = ?",
+                params![project.project_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if current.unwrap_or(0) != expected as i32 {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        transaction.execute(
+            "INSERT INTO video_projects
+                (project_id, revision, title, language, target_platform, target_duration_ms,
+                 audience, style_profile, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                project.project_id,
+                project.revision as i32,
+                project.title,
+                project.language,
+                project.target_platform,
+                project.target_duration_ms.map(|value| value as i64),
+                project.audience,
+                project.style_profile,
+                video_project_status_as_str(project.status),
+                project.created_at,
+                project.updated_at,
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO video_project_heads (project_id, revision, updated_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT (project_id) DO UPDATE SET revision = excluded.revision,
+                 updated_at = excluded.updated_at",
+            params![
+                project.project_id,
+                project.revision as i32,
+                project.updated_at
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn video_project(&self, project_id: &str) -> Result<Option<VideoProject>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT p.project_id, p.revision, p.title, p.language, p.target_platform,
+                        p.target_duration_ms, p.audience, p.style_profile, p.status,
+                        p.created_at, p.updated_at
+                 FROM video_projects p
+                 JOIN video_project_heads h ON h.project_id = p.project_id AND h.revision = p.revision
+                 WHERE p.project_id = ?",
+                params![project_id],
+                raw_video_project_from_row,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn video_projects(&self) -> Result<Vec<VideoProject>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT p.project_id, p.revision, p.title, p.language, p.target_platform,
+                    p.target_duration_ms, p.audience, p.style_profile, p.status,
+                    p.created_at, p.updated_at
+             FROM video_projects p
+             JOIN video_project_heads h ON h.project_id = p.project_id AND h.revision = p.revision
+             ORDER BY p.updated_at DESC, p.project_id",
+        )?;
+        Ok(statement
+            .query_map([], raw_video_project_from_row)?
+            .collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
+    pub fn save_video_asset(&mut self, asset: &VideoAsset) -> Result<(), StoreError> {
+        if asset.asset_id.trim().is_empty()
+            || asset.revision == 0
+            || asset.asset_kind.trim().is_empty()
+            || asset.provider.trim().is_empty()
+            || asset.license_state.trim().is_empty()
+        {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        let current: Option<i32> = self.connection.query_row(
+            "SELECT MAX(revision) FROM video_assets WHERE asset_id = ?",
+            params![asset.asset_id],
+            |row| row.get(0),
+        )?;
+        if current.is_some_and(|revision| asset.revision as i32 <= revision) {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        self.connection.execute(
+            "INSERT INTO video_assets
+                (asset_id, revision, asset_kind, relative_path, mime_type, content_hash, width, height, duration_ms,
+                 provider, workflow_id, model, reproducibility, capability_state, license_state, job_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                asset.asset_id,
+                asset.revision as i32,
+                asset.asset_kind,
+                asset.relative_path,
+                asset.mime_type,
+                asset.content_hash,
+                asset.width.map(|value| value as i32),
+                asset.height.map(|value| value as i32),
+                asset.duration_ms.map(|value| value as i64),
+                asset.provider,
+                asset.workflow_id,
+                asset.model,
+                asset.reproducibility,
+                asset.capability_state,
+                asset.license_state,
+                asset.job_id,
+                asset.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn video_assets(&self, limit: u32) -> Result<Vec<VideoAsset>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT a.asset_id, a.revision, a.asset_kind, a.relative_path, a.mime_type, a.content_hash,
+                    a.width, a.height, a.duration_ms, a.provider, a.workflow_id, a.model,
+                    a.reproducibility, a.capability_state, a.license_state, a.job_id, a.created_at
+             FROM video_assets a
+             JOIN (SELECT asset_id, MAX(revision) revision FROM video_assets GROUP BY asset_id) h
+               ON h.asset_id = a.asset_id AND h.revision = a.revision
+             ORDER BY a.created_at DESC LIMIT ?",
+        )?;
+        Ok(statement
+            .query_map(
+                params![limit.clamp(1, 500) as i32],
+                raw_video_asset_from_row,
+            )?
+            .collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
+    pub fn save_video_workflow(&mut self, workflow: &VideoWorkflow) -> Result<(), StoreError> {
+        if workflow.workflow_id.trim().is_empty()
+            || workflow.revision == 0
+            || workflow.capability.trim().is_empty()
+            || workflow.provider_adapter.trim().is_empty()
+            || workflow.schema_version.trim().is_empty()
+        {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        let current: Option<i32> = self.connection.query_row(
+            "SELECT MAX(revision) FROM video_workflows WHERE workflow_id = ?",
+            params![workflow.workflow_id],
+            |row| row.get(0),
+        )?;
+        if current.is_some_and(|revision| workflow.revision as i32 <= revision) {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        self.connection.execute(
+            "INSERT INTO video_workflows
+                (workflow_id, revision, capability, provider_adapter, schema_version, model_identity, parameters_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                workflow.workflow_id,
+                workflow.revision as i32,
+                workflow.capability,
+                workflow.provider_adapter,
+                workflow.schema_version,
+                workflow.model_identity,
+                serde_json::to_string(&workflow.parameters)?,
+                workflow.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn video_workflows(&self) -> Result<Vec<VideoWorkflow>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT workflow_id, revision, capability, provider_adapter, schema_version, model_identity, parameters_json, created_at
+             FROM video_workflows ORDER BY capability, workflow_id, revision DESC",
+        )?;
+        Ok(statement
+            .query_map([], raw_video_workflow_from_row)?
+            .collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
+    pub fn save_video_job(&mut self, job: &VideoJob) -> Result<(), StoreError> {
+        if job.job_id.trim().is_empty()
+            || job.operation.trim().is_empty()
+            || !matches!(
+                job.status.as_str(),
+                "queued" | "running" | "succeeded" | "failed" | "cancelled"
+            )
+            || job.progress_millis > 100_000
+        {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        self.connection.execute(
+            "INSERT INTO video_jobs
+                (job_id, operation, status, input_revision, progress_millis, cancellation_requested,
+                 resource_estimate_json, output_manifest_json, safe_error_message, started_at, finished_at, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (job_id) DO UPDATE SET
+                operation = excluded.operation, status = excluded.status, input_revision = excluded.input_revision,
+                progress_millis = excluded.progress_millis, cancellation_requested = excluded.cancellation_requested,
+                resource_estimate_json = excluded.resource_estimate_json, output_manifest_json = excluded.output_manifest_json,
+                safe_error_message = excluded.safe_error_message, started_at = excluded.started_at,
+                finished_at = excluded.finished_at, created_at = excluded.created_at",
+            params![
+                job.job_id, job.operation, job.status, job.input_revision.map(|value| value as i32),
+                job.progress_millis as i32, job.cancellation_requested,
+                job.resource_estimate.as_ref().map(serde_json::to_string).transpose()?,
+                job.output_manifest.as_ref().map(serde_json::to_string).transpose()?,
+                job.safe_error_message, job.started_at, job.finished_at, job.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn video_job(&self, job_id: &str) -> Result<Option<VideoJob>, StoreError> {
+        self.connection.query_row(
+            "SELECT job_id, operation, status, input_revision, progress_millis, cancellation_requested,
+                    resource_estimate_json, output_manifest_json, safe_error_message, started_at, finished_at, created_at
+             FROM video_jobs WHERE job_id = ?",
+            params![job_id], raw_video_job_from_row,
+        ).optional().map_err(StoreError::from)
+    }
+
+    pub fn video_jobs(&self, limit: u32) -> Result<Vec<VideoJob>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT job_id, operation, status, input_revision, progress_millis, cancellation_requested,
+                    resource_estimate_json, output_manifest_json, safe_error_message, started_at, finished_at, created_at
+             FROM video_jobs ORDER BY created_at DESC LIMIT ?",
+        )?;
+        Ok(statement
+            .query_map(params![limit.clamp(1, 500) as i32], raw_video_job_from_row)?
+            .collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
+    pub fn recover_video_jobs(&mut self) -> Result<Vec<VideoJob>, StoreError> {
+        self.connection.execute(
+            "UPDATE video_jobs SET status = 'failed', safe_error_message = 'job interrupted by service restart', finished_at = CURRENT_TIMESTAMP
+             WHERE status IN ('queued', 'running')",
+            [],
+        )?;
+        self.video_jobs(500)
+    }
+
+    pub fn cleanup_video_jobs(&mut self, before: DateTime<Utc>) -> Result<u64, StoreError> {
+        let deleted = self.connection.execute(
+            "DELETE FROM video_jobs
+             WHERE finished_at IS NOT NULL AND finished_at < ?
+               AND status IN ('succeeded', 'failed', 'cancelled')",
+            params![before],
+        )?;
+        Ok(deleted as u64)
+    }
+
+    pub fn save_video_episode(&mut self, episode: &VideoEpisode) -> Result<(), StoreError> {
+        if episode.episode_id.trim().is_empty()
+            || episode.project_id.trim().is_empty()
+            || episode.revision == 0
+        {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        let project_exists: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM video_project_heads WHERE project_id = ?)",
+            params![episode.project_id],
+            |row| row.get(0),
+        )?;
+        if !project_exists {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        let transaction = self.connection.transaction()?;
+        let expected = episode.revision.saturating_sub(1);
+        let current: Option<i32> = transaction
+            .query_row(
+                "SELECT revision FROM video_episode_heads WHERE episode_id = ?",
+                params![episode.episode_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if current.unwrap_or(0) != expected as i32 {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        transaction.execute(
+            "INSERT INTO video_episodes
+                (episode_id, project_id, revision, title, as_of, disclosure, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                episode.episode_id,
+                episode.project_id,
+                episode.revision as i32,
+                episode.title,
+                episode.as_of,
+                episode.disclosure,
+                video_episode_status_as_str(episode.status),
+                episode.created_at,
+                episode.updated_at,
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO video_episode_heads (episode_id, revision, updated_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT (episode_id) DO UPDATE SET revision = excluded.revision,
+                 updated_at = excluded.updated_at",
+            params![
+                episode.episode_id,
+                episode.revision as i32,
+                episode.updated_at
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn link_video_episode_evidence(
+        &mut self,
+        episode_id: &str,
+        episode_revision: u32,
+        evidence: &VideoEvidenceRef,
+    ) -> Result<(), StoreError> {
+        validate_video_evidence(&self.connection, episode_id, episode_revision, evidence)?;
+        self.connection.execute(
+            "INSERT INTO video_episode_evidence
+                (episode_id, episode_revision, evidence_kind, evidence_id, start_offset, end_offset, quote)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT DO NOTHING",
+            params![
+                episode_id,
+                episode_revision as i32,
+                evidence.evidence_kind,
+                evidence.evidence_id,
+                evidence.start_offset.map_or(-1, |value| value as i32),
+                evidence.end_offset.map_or(-1, |value| value as i32),
+                evidence.quote,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn video_episode(&self, episode_id: &str) -> Result<Option<VideoEpisode>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT episode_id, project_id, revision, title, as_of, disclosure, status, created_at, updated_at
+                 FROM video_episodes
+                 WHERE episode_id = ?
+                 ORDER BY revision DESC
+                 LIMIT 1",
+                params![episode_id],
+                raw_video_episode_from_row,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn video_episode_evidence(
+        &self,
+        episode_id: &str,
+        episode_revision: u32,
+    ) -> Result<Vec<VideoEvidenceRef>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT evidence_kind, evidence_id, start_offset, end_offset, quote
+             FROM video_episode_evidence
+             WHERE episode_id = ? AND episode_revision = ?
+             ORDER BY created_at, evidence_kind, evidence_id",
+        )?;
+        Ok(statement
+            .query_map(params![episode_id, episode_revision as i32], |row| {
+                let start: i32 = row.get(2)?;
+                let end: i32 = row.get(3)?;
+                Ok(VideoEvidenceRef {
+                    evidence_kind: row.get(0)?,
+                    evidence_id: row.get(1)?,
+                    start_offset: (start >= 0).then_some(start as u32),
+                    end_offset: (end >= 0).then_some(end as u32),
+                    quote: row.get(4)?,
+                })
+            })?
+            .collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
+    pub fn save_video_storyboard(
+        &mut self,
+        storyboard: &VideoStoryboard,
+    ) -> Result<(), StoreError> {
+        if storyboard.storyboard_id.trim().is_empty()
+            || storyboard.narrative_id.trim().is_empty()
+            || storyboard.revision == 0
+            || storyboard.schema_version.trim().is_empty()
+        {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        self.connection.execute(
+            "INSERT INTO video_storyboards
+                (storyboard_id, narrative_id, revision, schema_version, review_status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![
+                storyboard.storyboard_id,
+                storyboard.narrative_id,
+                storyboard.revision as i32,
+                storyboard.schema_version,
+                video_review_status_as_str(storyboard.review_status),
+                storyboard.created_at,
+                storyboard.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_video_scene(&mut self, scene: &VideoScene) -> Result<(), StoreError> {
+        if scene.scene_id.trim().is_empty()
+            || scene.storyboard_id.trim().is_empty()
+            || scene.purpose.trim().is_empty()
+            || scene.revision == 0
+        {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        self.connection.execute(
+            "INSERT INTO video_scenes
+                (scene_id, storyboard_id, revision, ordinal, purpose, narration_text,
+                 visual_intent, duration_ms, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                scene.scene_id,
+                scene.storyboard_id,
+                scene.revision as i32,
+                scene.ordinal as i32,
+                scene.purpose,
+                scene.narration_text,
+                scene.visual_intent,
+                scene.duration_ms.map(|value| value as i64),
+                scene.created_at,
+                scene.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_video_shot(&mut self, shot: &VideoShot) -> Result<(), StoreError> {
+        if shot.shot_id.trim().is_empty()
+            || shot.scene_id.trim().is_empty()
+            || shot.shot_type.trim().is_empty()
+            || shot.revision == 0
+            || shot.duration_ms == 0
+        {
+            return Err(StoreError::InvalidVideoRecord);
+        }
+        self.connection.execute(
+            "INSERT INTO video_shots
+                (shot_id, scene_id, revision, ordinal, shot_type, duration_ms,
+                 camera_motion, visual_prompt, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                shot.shot_id,
+                shot.scene_id,
+                shot.revision as i32,
+                shot.ordinal as i32,
+                shot.shot_type,
+                shot.duration_ms as i64,
+                shot.camera_motion,
+                shot.visual_prompt,
+                video_shot_status_as_str(shot.status),
+                shot.created_at,
+                shot.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
     #[cfg(test)]
     fn has_table(&self, table: &str) -> Result<bool, StoreError> {
         let count: i64 = self.connection.query_row(
@@ -1555,6 +2036,212 @@ impl Store {
         )?;
         Ok(count == 1)
     }
+}
+
+fn video_project_status_as_str(status: VideoProjectStatus) -> &'static str {
+    match status {
+        VideoProjectStatus::Draft => "draft",
+        VideoProjectStatus::InReview => "in_review",
+        VideoProjectStatus::Ready => "ready",
+        VideoProjectStatus::Rendering => "rendering",
+        VideoProjectStatus::Exported => "exported",
+        VideoProjectStatus::Archived => "archived",
+    }
+}
+
+fn video_episode_status_as_str(status: VideoEpisodeStatus) -> &'static str {
+    match status {
+        VideoEpisodeStatus::Draft => "draft",
+        VideoEpisodeStatus::InReview => "in_review",
+        VideoEpisodeStatus::Ready => "ready",
+        VideoEpisodeStatus::Archived => "archived",
+    }
+}
+
+fn video_review_status_as_str(status: VideoReviewStatus) -> &'static str {
+    match status {
+        VideoReviewStatus::Draft => "draft",
+        VideoReviewStatus::Candidate => "candidate",
+        VideoReviewStatus::InReview => "in_review",
+        VideoReviewStatus::Approved => "approved",
+        VideoReviewStatus::Rejected => "rejected",
+    }
+}
+
+fn video_shot_status_as_str(status: VideoShotStatus) -> &'static str {
+    match status {
+        VideoShotStatus::Planned => "planned",
+        VideoShotStatus::Ready => "ready",
+        VideoShotStatus::Rendering => "rendering",
+        VideoShotStatus::Blocked => "blocked",
+        VideoShotStatus::Complete => "complete",
+    }
+}
+
+fn parse_video_project_status(value: String) -> duckdb::Result<VideoProjectStatus> {
+    match value.as_str() {
+        "draft" => Ok(VideoProjectStatus::Draft),
+        "in_review" => Ok(VideoProjectStatus::InReview),
+        "ready" => Ok(VideoProjectStatus::Ready),
+        "rendering" => Ok(VideoProjectStatus::Rendering),
+        "exported" => Ok(VideoProjectStatus::Exported),
+        "archived" => Ok(VideoProjectStatus::Archived),
+        _ => Err(duckdb::Error::ToSqlConversionFailure(Box::new(
+            std::io::Error::other("invalid video project status"),
+        ))),
+    }
+}
+
+fn raw_video_project_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<VideoProject> {
+    Ok(VideoProject {
+        project_id: row.get(0)?,
+        revision: row.get::<_, i32>(1)?.max(0) as u32,
+        title: row.get(2)?,
+        language: row.get(3)?,
+        target_platform: row.get(4)?,
+        target_duration_ms: row
+            .get::<_, Option<i64>>(5)?
+            .map(|value| value.max(0) as u64),
+        audience: row.get(6)?,
+        style_profile: row.get(7)?,
+        status: parse_video_project_status(row.get(8)?)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+    })
+}
+
+fn raw_video_asset_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<VideoAsset> {
+    Ok(VideoAsset {
+        asset_id: row.get(0)?,
+        revision: row.get::<_, i32>(1)?.max(0) as u32,
+        asset_kind: row.get(2)?,
+        relative_path: row.get(3)?,
+        mime_type: row.get(4)?,
+        content_hash: row.get(5)?,
+        width: row
+            .get::<_, Option<i32>>(6)?
+            .map(|value| value.max(0) as u32),
+        height: row
+            .get::<_, Option<i32>>(7)?
+            .map(|value| value.max(0) as u32),
+        duration_ms: row
+            .get::<_, Option<i64>>(8)?
+            .map(|value| value.max(0) as u64),
+        provider: row.get(9)?,
+        workflow_id: row.get(10)?,
+        model: row.get(11)?,
+        reproducibility: row.get(12)?,
+        capability_state: row.get(13)?,
+        license_state: row.get(14)?,
+        job_id: row.get(15)?,
+        created_at: row.get(16)?,
+    })
+}
+
+fn raw_video_workflow_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<VideoWorkflow> {
+    let parameters_json: String = row.get(6)?;
+    let parameters = serde_json::from_str(&parameters_json).map_err(|error| {
+        duckdb::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(error.to_string())))
+    })?;
+    Ok(VideoWorkflow {
+        workflow_id: row.get(0)?,
+        revision: row.get::<_, i32>(1)?.max(0) as u32,
+        capability: row.get(2)?,
+        provider_adapter: row.get(3)?,
+        schema_version: row.get(4)?,
+        model_identity: row.get(5)?,
+        parameters,
+        created_at: row.get(7)?,
+    })
+}
+
+fn raw_video_job_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<VideoJob> {
+    let parse_json = |value: Option<String>| -> duckdb::Result<Option<Value>> {
+        value
+            .map(|text| {
+                serde_json::from_str(&text).map_err(|error| {
+                    duckdb::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(
+                        error.to_string(),
+                    )))
+                })
+            })
+            .transpose()
+    };
+    Ok(VideoJob {
+        job_id: row.get(0)?,
+        operation: row.get(1)?,
+        status: row.get(2)?,
+        input_revision: row
+            .get::<_, Option<i32>>(3)?
+            .map(|value| value.max(0) as u32),
+        progress_millis: row.get::<_, i32>(4)?.max(0) as u32,
+        cancellation_requested: row.get(5)?,
+        resource_estimate: parse_json(row.get(6)?)?,
+        output_manifest: parse_json(row.get(7)?)?,
+        safe_error_message: row.get(8)?,
+        started_at: row.get(9)?,
+        finished_at: row.get(10)?,
+        created_at: row.get(11)?,
+    })
+}
+
+fn parse_video_episode_status(value: String) -> duckdb::Result<VideoEpisodeStatus> {
+    match value.as_str() {
+        "draft" => Ok(VideoEpisodeStatus::Draft),
+        "in_review" => Ok(VideoEpisodeStatus::InReview),
+        "ready" => Ok(VideoEpisodeStatus::Ready),
+        "archived" => Ok(VideoEpisodeStatus::Archived),
+        _ => Err(duckdb::Error::ToSqlConversionFailure(Box::new(
+            std::io::Error::other("invalid video episode status"),
+        ))),
+    }
+}
+
+fn raw_video_episode_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<VideoEpisode> {
+    Ok(VideoEpisode {
+        episode_id: row.get(0)?,
+        project_id: row.get(1)?,
+        revision: row.get::<_, i32>(2)?.max(0) as u32,
+        title: row.get(3)?,
+        as_of: row.get(4)?,
+        disclosure: row.get(5)?,
+        status: parse_video_episode_status(row.get(6)?)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
+}
+
+fn validate_video_evidence(
+    connection: &Connection,
+    parent_id: &str,
+    parent_revision: u32,
+    evidence: &VideoEvidenceRef,
+) -> Result<(), StoreError> {
+    if parent_id.trim().is_empty()
+        || parent_revision == 0
+        || evidence.evidence_id.trim().is_empty()
+        || !matches!(evidence.evidence_kind.as_str(), "event" | "claim")
+        || matches!((evidence.start_offset, evidence.end_offset), (Some(start), Some(end)) if start > end)
+    {
+        return Err(StoreError::InvalidVideoEvidence);
+    }
+    let exists: bool = match evidence.evidence_kind.as_str() {
+        "event" => connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM nip_events WHERE event_id = ?)",
+            params![evidence.evidence_id],
+            |row| row.get(0),
+        )?,
+        "claim" => connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM nip_claims WHERE claim_id = ?)",
+            params![evidence.evidence_id],
+            |row| row.get(0),
+        )?,
+        _ => false,
+    };
+    if !exists {
+        return Err(StoreError::InvalidVideoEvidence);
+    }
+    Ok(())
 }
 
 fn apply_migrations(connection: &mut Connection) -> Result<u32, StoreError> {
@@ -1623,7 +2310,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<u32, StoreError> {
         apply_migration(connection, 10, "publisher_transcripts", MIGRATION_10)?;
         applied_any = true;
     }
-    let _ = current_version;
+    if current_version < 11 {
+        apply_migration(connection, 11, "video_workspace", MIGRATION_11)?;
+        applied_any = true;
+    }
     if applied_any {
         // Migration 0009 rebuilds tables (DROP/RENAME). DuckDB cannot replay
         // those catalog records from a WAL left behind by a crashed process, so
@@ -2082,24 +2772,27 @@ mod tests {
 
         {
             let store = Store::open(&path).unwrap();
-            assert_eq!(store.schema_version(), 10);
+            assert_eq!(store.schema_version(), 11);
             assert!(store.has_table("nip_schema_migrations").unwrap());
             assert!(store.has_table("nip_sources").unwrap());
             assert!(store.has_table("nip_events").unwrap());
             assert!(store.has_table("nip_ingestion_runs").unwrap());
             assert!(store.has_table("nip_podcast_subscriptions").unwrap());
             assert!(store.has_table("nip_podcast_episodes").unwrap());
+            assert!(store.has_table("video_projects").unwrap());
+            assert!(store.has_table("video_episode_evidence").unwrap());
+            assert!(store.has_table("video_asset_lineage").unwrap());
         }
 
         let reopened = Store::open(&path).unwrap();
-        assert_eq!(reopened.schema_version(), 10);
+        assert_eq!(reopened.schema_version(), 11);
         let migration_count: i64 = reopened
             .connection
             .query_row("SELECT COUNT(*) FROM nip_schema_migrations", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 10);
+        assert_eq!(migration_count, 11);
     }
 
     #[test]
@@ -2128,9 +2821,149 @@ mod tests {
         drop(connection);
 
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version(), 10);
+        assert_eq!(store.schema_version(), 11);
         assert!(store.has_table("nip_events").unwrap());
         assert!(store.has_table("nip_podcast_subscriptions").unwrap());
+    }
+
+    #[test]
+    fn video_project_episode_and_evidence_round_trip_with_revision_guard() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let event = store
+            .import_local_event(
+                &LocalEventImport {
+                    source_id: SourceId::new("video-fixture").unwrap(),
+                    source_display_name: "Video fixture".into(),
+                    source_native_id: Some("transcript-1".into()),
+                    canonical_url: None,
+                    title: Some("Fixture transcript".into()),
+                    content_text: "The retained transcript supports this visual.".into(),
+                    published_at: None,
+                    source_updated_at: None,
+                    rights_statement: "User-owned synthetic fixture".into(),
+                    user_confirmed_rights: true,
+                },
+                "2026-11-18T09:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        let now = "2026-11-18T09:01:00Z".parse().unwrap();
+        let project = VideoProject {
+            project_id: "project-1".into(),
+            revision: 1,
+            title: "Fixture commentary".into(),
+            language: "en".into(),
+            target_platform: "youtube".into(),
+            target_duration_ms: Some(90_000),
+            audience: Some("research analyst".into()),
+            style_profile: Some("evidence_first".into()),
+            status: VideoProjectStatus::Draft,
+            created_at: now,
+            updated_at: now,
+        };
+        store.save_video_project(&project).unwrap();
+        assert_eq!(
+            store.video_project("project-1").unwrap(),
+            Some(project.clone())
+        );
+
+        let episode = VideoEpisode {
+            episode_id: "episode-1".into(),
+            project_id: project.project_id.clone(),
+            revision: 1,
+            title: Some("Fixture episode".into()),
+            as_of: None,
+            disclosure: Some("Synthetic fixture".into()),
+            status: VideoEpisodeStatus::Draft,
+            created_at: now,
+            updated_at: now,
+        };
+        store.save_video_episode(&episode).unwrap();
+        store
+            .link_video_episode_evidence(
+                &episode.episode_id,
+                episode.revision,
+                &VideoEvidenceRef {
+                    evidence_kind: "event".into(),
+                    evidence_id: event.event_id.as_str().into(),
+                    start_offset: Some(0),
+                    end_offset: Some(12),
+                    quote: Some("The retained".into()),
+                },
+            )
+            .unwrap();
+
+        let mut revision = project;
+        revision.revision = 2;
+        revision.title = "Fixture commentary revised".into();
+        revision.updated_at = "2026-11-18T09:02:00Z".parse().unwrap();
+        store.save_video_project(&revision).unwrap();
+        assert_eq!(store.video_project("project-1").unwrap(), Some(revision));
+
+        let stale = VideoProject {
+            project_id: "project-1".into(),
+            revision: 2,
+            title: "stale".into(),
+            language: "en".into(),
+            target_platform: "youtube".into(),
+            target_duration_ms: None,
+            audience: None,
+            style_profile: None,
+            status: VideoProjectStatus::Draft,
+            created_at: now,
+            updated_at: now,
+        };
+        assert!(matches!(
+            store.save_video_project(&stale),
+            Err(StoreError::InvalidVideoRecord)
+        ));
+    }
+
+    #[test]
+    fn video_evidence_rejects_unknown_canonical_records() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let now = "2026-11-18T09:00:00Z".parse().unwrap();
+        let project = VideoProject {
+            project_id: "project-unknown".into(),
+            revision: 1,
+            title: "Unknown evidence".into(),
+            language: "en".into(),
+            target_platform: "local".into(),
+            target_duration_ms: None,
+            audience: None,
+            style_profile: None,
+            status: VideoProjectStatus::Draft,
+            created_at: now,
+            updated_at: now,
+        };
+        store.save_video_project(&project).unwrap();
+        let episode = VideoEpisode {
+            episode_id: "episode-unknown".into(),
+            project_id: project.project_id,
+            revision: 1,
+            title: None,
+            as_of: None,
+            disclosure: None,
+            status: VideoEpisodeStatus::Draft,
+            created_at: now,
+            updated_at: now,
+        };
+        store.save_video_episode(&episode).unwrap();
+        let error = store
+            .link_video_episode_evidence(
+                &episode.episode_id,
+                1,
+                &VideoEvidenceRef {
+                    evidence_kind: "event".into(),
+                    evidence_id: "event-does-not-exist".into(),
+                    start_offset: None,
+                    end_offset: None,
+                    quote: None,
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, StoreError::InvalidVideoEvidence));
     }
 
     #[test]
@@ -2478,7 +3311,7 @@ mod tests {
             error,
             StoreError::FutureSchema {
                 found: 99,
-                supported: 10
+                supported: 11
             }
         ));
     }
@@ -2782,7 +3615,10 @@ mod tests {
             .unwrap());
         let updated = store.source(&source.source_id).unwrap().unwrap();
         assert_eq!(updated.display_name, "Q3 earnings call");
-        assert_eq!(updated.locator.as_deref(), Some("https://example.invalid/q3-earnings"));
+        assert_eq!(
+            updated.locator.as_deref(),
+            Some("https://example.invalid/q3-earnings")
+        );
         assert_eq!(updated.per_scan_limit, 5);
 
         assert!(store
@@ -2814,7 +3650,10 @@ mod tests {
             .add_approved_subscription(&subscription("feed-a"))
             .unwrap();
 
-        let registry = store.source(&SourceId::new("feed-a").unwrap()).unwrap().unwrap();
+        let registry = store
+            .source(&SourceId::new("feed-a").unwrap())
+            .unwrap()
+            .unwrap();
         assert_eq!(registry.kind, SourceKind::Podcast);
         assert_eq!(registry.state, SourceState::Active);
 
@@ -2837,8 +3676,14 @@ mod tests {
         assert!(subscription.etag.is_none());
         assert!(subscription.next_poll_at.is_none());
         assert!(subscription.last_error_code.is_none());
-        let registry = store.source(&SourceId::new("feed-a").unwrap()).unwrap().unwrap();
-        assert_eq!(registry.locator.as_deref(), Some("https://example.invalid/feed.xml"));
+        let registry = store
+            .source(&SourceId::new("feed-a").unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            registry.locator.as_deref(),
+            Some("https://example.invalid/feed.xml")
+        );
         assert_eq!(registry.display_name, "Corrected show");
     }
 
@@ -2891,5 +3736,123 @@ mod tests {
         store.insert_source(&empty).unwrap();
         assert_eq!(store.delete_source(&empty.source_id).unwrap(), 0);
         assert!(store.source(&empty.source_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn video_jobs_persist_progress_cancel_retry_payload_and_restart_recovery() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let now = "2026-11-18T09:00:00Z".parse().unwrap();
+        let spec = serde_json::json!({"scene_id": "fixture-scene", "visual_kind": "evidence_card"});
+        let mut job = VideoJob {
+            job_id: "video-job-1".into(),
+            operation: "linkzag.segment".into(),
+            status: "queued".into(),
+            input_revision: Some(1),
+            progress_millis: 0,
+            cancellation_requested: false,
+            resource_estimate: Some(spec.clone()),
+            output_manifest: None,
+            safe_error_message: None,
+            started_at: None,
+            finished_at: None,
+            created_at: now,
+        };
+        store.save_video_job(&job).unwrap();
+        job.status = "running".into();
+        job.progress_millis = 42_000;
+        job.cancellation_requested = true;
+        job.started_at = Some(now);
+        store.save_video_job(&job).unwrap();
+        let loaded = store.video_job("video-job-1").unwrap().unwrap();
+        assert_eq!(loaded.progress_millis, 42_000);
+        assert!(loaded.cancellation_requested);
+        assert_eq!(loaded.resource_estimate, Some(spec.clone()));
+
+        let recovered = store.recover_video_jobs().unwrap();
+        let loaded = recovered
+            .into_iter()
+            .find(|item| item.job_id == "video-job-1")
+            .unwrap();
+        assert_eq!(loaded.status, "failed");
+        assert_eq!(
+            loaded.safe_error_message.as_deref(),
+            Some("job interrupted by service restart")
+        );
+
+        let retry = VideoJob {
+            job_id: "video-job-1-retry-1".into(),
+            operation: loaded.operation,
+            status: "queued".into(),
+            input_revision: loaded.input_revision,
+            progress_millis: 0,
+            cancellation_requested: false,
+            resource_estimate: loaded.resource_estimate,
+            output_manifest: None,
+            safe_error_message: None,
+            started_at: None,
+            finished_at: None,
+            created_at: now,
+        };
+        store.save_video_job(&retry).unwrap();
+        assert_eq!(
+            store
+                .video_job("video-job-1-retry-1")
+                .unwrap()
+                .unwrap()
+                .resource_estimate,
+            Some(spec)
+        );
+        let mut old = retry;
+        old.job_id = "video-job-old".into();
+        old.status = "failed".into();
+        old.finished_at = Some("2020-01-01T00:00:00Z".parse().unwrap());
+        store.save_video_job(&old).unwrap();
+        assert_eq!(
+            store
+                .cleanup_video_jobs("2021-01-01T00:00:00Z".parse().unwrap())
+                .unwrap(),
+            1
+        );
+        assert!(store.video_job("video-job-old").unwrap().is_none());
+        assert!(store.video_job("video-job-1-retry-1").unwrap().is_some());
+    }
+
+    #[test]
+    fn active_video_render_is_recovered_after_simulated_service_restart() {
+        let temp = tempdir().unwrap();
+        let database = temp.path().join("nip.duckdb");
+        {
+            let mut store = Store::open(&database).unwrap();
+            store
+                .save_video_job(&VideoJob {
+                    job_id: "video-restart-active".into(),
+                    operation: "linkzag.segment".into(),
+                    status: "running".into(),
+                    input_revision: Some(7),
+                    progress_millis: 58_000,
+                    cancellation_requested: false,
+                    resource_estimate: Some(serde_json::json!({"scene_id": "restart-scene"})),
+                    output_manifest: None,
+                    safe_error_message: None,
+                    started_at: Some("2026-11-18T09:00:01Z".parse().unwrap()),
+                    finished_at: None,
+                    created_at: "2026-11-18T09:00:00Z".parse().unwrap(),
+                })
+                .unwrap();
+        }
+        let mut reopened = Store::open(&database).unwrap();
+        let recovered = reopened.recover_video_jobs().unwrap();
+        let job = recovered
+            .into_iter()
+            .find(|item| item.job_id == "video-restart-active")
+            .unwrap();
+        assert_eq!(job.status, "failed");
+        assert_eq!(job.progress_millis, 58_000);
+        assert_eq!(job.input_revision, Some(7));
+        assert_eq!(
+            job.safe_error_message.as_deref(),
+            Some("job interrupted by service restart")
+        );
     }
 }

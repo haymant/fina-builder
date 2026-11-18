@@ -258,7 +258,10 @@ fn parse_rpc_body(body: &str) -> Result<Value, String> {
 
 fn rpc_result(status: u16, body: &str) -> Result<Value, String> {
     if status >= 400 {
-        return Err(format!("NIP MCP request failed ({status}): {}", body.trim()));
+        return Err(format!(
+            "NIP MCP request failed ({status}): {}",
+            body.trim()
+        ));
     }
     let value = parse_rpc_body(body)?;
     if let Some(error) = value.get("error") {
@@ -512,22 +515,20 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
     }
     let logs_dir = data_dir.join("logs");
     let engine_log = logs_dir.join("nip-engine.log");
-    let log_handle = std::fs::create_dir_all(&logs_dir)
-        .ok()
-        .and_then(|_| {
-            // Keep the diagnostic file bounded; it is rotated only at startup.
-            if std::fs::metadata(&engine_log)
-                .map(|metadata| metadata.len() > 2 * 1024 * 1024)
-                .unwrap_or(false)
-            {
-                let _ = std::fs::remove_file(&engine_log);
-            }
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&engine_log)
-                .ok()
-        });
+    let log_handle = std::fs::create_dir_all(&logs_dir).ok().and_then(|_| {
+        // Keep the diagnostic file bounded; it is rotated only at startup.
+        if std::fs::metadata(&engine_log)
+            .map(|metadata| metadata.len() > 2 * 1024 * 1024)
+            .unwrap_or(false)
+        {
+            let _ = std::fs::remove_file(&engine_log);
+        }
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&engine_log)
+            .ok()
+    });
 
     let bind = format!("127.0.0.1:{port}");
     let mut command = Command::new(&binary);
@@ -595,9 +596,12 @@ fn wait_until_ready(child: &mut Child, port: u16) -> Result<(), String> {
         }
         if let Ok(mut response) = agent.get(&health).call() {
             if let Ok(body) = response.body_mut().read_to_string() {
-                let ready = serde_json::from_str::<Value>(&body)
-                    .ok()
-                    .and_then(|value| value.get("readiness").and_then(Value::as_str).map(str::to_owned));
+                let ready = serde_json::from_str::<Value>(&body).ok().and_then(|value| {
+                    value
+                        .get("readiness")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                });
                 if ready.as_deref() == Some("ready") {
                     return Ok(());
                 }
@@ -670,9 +674,16 @@ mod tests {
             let client = NipHttpClient::new(format!("http://127.0.0.1:{port}/mcp"));
             let listing = client.list_tools()?;
             assert!(
-                listing.tools.iter().any(|tool| tool.name == "create_source"),
+                listing
+                    .tools
+                    .iter()
+                    .any(|tool| tool.name == "create_source"),
                 "nip-engine must advertise create_source: {:?}",
-                listing.tools.iter().map(|tool| &tool.name).collect::<Vec<_>>()
+                listing
+                    .tools
+                    .iter()
+                    .map(|tool| &tool.name)
+                    .collect::<Vec<_>>()
             );
             let health = client.call_tool("health", json!({}))?;
             assert!(!health.is_error);

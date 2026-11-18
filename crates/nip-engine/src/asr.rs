@@ -115,8 +115,14 @@ impl AsrError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AsrProgress {
     FreedMemory,
-    Prepared { chunks: usize, chunk_seconds: u32 },
-    ChunkStarted { index: usize, total: usize },
+    Prepared {
+        chunks: usize,
+        chunk_seconds: u32,
+    },
+    ChunkStarted {
+        index: usize,
+        total: usize,
+    },
     ChunkFinished {
         index: usize,
         total: usize,
@@ -127,7 +133,9 @@ pub enum AsrProgress {
         total: usize,
         reason: String,
     },
-    Warning { message: String },
+    Warning {
+        message: String,
+    },
 }
 
 /// NIP's narrow local-ASR boundary. Implementations must not fetch source URLs,
@@ -484,9 +492,7 @@ impl AsrProvider for ComfyUiAsrProvider {
                 workflow_hash: script_hash,
                 device: report.device,
                 precision: None,
-                model: report
-                    .model
-                    .unwrap_or_else(|| "Qwen/Qwen3-ASR-0.6B".into()),
+                model: report.model.unwrap_or_else(|| "Qwen/Qwen3-ASR-0.6B".into()),
                 node: "modules/comfy/scripts/render.py asr-long".into(),
             },
         })
@@ -648,9 +654,7 @@ fn first_error_line(value: &str) -> String {
         .map(str::trim)
         // Progress lines are not errors; keep the first real diagnostic.
         .filter(|line| {
-            !line.is_empty()
-                && !line.starts_with(PROGRESS_PREFIX)
-                && !line.starts_with("note:")
+            !line.is_empty() && !line.starts_with(PROGRESS_PREFIX) && !line.starts_with("note:")
         })
         .collect();
     let preferred = lines.iter().find(|line| {
@@ -834,13 +838,14 @@ mod tests {
         .unwrap();
         let seen = std::sync::Mutex::new(Vec::new());
         let result = provider
-            .transcribe_with_progress(&request(), &|progress| {
-                seen.lock().unwrap().push(progress)
-            })
+            .transcribe_with_progress(&request(), &|progress| seen.lock().unwrap().push(progress))
             .unwrap();
         let seen = seen.into_inner().unwrap();
         assert_eq!(result.text, "fixture transcript");
-        assert_eq!(result.provenance.node, "modules/comfy/scripts/render.py asr-long");
+        assert_eq!(
+            result.provenance.node,
+            "modules/comfy/scripts/render.py asr-long"
+        );
         assert_eq!(
             seen.iter()
                 .filter(|progress| matches!(progress, AsrProgress::ChunkFinished { .. }))

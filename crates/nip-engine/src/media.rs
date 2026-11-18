@@ -128,8 +128,10 @@ pub fn resolve_artifact(root: &Path, job_id: &str, name: &str) -> Result<Resolve
         return Err("unsupported media type".into());
     }
     let candidate = root.join(job_id).join(name);
-    let canonical_root = fs::canonicalize(root).map_err(|_| "media cache is unavailable".to_owned())?;
-    let canonical = fs::canonicalize(&candidate).map_err(|_| "media file was not found".to_owned())?;
+    let canonical_root =
+        fs::canonicalize(root).map_err(|_| "media cache is unavailable".to_owned())?;
+    let canonical =
+        fs::canonicalize(&candidate).map_err(|_| "media file was not found".to_owned())?;
     if !canonical.starts_with(&canonical_root) || !canonical.is_file() {
         return Err("media file was not found".into());
     }
@@ -180,7 +182,8 @@ mod tests {
         fs::write(job.join("abc-chunk-000-part-001.wav"), b"working part").unwrap();
         fs::write(
             job.join("job.json"),
-            serde_json::json!({"title": "Fixture episode", "source_id": "fixture-show"}).to_string(),
+            serde_json::json!({"title": "Fixture episode", "source_id": "fixture-show"})
+                .to_string(),
         )
         .unwrap();
         let artifacts = list_artifacts(temp.path(), 10);

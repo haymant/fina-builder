@@ -196,7 +196,11 @@ impl JobRegistry {
     }
 
     /// The active job for an episode, used to make the start action idempotent.
-    pub fn active_for(&self, source_id: &str, source_native_id: Option<&str>) -> Option<TranscriptionJob> {
+    pub fn active_for(
+        &self,
+        source_id: &str,
+        source_native_id: Option<&str>,
+    ) -> Option<TranscriptionJob> {
         self.jobs.lock().ok()?.values().find_map(|job| {
             (!job.is_terminal()
                 && job.source_id == source_id
@@ -393,7 +397,10 @@ mod tests {
         let snapshot = registry.get("job-1").unwrap();
         assert_eq!(snapshot.chunks_total, Some(7));
         assert_eq!(snapshot.chunks_completed, 3);
-        assert!(snapshot.events.iter().any(|event| event.detail.contains("chunk 3/7")));
+        assert!(snapshot
+            .events
+            .iter()
+            .any(|event| event.detail.contains("chunk 3/7")));
 
         let reopened = JobRegistry::open(temp.path());
         let restored = reopened.get("job-1").unwrap();

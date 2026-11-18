@@ -1,7 +1,7 @@
 import { Command as Cmd } from 'cmdk'
 import {
   BookOpen, Columns3, Copy, Database, FilePlus2, FileUp, HelpCircle, History, Keyboard, LayoutGrid, Layers, ArrowLeftRight,
-  MessageSquare, Moon, Plus, Search, Sun, Trash2, BookOpenCheck, Activity, CalendarClock, BrainCircuit, ShieldCheck,
+  MessageSquare, Moon, Plus, Search, Sun, Trash2, BookOpenCheck, Activity, CalendarClock, BrainCircuit, ShieldCheck, Clapperboard,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
@@ -47,6 +47,9 @@ export function useMenuCommands(p: AppMenuBarProps): MenuCommand[] {
       { id: 'narrative:overview', group: 'Narrative', label: 'Narrative Intelligence', icon: BrainCircuit, keywords: 'events evidence claims', run: () => p.onNavigate({ kind: 'narrative', view: 'overview' as const }) },
       { id: 'narrative:claims', group: 'Narrative', label: 'Claim Explorer', icon: ShieldCheck, keywords: 'claims evidence provenance', run: () => p.onNavigate({ kind: 'narrative', view: 'claims' as const }) },
     ]
+    const video = [
+      { id: 'video:projects', group: 'Video', label: 'Video Workspace', icon: Clapperboard, accel: 'Alt+V', keywords: 'video projects storyboard shots assets', run: () => p.onNavigate({ kind: 'video', view: 'projects' as const }) },
+    ]
     return [
       { id: 'file:new-dashboard', group: 'File', label: 'New dashboard from template…', icon: Plus, run: p.onNewDashboard },
       { id: 'file:duplicate', group: 'File', label: 'Duplicate dashboard', icon: Copy, run: p.onDuplicateDashboard },
@@ -54,6 +57,7 @@ export function useMenuCommands(p: AppMenuBarProps): MenuCommand[] {
       ...dash,
       ...trades,
       ...narrative,
+      ...video,
       { id: 'trades:new', group: 'Trades', label: 'New trade…', icon: Plus, accel: 'Alt+N', run: p.onNewTrade },
       { id: 'tools:add-tile', group: 'Tools', label: 'Add tile…', icon: Columns3, run: p.onAddTile },
       { id: 'tools:chat', group: 'Tools', label: 'Chat (RIGA assistant)', icon: MessageSquare, accel: 'Alt+C', run: p.onChat },
@@ -98,7 +102,9 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
     ? ['Dashboards', props.dashboards.find((d) => d.id === loc.dashboardId)?.name ?? '—']
     : loc.kind === 'trades'
       ? ['Trade Repository', TRADE_VIEWS.find((v) => v.id === loc.view)!.label]
-      : ['Narrative Intelligence', loc.view === 'claims' ? 'Claim Explorer' : 'Event review']
+      : loc.kind === 'video'
+        ? ['Video Workspace', loc.view === 'projects' ? 'Projects' : 'Episode workspace']
+        : ['Narrative Intelligence', loc.view === 'claims' ? 'Claim Explorer' : 'Event review']
 
   return (
     <div className="app-menubar" data-testid="app-menubar">
@@ -150,6 +156,10 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
           <MenubarContent>{by('Narrative').map((c) => <Item key={c.id} cmd={c} />)}</MenubarContent>
         </MenubarMenu>
         <MenubarMenu>
+          <MenubarTrigger data-testid="menu-video">Video</MenubarTrigger>
+          <MenubarContent>{by('Video').map((c) => <Item key={c.id} cmd={c} />)}</MenubarContent>
+        </MenubarMenu>
+        <MenubarMenu>
           <MenubarTrigger data-testid="menu-tools">Tools</MenubarTrigger>
           <MenubarContent>{by('Tools').map((c) => <Item key={c.id} cmd={c} />)}</MenubarContent>
         </MenubarMenu>
@@ -162,7 +172,7 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
         </MenubarMenu>
       </Menubar>
       <nav className="app-breadcrumb" aria-label="Location" data-testid="breadcrumb">
-        {loc.kind === 'trades' ? <Database size={12} /> : loc.kind === 'narrative' ? <BrainCircuit size={12} /> : <LayoutGrid size={12} />}
+        {loc.kind === 'trades' ? <Database size={12} /> : loc.kind === 'narrative' ? <BrainCircuit size={12} /> : loc.kind === 'video' ? <Clapperboard size={12} /> : <LayoutGrid size={12} />}
         <span>{where[0]}</span><span className="text-muted">/</span><b>{where[1]}</b>
       </nav>
       <button type="button" className="palette-button" data-testid="open-palette" onClick={() => setPalette(true)}>
@@ -175,7 +185,7 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
             <div className="palette-input"><Search size={15} /><Cmd.Input autoFocus placeholder="Type a dashboard, view or command…" data-testid="palette-input" /></div>
             <Cmd.List className="palette-list">
               <Cmd.Empty className="px-3 py-6 text-center text-xs text-muted">No matches.</Cmd.Empty>
-              {['Dashboards', 'Trades', 'Narrative', 'Tools', 'View', 'File', 'Help'].map((g) => (
+              {['Dashboards', 'Trades', 'Narrative', 'Video', 'Tools', 'View', 'File', 'Help'].map((g) => (
                 <Cmd.Group key={g} heading={g} className="palette-group">
                   {by(g).map((c) => {
                     const Icon = c.icon

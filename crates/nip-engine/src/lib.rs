@@ -15,10 +15,11 @@ use nip_domain::{
     ExtractionStatus, FeatureCapabilities, HealthResponse, LocalEventImport, NarrativeCluster,
     NarrativeGraph, NarrativeGraphEdge, NarrativeGraphNode, NarrativeSignal,
     NarrativeSignalSnapshot, NarrativeSource, PodcastEpisode, PodcastEpisodePage,
-    PodcastEpisodeState,
-    PodcastRefreshReport, PodcastSubscription, PodcastSubscriptionState, PodcastTranscript,
-    ProviderConsent, ProviderStatus, Readiness, ResourceStatus, SemanticSearchResult, SourceId,
-    SourceKind, SourceState, SourceUpdate, API_VERSION, DOMAIN_SCHEMA_VERSION, SERVICE_NAME,
+    PodcastEpisodeState, PodcastRefreshReport, PodcastSubscription, PodcastSubscriptionState,
+    PodcastTranscript, ProviderConsent, ProviderStatus, Readiness, ResourceStatus,
+    SemanticSearchResult, SourceId, SourceKind, SourceState, SourceUpdate, VideoAsset,
+    VideoEpisode, VideoEvidenceRef, VideoJob, VideoProject, VideoScene, VideoShot, VideoStoryboard,
+    VideoWorkflow, API_VERSION, DOMAIN_SCHEMA_VERSION, SERVICE_NAME,
 };
 use nip_store::{SnapshotManifest, Store, StoreError, SubscriptionFetchStateUpdate};
 use serde::{Deserialize, Serialize};
@@ -194,7 +195,14 @@ pub struct NipService {
 impl NipService {
     pub fn open(config: NipConfig) -> Result<Self, NipError> {
         fs::create_dir_all(config.data_dir()).map_err(NipError::PrepareDataDirectory)?;
-        let store = Store::open(config.database_path())?;
+        let mut store = Store::open(config.database_path())?;
+        store.recover_video_jobs()?;
+        let retention_days = std::env::var("NIP_VIDEO_JOB_RETENTION_DAYS")
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or(30)
+            .clamp(1, 3650);
+        let _ = store.cleanup_video_jobs(Utc::now() - chrono::Duration::days(retention_days))?;
         Ok(Self { config, store })
     }
 
@@ -226,6 +234,91 @@ impl NipService {
 
     pub fn config(&self) -> &NipConfig {
         &self.config
+    }
+
+    pub fn video_projects(&self) -> Result<Vec<VideoProject>, NipError> {
+        Ok(self.store.video_projects()?)
+    }
+
+    pub fn video_project(&self, project_id: &str) -> Result<Option<VideoProject>, NipError> {
+        Ok(self.store.video_project(project_id)?)
+    }
+
+    pub fn save_video_project(&mut self, project: &VideoProject) -> Result<(), NipError> {
+        Ok(self.store.save_video_project(project)?)
+    }
+
+    pub fn video_episode(&self, episode_id: &str) -> Result<Option<VideoEpisode>, NipError> {
+        Ok(self.store.video_episode(episode_id)?)
+    }
+
+    pub fn save_video_episode(&mut self, episode: &VideoEpisode) -> Result<(), NipError> {
+        Ok(self.store.save_video_episode(episode)?)
+    }
+
+    pub fn link_video_evidence(
+        &mut self,
+        episode_id: &str,
+        episode_revision: u32,
+        evidence: &VideoEvidenceRef,
+    ) -> Result<(), NipError> {
+        Ok(self
+            .store
+            .link_video_episode_evidence(episode_id, episode_revision, evidence)?)
+    }
+
+    pub fn video_evidence(
+        &self,
+        episode_id: &str,
+        episode_revision: u32,
+    ) -> Result<Vec<VideoEvidenceRef>, NipError> {
+        Ok(self
+            .store
+            .video_episode_evidence(episode_id, episode_revision)?)
+    }
+
+    pub fn save_video_storyboard(&mut self, storyboard: &VideoStoryboard) -> Result<(), NipError> {
+        Ok(self.store.save_video_storyboard(storyboard)?)
+    }
+
+    pub fn save_video_scene(&mut self, scene: &VideoScene) -> Result<(), NipError> {
+        Ok(self.store.save_video_scene(scene)?)
+    }
+
+    pub fn save_video_shot(&mut self, shot: &VideoShot) -> Result<(), NipError> {
+        Ok(self.store.save_video_shot(shot)?)
+    }
+
+    pub fn video_assets(&self, limit: u32) -> Result<Vec<VideoAsset>, NipError> {
+        Ok(self.store.video_assets(limit)?)
+    }
+
+    pub fn save_video_asset(&mut self, asset: &VideoAsset) -> Result<(), NipError> {
+        Ok(self.store.save_video_asset(asset)?)
+    }
+
+    pub fn video_workflows(&self) -> Result<Vec<VideoWorkflow>, NipError> {
+        Ok(self.store.video_workflows()?)
+    }
+
+    pub fn save_video_workflow(&mut self, workflow: &VideoWorkflow) -> Result<(), NipError> {
+        Ok(self.store.save_video_workflow(workflow)?)
+    }
+
+    pub fn video_job(&self, job_id: &str) -> Result<Option<VideoJob>, NipError> {
+        Ok(self.store.video_job(job_id)?)
+    }
+
+    pub fn video_jobs(&self, limit: u32) -> Result<Vec<VideoJob>, NipError> {
+        Ok(self.store.video_jobs(limit)?)
+    }
+
+    pub fn save_video_job(&mut self, job: &VideoJob) -> Result<(), NipError> {
+        Ok(self.store.save_video_job(job)?)
+    }
+
+    pub fn cleanup_video_jobs(&mut self, before: DateTime<Utc>) -> Result<u64, NipError> {
+        Ok(self.store.cleanup_video_jobs(before)?)
     }
 
     pub fn export_parquet_snapshot(
@@ -316,7 +409,11 @@ impl NipService {
 
         let response = match client.fetch(&FeedRequest {
             url: subscription.feed_url.clone(),
-            etag: if force { None } else { subscription.etag.clone() },
+            etag: if force {
+                None
+            } else {
+                subscription.etag.clone()
+            },
             last_modified: if force {
                 None
             } else {
@@ -535,7 +632,8 @@ impl NipService {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        if locator.is_none() && !matches!(draft.kind, SourceKind::LocalDocument | SourceKind::Other) {
+        if locator.is_none() && !matches!(draft.kind, SourceKind::LocalDocument | SourceKind::Other)
+        {
             return Err(NipError::InvalidSourceDetails);
         }
         if let Some(locator) = locator {
@@ -564,8 +662,7 @@ impl NipService {
                 client,
                 now,
             )?;
-            self.store
-                .update_source(&draft.source_id, &defaults, now)?;
+            self.store.update_source(&draft.source_id, &defaults, now)?;
             return self.source(&draft.source_id);
         }
 
@@ -624,10 +721,12 @@ impl NipService {
         }
 
         let mut normalised = update.clone();
-        normalised.poll_interval_minutes =
-            update.poll_interval_minutes.map(|minutes| clamp_poll_interval(Some(minutes)));
-        normalised.per_scan_limit =
-            update.per_scan_limit.map(|limit| clamp_per_scan_limit(Some(limit)));
+        normalised.poll_interval_minutes = update
+            .poll_interval_minutes
+            .map(|minutes| clamp_poll_interval(Some(minutes)));
+        normalised.per_scan_limit = update
+            .per_scan_limit
+            .map(|limit| clamp_per_scan_limit(Some(limit)));
         normalised.display_name = update
             .display_name
             .as_deref()
@@ -749,13 +848,9 @@ impl NipService {
         };
         let limit = limit.unwrap_or(50).clamp(1, 200);
         let offset = offset.unwrap_or(0);
-        let (episodes, total) = self.store.discovered_episodes_page(
-            source_id,
-            title_contains,
-            sort,
-            limit,
-            offset,
-        )?;
+        let (episodes, total) =
+            self.store
+                .discovered_episodes_page(source_id, title_contains, sort, limit, offset)?;
         let consumed = u64::from(offset) + episodes.len() as u64;
         let next_offset = if consumed >= total {
             None
@@ -1298,7 +1393,10 @@ impl NipService {
                     nodes.push(NarrativeGraphNode {
                         node_id: format!("event:{event_id}"),
                         node_type: "event".into(),
-                        label: labels.get(event_id.as_str()).cloned().unwrap_or_else(|| event_id.clone()),
+                        label: labels
+                            .get(event_id.as_str())
+                            .cloned()
+                            .unwrap_or_else(|| event_id.clone()),
                         evidence_event_ids: vec![event_id.clone()],
                     });
                 }
@@ -1331,7 +1429,10 @@ impl NipService {
                     nodes.push(NarrativeGraphNode {
                         node_id: format!("event:{event_id}"),
                         node_type: "event".into(),
-                        label: labels.get(event_id.as_str()).cloned().unwrap_or_else(|| event_id.clone()),
+                        label: labels
+                            .get(event_id.as_str())
+                            .cloned()
+                            .unwrap_or_else(|| event_id.clone()),
                         evidence_event_ids: vec![event_id.clone()],
                     });
                 }
@@ -1855,7 +1956,7 @@ mod tests {
         let health = service.health();
         assert_eq!(health.service, "nip-engine");
         assert_eq!(health.readiness, Readiness::Ready);
-        assert_eq!(health.schema_version, 10);
+        assert_eq!(health.schema_version, 11);
 
         let capabilities = service.capabilities();
         assert!(capabilities.features.duckdb_store);
@@ -2291,7 +2392,10 @@ mod tests {
         assert!(reports[0].is_ok());
         let requests = client.requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
-        assert!(requests[1].etag.is_none(), "a forced refresh must not revalidate");
+        assert!(
+            requests[1].etag.is_none(),
+            "a forced refresh must not revalidate"
+        );
         assert!(requests[1].last_modified.is_none());
         let episode = service
             .podcast_episodes(&SourceId::new("fixture-show").unwrap())
@@ -2323,7 +2427,10 @@ mod tests {
         }
         struct PanickingAsr;
         impl asr::AsrProvider for PanickingAsr {
-            fn transcribe(&self, _request: &asr::AsrRequest) -> Result<asr::AsrResult, asr::AsrError> {
+            fn transcribe(
+                &self,
+                _request: &asr::AsrRequest,
+            ) -> Result<asr::AsrResult, asr::AsrError> {
                 panic!("ASR must not run when a publisher transcript exists");
             }
         }
@@ -2461,7 +2568,7 @@ mod tests {
         // The point-in-time cutoff must follow the event's real ingestion time
         // (`Utc::now()`), otherwise this test becomes time-of-day dependent.
         let snapshot = service
-            .signal_snapshot("2026-11-18T12:00:00Z".parse().unwrap())
+            .signal_snapshot("2026-11-18T23:59:59Z".parse().unwrap())
             .unwrap();
         assert_eq!(snapshot.coverage, "unknown");
         assert_eq!(

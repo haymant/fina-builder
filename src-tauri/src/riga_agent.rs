@@ -380,10 +380,7 @@ pub fn install(app: &tauri::App) -> IpcService {
     let local_model_events = service.subscribe_local_models();
     app.manage(service.clone());
     let handle = app.handle().clone();
-    tauri::async_runtime::spawn(forward_local_model_events(
-        handle,
-        local_model_events,
-    ));
+    tauri::async_runtime::spawn(forward_local_model_events(handle, local_model_events));
     service
 }
 
@@ -408,9 +405,7 @@ pub async fn register_engines(handle: AppHandle, nip_url: Option<String>) {
     ];
     for (name, path, args) in engines {
         let Ok(command) = path else {
-            eprintln!(
-                "RIGA: {name} MCP binary unavailable; the chat will not expose its tools"
-            );
+            eprintln!("RIGA: {name} MCP binary unavailable; the chat will not expose its tools");
             continue;
         };
         let request = riga_server::McpRegistryRequest {

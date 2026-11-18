@@ -888,9 +888,7 @@ mod tests {
             }
         });
         let client = HttpAudioClient::for_test();
-        let response = client
-            .fetch(&format!("http://{address}/redirect"))
-            .unwrap();
+        let response = client.fetch(&format!("http://{address}/redirect")).unwrap();
         assert_eq!(response.status, 200);
         assert_eq!(response.content_type.as_deref(), Some("audio/mpeg"));
         assert_eq!(response.body, b"audio");

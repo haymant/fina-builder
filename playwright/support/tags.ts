@@ -34,6 +34,7 @@ export const TAG = {
     narrativeDiscovery: '@journey-narrative-discovery',
     narrativeThemeMapping: '@journey-narrative-theme-mapping',
     narrativeEditorialReview: '@journey-narrative-editorial-review',
+    videoProduction: '@journey-video-production',
   },
   feature: {
     workspace: '@feature-workspace',
@@ -77,6 +78,7 @@ export const TAG = {
     narrativeSources: '@feature-narrative-sources',
     narrativeEvents: '@feature-narrative-events',
     narrativeClaims: '@feature-narrative-claims',
+    videoWorkspace: '@feature-video-workspace',
     bitemporal: '@feature-bitemporal',
     entitlements: '@feature-entitlements',
     savedViews: '@feature-saved-views',
@@ -94,6 +96,7 @@ export const TAG = {
     tradeFixings: '@demo-trade-fixings',
     tradeRepository: '@demo-trade-repository',
     narrativeResearch: '@demo-narrative-research',
+    videoWorkspace: '@demo-video-workspace',
     tour: '@demo-tour',
   },
 } as const

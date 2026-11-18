@@ -277,6 +277,214 @@ pub struct ClaimRecord {
     pub evidence: Vec<ClaimEvidence>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoProjectStatus {
+    Draft,
+    InReview,
+    Ready,
+    Rendering,
+    Exported,
+    Archived,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoReviewStatus {
+    Draft,
+    Candidate,
+    InReview,
+    Approved,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoAnalysisMode {
+    HumanAuthored,
+    DeterministicCandidate,
+    ModelAssisted,
+    Mixed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoEpisodeStatus {
+    Draft,
+    InReview,
+    Ready,
+    Archived,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoShotStatus {
+    Planned,
+    Ready,
+    Rendering,
+    Blocked,
+    Complete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoProject {
+    pub project_id: String,
+    pub revision: u32,
+    pub title: String,
+    pub language: String,
+    pub target_platform: String,
+    pub target_duration_ms: Option<u64>,
+    pub audience: Option<String>,
+    pub style_profile: Option<String>,
+    pub status: VideoProjectStatus,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoEpisode {
+    pub episode_id: String,
+    pub project_id: String,
+    pub revision: u32,
+    pub title: Option<String>,
+    pub as_of: Option<DateTime<Utc>>,
+    pub disclosure: Option<String>,
+    pub status: VideoEpisodeStatus,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoEvidenceRef {
+    pub evidence_kind: String,
+    pub evidence_id: String,
+    pub start_offset: Option<u32>,
+    pub end_offset: Option<u32>,
+    pub quote: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoNarrative {
+    pub narrative_id: String,
+    pub episode_id: String,
+    pub revision: u32,
+    pub summary: Option<String>,
+    pub thesis: Option<String>,
+    pub analysis_mode: VideoAnalysisMode,
+    pub review_status: VideoReviewStatus,
+    pub derivation_run_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoStoryboard {
+    pub storyboard_id: String,
+    pub narrative_id: String,
+    pub revision: u32,
+    pub schema_version: String,
+    pub review_status: VideoReviewStatus,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoScene {
+    pub scene_id: String,
+    pub storyboard_id: String,
+    pub revision: u32,
+    pub ordinal: u32,
+    pub purpose: String,
+    pub narration_text: Option<String>,
+    pub visual_intent: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoShot {
+    pub shot_id: String,
+    pub scene_id: String,
+    pub revision: u32,
+    pub ordinal: u32,
+    pub shot_type: String,
+    pub duration_ms: u64,
+    pub camera_motion: Option<String>,
+    pub visual_prompt: Option<String>,
+    pub status: VideoShotStatus,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoAsset {
+    pub asset_id: String,
+    pub revision: u32,
+    pub asset_kind: String,
+    pub relative_path: Option<String>,
+    pub mime_type: Option<String>,
+    pub content_hash: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub duration_ms: Option<u64>,
+    pub provider: String,
+    pub workflow_id: Option<String>,
+    pub model: Option<String>,
+    pub reproducibility: String,
+    pub capability_state: String,
+    pub license_state: String,
+    pub job_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoWorkflow {
+    pub workflow_id: String,
+    pub revision: u32,
+    pub capability: String,
+    pub provider_adapter: String,
+    pub schema_version: String,
+    pub model_identity: Option<String>,
+    pub parameters: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoJob {
+    pub job_id: String,
+    pub operation: String,
+    pub status: String,
+    pub input_revision: Option<u32>,
+    pub progress_millis: u32,
+    pub cancellation_requested: bool,
+    pub resource_estimate: Option<serde_json::Value>,
+    pub output_manifest: Option<serde_json::Value>,
+    pub safe_error_message: Option<String>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoRenderManifest {
+    pub renderer: String,
+    pub renderer_revision: String,
+    pub command: String,
+    pub scene_id: String,
+    pub scene_checksum: String,
+    pub output_format: String,
+    pub relative_path: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub duration_ms: Option<u64>,
+    pub fps: Option<u32>,
+    pub deterministic: bool,
+    pub capability_state: String,
+    pub evidence_ids: Vec<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Which side of the RIGA provider boundary produced a derivation. Remote
 /// processing of transcript text requires NIP-specific consent; a local model
 /// does not.

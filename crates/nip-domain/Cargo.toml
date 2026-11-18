@@ -8,6 +8,6 @@ description = "Domain contracts for fina-builder Narrative Intelligence"
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
-serde_json = "1"

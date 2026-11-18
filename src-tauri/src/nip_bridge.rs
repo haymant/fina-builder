@@ -227,7 +227,9 @@ async fn extract_claims(
             break;
         }
         let left = (total_windows - index) as u32;
-        let budget = (remaining / left).max(Duration::from_secs(30)).min(remaining);
+        let budget = (remaining / left)
+            .max(Duration::from_secs(30))
+            .min(remaining);
         let prompt = extraction_prompt(
             &request.event_id,
             &request.prompt_version,
@@ -236,7 +238,11 @@ async fn extract_claims(
             total_windows,
             *offset,
         );
-        let title = format!("NIP claim extraction {short} {}/{}", index + 1, total_windows);
+        let title = format!(
+            "NIP claim extraction {short} {}/{}",
+            index + 1,
+            total_windows
+        );
         let result = if use_cli {
             run_opencode_cli(&prompt, &configured.model, &title, budget).await
         } else {
@@ -278,7 +284,11 @@ async fn extract_claims(
                 }
                 Err(()) => {
                     last_error = "the provider did not return the required claim JSON";
-                    eprintln!("NIP bridge: window {}/{} returned no usable claim JSON", index + 1, total_windows);
+                    eprintln!(
+                        "NIP bridge: window {}/{} returned no usable claim JSON",
+                        index + 1,
+                        total_windows
+                    );
                 }
             },
             Err(()) => {
@@ -374,7 +384,10 @@ fn snap_window_end(chars: &[char], start: usize, end: usize) -> usize {
     {
         return index + 1;
     }
-    if let Some(index) = (floor..end).rev().find(|index| chars[*index].is_whitespace()) {
+    if let Some(index) = (floor..end)
+        .rev()
+        .find(|index| chars[*index].is_whitespace())
+    {
         return index + 1;
     }
     end
@@ -766,7 +779,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn ansi_codes_do_not_break_cli_json_parsing() {
         let output = "\u{1b}[0m> build · gpt-5-nano\u{1b}[0m\n{\"claims\":[{\"text\":\"Rates stay high.\"}]}\n";
@@ -780,12 +792,17 @@ mod tests {
         let text = "Sentence one is here. ".repeat(500); // ~10,500 chars
         let windows = split_windows_with(&text, 4_000);
         assert_eq!(windows.len(), 3);
-        assert!(windows.iter().all(|(_, window)| window.chars().count() <= 4_000));
+        assert!(windows
+            .iter()
+            .all(|(_, window)| window.chars().count() <= 4_000));
         // Offsets are monotonic and every window ends on a word boundary.
         for window in windows.windows(2) {
             assert!(window[0].0 < window[1].0);
         }
-        let joined = windows.iter().map(|(_, window)| window.as_str()).collect::<String>();
+        let joined = windows
+            .iter()
+            .map(|(_, window)| window.as_str())
+            .collect::<String>();
         assert_eq!(joined.chars().count(), text.chars().count());
         assert!(windows.iter().all(|(_, window)| !window.ends_with("Sente")));
     }
@@ -798,7 +815,9 @@ mod tests {
         assert_eq!(windows[0].0, 0);
         let last = windows.last().unwrap();
         assert_eq!(last.0 + last.1.chars().count(), text.chars().count());
-        assert!(windows.iter().all(|(_, window)| window.chars().count() <= 8_000));
+        assert!(windows
+            .iter()
+            .all(|(_, window)| window.chars().count() <= 8_000));
     }
 
     #[test]
@@ -822,6 +841,9 @@ mod tests {
         let claims = (0..80)
             .map(|index| json!({"text": format!("Claim {index}")}))
             .collect();
-        assert_eq!(merge_claims(claims, MAX_MERGED_CLAIMS).len(), MAX_MERGED_CLAIMS);
+        assert_eq!(
+            merge_claims(claims, MAX_MERGED_CLAIMS).len(),
+            MAX_MERGED_CLAIMS
+        );
     }
 }

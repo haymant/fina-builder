@@ -23,6 +23,7 @@ import '../panels.css'
 const Grid = WidthProvider(Responsive)
 const TradeRepository = lazy(() => import('../../trade-repository/components/TradeRepository').then((m) => ({ default: m.TradeRepository })))
 const NarrativeWorkspace = lazy(() => import('../../narrative/components/NarrativeWorkspace').then((m) => ({ default: m.NarrativeWorkspace })))
+const VideoWorkspace = lazy(() => import('../../video/components/VideoWorkspace').then((m) => ({ default: m.VideoWorkspace })))
 
 /**
  * A lazy view has two failure modes the plain Suspense fallback hides: the
@@ -96,6 +97,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
     const l = loadLocation()
     if (l?.kind === 'trades' && TRADE_VIEWS.some((v) => v.id === l.view)) return l
     if (l?.kind === 'narrative' && (l.view === 'overview' || l.view === 'claims')) return l
+    if (l?.kind === 'video' && (l.view === 'projects' || l.view === 'workspace')) return l
     return { kind: 'dashboard', dashboardId: selectedId }
   })
   const navigate = useCallback((l: Location) => {
@@ -244,6 +246,14 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
           <ViewLoadBoundary label="Narrative Intelligence">
             <Suspense fallback={<SlowModuleNotice label="Narrative Intelligence" />}>
               <NarrativeWorkspace view={location.view} />
+            </Suspense>
+          </ViewLoadBoundary>
+        </main>
+      ) : location.kind === 'video' ? (
+        <main className="workspace-canvas relative min-h-0 flex-1 overflow-auto p-5">
+          <ViewLoadBoundary label="Video Workspace">
+            <Suspense fallback={<SlowModuleNotice label="Video Workspace" />}>
+              <VideoWorkspace view={location.view} projectId={location.projectId} onNavigate={(view, projectId) => navigate({ kind: 'video', view, projectId })} />
             </Suspense>
           </ViewLoadBoundary>
         </main>

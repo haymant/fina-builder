@@ -159,7 +159,8 @@ impl NipConfig {
             .filter(|value| !value.trim().is_empty())
             .map(|value| LoopbackUrl::parse(value).map_err(|_| ConfigError::InvalidComfyUiUrl))
             .transpose()?;
-        let comfy = resolve_comfy_workspace(values, &repo_root, app_data_root.as_deref(), debug_build)?;
+        let comfy =
+            resolve_comfy_workspace(values, &repo_root, app_data_root.as_deref(), debug_build)?;
         let riga_bridge = resolve_riga_bridge(values)?;
 
         let configured_data = configured_path(values, "NIP_DATA_DIR")?;
@@ -634,7 +635,10 @@ mod tests {
         let temp = tempdir().unwrap();
         let root = temp.path();
         let config = NipConfig::resolve(
-            &env(&[("NIP_COMFY_REPO", "https://github.com/haymant/comfyui-flows.git")]),
+            &env(&[(
+                "NIP_COMFY_REPO",
+                "https://github.com/haymant/comfyui-flows.git",
+            )]),
             root,
             None,
             true,
@@ -645,8 +649,13 @@ mod tests {
             Some("https://github.com/haymant/comfyui-flows.git")
         );
         assert_eq!(
-            NipConfig::resolve(&env(&[("NIP_COMFY_REPO", "--upload-pack=evil")]), root, None, true)
-                .unwrap_err(),
+            NipConfig::resolve(
+                &env(&[("NIP_COMFY_REPO", "--upload-pack=evil")]),
+                root,
+                None,
+                true
+            )
+            .unwrap_err(),
             ConfigError::InvalidComfyRepo
         );
     }

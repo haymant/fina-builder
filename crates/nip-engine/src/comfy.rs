@@ -136,12 +136,12 @@ impl ComfyAsrStatus {
                 "ComfyUI is not reachable at {}",
                 comfyui_url.as_deref().unwrap_or_default()
             ));
-            next_actions.push("Start ComfyUI Desktop (or scripts/open_comfyui.sh) and retry.".into());
+            next_actions
+                .push("Start ComfyUI Desktop (or scripts/open_comfyui.sh) and retry.".into());
         }
         if server_reachable && !asr_nodes_present {
-            blockers.push(
-                "ComfyUI is running but the ComfyUI-Qwen3-ASR nodes are not loaded".into(),
-            );
+            blockers
+                .push("ComfyUI is running but the ComfyUI-Qwen3-ASR nodes are not loaded".into());
             next_actions.push(
                 "Install the ComfyUI-Qwen3-ASR custom node in ComfyUI Manager, restart ComfyUI, then retry."
                     .into(),
@@ -334,10 +334,7 @@ fn probe_server(server: &str) -> (bool, Option<String>, bool) {
     if stats.status().as_u16() >= 300 {
         return (false, None, false);
     }
-    let body = stats
-        .body_mut()
-        .read_to_string()
-        .unwrap_or_default();
+    let body = stats.body_mut().read_to_string().unwrap_or_default();
     let device = serde_json::from_str::<serde_json::Value>(&body)
         .ok()
         .and_then(|value| {

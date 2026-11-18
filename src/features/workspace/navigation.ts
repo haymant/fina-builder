@@ -2,11 +2,13 @@
 // reach every dashboard and every trade repository view (tabs are for documents only).
 export type TradeView = 'blotter' | 'positions' | 'recon' | 'audit' | 'import' | 'fixings'
 export type NarrativeView = 'overview' | 'claims'
+export type VideoView = 'projects' | 'workspace'
 
 export type Location =
   | { kind: 'dashboard'; dashboardId: string }
   | { kind: 'trades'; view: TradeView }
   | { kind: 'narrative'; view: NarrativeView }
+  | { kind: 'video'; view: VideoView; projectId?: string }
 
 export const TRADE_VIEWS: { id: TradeView; label: string; accel: string }[] = [
   { id: 'blotter', label: 'Blotter', accel: 'Alt+Shift+1' },

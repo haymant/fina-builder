@@ -387,7 +387,8 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             let mut buffer = [0_u8; 4096];
             let _ = stream.read(&mut buffer);
-            let body = r#"{"code":"extraction_failed","message":"the provider run did not complete"}"#;
+            let body =
+                r#"{"code":"extraction_failed","message":"the provider run did not complete"}"#;
             let response = format!(
                 "HTTP/1.1 502 Bad Gateway\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 body.len(),
@@ -395,8 +396,7 @@ mod tests {
             );
             stream.write_all(response.as_bytes()).unwrap();
         });
-        let provider =
-            RigaBridgeClaimProvider::new(&format!("http://{address}"), "token").unwrap();
+        let provider = RigaBridgeClaimProvider::new(&format!("http://{address}"), "token").unwrap();
         let error = provider
             .extract_with_status(&event(), &configured_status())
             .unwrap_err();

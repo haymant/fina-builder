@@ -157,10 +157,9 @@ fn platform_data_bases() -> Vec<PathBuf> {
 fn platform_data_bases() -> Vec<PathBuf> {
     let home = env_value("HOME");
     let fallback = |key: &str, suffix: &str| {
-        env_value(key).map(PathBuf::from).or_else(|| {
-            home.clone()
-                .map(|home| Path::new(&home).join(suffix))
-        })
+        env_value(key)
+            .map(PathBuf::from)
+            .or_else(|| home.clone().map(|home| Path::new(&home).join(suffix)))
     };
     vec![
         fallback("XDG_CONFIG_HOME", ".config").unwrap_or_default(),
@@ -234,7 +233,11 @@ mod tests {
         let first = tempdir();
         let second = tempdir();
         write_registry(&first, "a.json", r#"{"port": 0}"#);
-        write_registry(&second, "b.json", r#"{"port": 8192, "installPath": "/tmp"}"#);
+        write_registry(
+            &second,
+            "b.json",
+            r#"{"port": 8192, "installPath": "/tmp"}"#,
+        );
         let resolved = resolve(None, None, &[first.clone(), second.clone()]).unwrap();
         assert_eq!(resolved.url.as_str(), "http://127.0.0.1:8192");
         assert_eq!(resolved.source, EndpointSource::DesktopRegistry);
