@@ -1,7 +1,19 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { ClaimExplorer, EpisodePanel, GraphExplorer, OperationalMonitor, ProviderStatusPanel, SetupChecklist } from '../components/NarrativeWorkspace'
+import { ClaimExplorer, EpisodePanel, GraphExplorer, NarrativeWorkspace, OperationalMonitor, ProviderStatusPanel, SetupChecklist, TranscriptDialog } from '../components/NarrativeWorkspace'
 import type { NipClaim, NipEvent, NipExtractionStatus, NipNarrativeGraph, NipPodcastEpisode, NipPodcastSubscription, NipProviderStatus, NipResourceStatus } from '../types'
+
+const narrativeApiMock = vi.hoisted(() => ({
+  health: vi.fn(), capabilities: vi.fn(), searchEvents: vi.fn(), listClaims: vi.fn(),
+  listPodcastSubscriptions: vi.fn(), listSources: vi.fn(), listNarrativeClusters: vi.fn(),
+  signalSnapshot: vi.fn(), listEtfMappings: vi.fn(), listEditorialCandidates: vi.fn(),
+  resourceStatus: vi.fn(), extractionStatus: vi.fn(), listNarrativeGraph: vi.fn(),
+  providerStatus: vi.fn(), listPodcastTranscriptionJobs: vi.fn(), asrStatus: vi.fn(),
+  listMediaArtifacts: vi.fn(), listEpisodePage: vi.fn(), rebuildNarrativeClusters: vi.fn(),
+  rebuildNarrativeGraph: vi.fn(), refreshDuePodcastFeeds: vi.fn(),
+}))
+
+vi.mock('../api', () => ({ narrativeApi: narrativeApiMock }))
 
 const event: NipEvent = {
   schema_version: 1,
@@ -192,8 +204,16 @@ describe('EpisodePanel', () => {
 
   it('does not offer a dead transcribe action when local ASR is not configured', () => {
     renderPanel({ transcriptionAvailable: false })
-    expect(screen.getByText(/Local ASR is not configured/)).toBeTruthy()
+    expect(screen.getByText(/Local ASR is unavailable/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Transcribe locally/ })).toBeNull()
+  })
+
+  it('offers a publisher transcript even when local ASR is unavailable', () => {
+    const onTranscribe = vi.fn()
+    renderPanel({ episodes: [{ ...episode, transcript_url: 'https://cdn.test/episode-1.vtt', transcript_type: 'text/vtt' }], transcriptionAvailable: false, onTranscribe })
+    expect(screen.getByText(/can still be transcribed without it/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Use publisher transcript/ }))
+    expect(onTranscribe).toHaveBeenCalled()
   })
 
   it('shows the exact ASR blockers instead of the button when the capability is stale', () => {
@@ -294,5 +314,82 @@ describe('GraphExplorer', () => {
     expect(screen.getByTestId('graph-empty').textContent).toContain('no origin nodes yet')
     fireEvent.click(screen.getByRole('button', { name: /Open retained events/ }))
     expect(onBackToEvents).toHaveBeenCalled()
+  })
+})
+
+describe('TranscriptDialog', () => {
+  it('shows the full transcript in a card and closes on Escape', () => {
+    const onClose = vi.fn()
+    render(<TranscriptDialog event={event} busy={false} status={null} extractionAvailable={false} onClose={onClose} onExtract={vi.fn()} onOpenInList={vi.fn()} />)
+    expect(screen.getByRole('dialog', { name: 'Retained transcript' })).toBeTruthy()
+    expect(screen.getByText('Rates remain restrictive until inflation cools.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Extract claims/ })).toBeNull()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('offers extraction and a link to the event list only when available', () => {
+    const onExtract = vi.fn()
+    const onOpenInList = vi.fn()
+    render(<TranscriptDialog event={event} busy={false} status="3 claims committed" extractionAvailable onClose={vi.fn()} onExtract={onExtract} onOpenInList={onOpenInList} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Extract claims' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show in event list' }))
+    expect(onExtract).toHaveBeenCalled()
+    expect(onOpenInList).toHaveBeenCalled()
+    expect(screen.getByText('3 claims committed')).toBeTruthy()
+  })
+})
+
+const completedJob = {
+  job_id: 'job-1', source_id: 'fixture-show', source_native_id: 'episode-1', canonical_url: null,
+  title: 'Policy outlook fixture', state: 'transcribed', step: 'transcribed', detail: null,
+  error_code: null, error_message: null, audio_bytes: null, audio_content_type: null, audio_path: null,
+  audio_url_path: null, audio_duration_seconds: null, chunks_total: null, chunks_completed: 0,
+  transcript_characters: 120, transcript_preview: 'Rates remain restrictive…', transcript_path: '/tmp/transcript.txt',
+  event_id: 'event-fixture-1', warnings: [], started_at: '2026-11-18T01:00:00Z',
+  updated_at: '2026-11-18T01:01:00Z', finished_at: '2026-11-18T01:01:00Z', events: [],
+}
+
+function stubWorkspaceApi() {
+  narrativeApiMock.health.mockResolvedValue({ schema_version: 10, api_version: '0.1.0' })
+  narrativeApiMock.capabilities.mockResolvedValue({ features: { local_audio_transcription: true } })
+  narrativeApiMock.searchEvents.mockResolvedValue({ events: [event], next_cursor: null })
+  narrativeApiMock.listClaims.mockResolvedValue([])
+  narrativeApiMock.listPodcastSubscriptions.mockResolvedValue([])
+  narrativeApiMock.listSources.mockResolvedValue([])
+  narrativeApiMock.listNarrativeClusters.mockResolvedValue([])
+  narrativeApiMock.signalSnapshot.mockResolvedValue(null)
+  narrativeApiMock.listEtfMappings.mockResolvedValue([])
+  narrativeApiMock.listEditorialCandidates.mockResolvedValue([])
+  narrativeApiMock.resourceStatus.mockResolvedValue(null)
+  narrativeApiMock.extractionStatus.mockResolvedValue(null)
+  narrativeApiMock.listNarrativeGraph.mockResolvedValue(null)
+  narrativeApiMock.providerStatus.mockResolvedValue(null)
+  narrativeApiMock.asrStatus.mockResolvedValue({ ready: true })
+  narrativeApiMock.listMediaArtifacts.mockResolvedValue([])
+  narrativeApiMock.listEpisodePage.mockResolvedValue({ episodes: [], total: 0, limit: 50, offset: 0, next_offset: null })
+  narrativeApiMock.rebuildNarrativeClusters.mockResolvedValue([])
+  narrativeApiMock.rebuildNarrativeGraph.mockResolvedValue(null)
+}
+
+describe('NarrativeWorkspace derived projections', () => {
+  it('rebuilds clusters and the graph after a background transcription commits', async () => {
+    stubWorkspaceApi()
+    const running = { ...completedJob, state: 'download', step: 'download', transcript_characters: null, event_id: null }
+    narrativeApiMock.listPodcastTranscriptionJobs.mockResolvedValueOnce([running]).mockResolvedValue([completedJob])
+    render(<NarrativeWorkspace />)
+    await waitFor(() => expect(narrativeApiMock.rebuildNarrativeClusters).toHaveBeenCalled(), { timeout: 4000 })
+    expect(narrativeApiMock.rebuildNarrativeGraph).toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByTestId('derived-refresh').textContent).toContain('Radar, Timeline, Graph and clusters'))
+  }, 10000)
+
+  it('does not re-derive jobs that finished before the workspace opened', async () => {
+    stubWorkspaceApi()
+    narrativeApiMock.listPodcastTranscriptionJobs.mockResolvedValue([completedJob])
+    render(<NarrativeWorkspace />)
+    await waitFor(() => expect(narrativeApiMock.listPodcastTranscriptionJobs).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(narrativeApiMock.rebuildNarrativeClusters).not.toHaveBeenCalled()
+    expect(narrativeApiMock.rebuildNarrativeGraph).not.toHaveBeenCalled()
   })
 })

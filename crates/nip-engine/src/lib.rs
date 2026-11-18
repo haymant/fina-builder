@@ -1,5 +1,6 @@
 pub mod asr;
 pub mod comfy;
+pub mod comfy_discovery;
 pub mod config;
 pub mod jobs;
 pub mod media;
@@ -1534,10 +1535,65 @@ impl NipService {
         provider: &dyn AsrProvider,
         now: DateTime<Utc>,
     ) -> Result<PodcastTranscript, NipError> {
+        if let Some(transcript) = self.publisher_transcript(episode, audio_client, now)? {
+            return Ok(transcript);
+        }
         let request = podcast_asr_request(episode, audio_client)?;
         self.transcribe_podcast_episode(episode, request, provider, now)
     }
+
+    /// Prefer the transcript the publisher advertises in the feed. Publisher
+    /// text is authored, complete and costs one request, so running a local
+    /// model over the same audio is wasted work. Any failure falls through to
+    /// ASR instead of failing the episode.
+    pub fn publisher_transcript(
+        &mut self,
+        episode: &PodcastEpisode,
+        audio_client: &dyn AudioClient,
+        now: DateTime<Utc>,
+    ) -> Result<Option<PodcastTranscript>, NipError> {
+        let Some(url) = episode.transcript_url.as_deref() else {
+            return Ok(None);
+        };
+        let Ok(response) = audio_client.fetch(url) else {
+            return Ok(None);
+        };
+        if response.status != 200
+            || response.body.is_empty()
+            || response.body.len() > MAX_PUBLISHER_TRANSCRIPT_BYTES
+        {
+            return Ok(None);
+        }
+        let Ok(body) = String::from_utf8(response.body) else {
+            return Ok(None);
+        };
+        let text = podcast::publisher_transcript_text(&body, episode.transcript_type.as_deref());
+        if text.trim().len() < MIN_PUBLISHER_TRANSCRIPT_CHARS {
+            return Ok(None);
+        }
+        let content_hash = transcript_hash(&text);
+        let provenance = serde_json::json!({
+            "source": "publisher_transcript",
+            "url": url,
+            "declared_type": episode.transcript_type,
+        });
+        let transcript = PodcastTranscript {
+            source_id: episode.source_id.clone(),
+            source_native_id: episode.source_native_id.clone(),
+            canonical_url: episode.canonical_url.clone(),
+            content_hash,
+            transcript_text: text,
+            detected_language: None,
+            provenance_json: provenance.to_string(),
+            transcribed_at: now,
+        };
+        self.store.store_transcript(episode, &transcript)?;
+        Ok(Some(transcript))
+    }
 }
+
+const MAX_PUBLISHER_TRANSCRIPT_BYTES: usize = 8 * 1024 * 1024;
+const MIN_PUBLISHER_TRANSCRIPT_CHARS: usize = 200;
 
 /// Download and validate a podcast enclosure into the narrow ASR request. This
 /// performs no ASR and takes no NIP store lock.
@@ -1665,7 +1721,7 @@ mod tests {
         let health = service.health();
         assert_eq!(health.service, "nip-engine");
         assert_eq!(health.readiness, Readiness::Ready);
-        assert_eq!(health.schema_version, 9);
+        assert_eq!(health.schema_version, 10);
 
         let capabilities = service.capabilities();
         assert!(capabilities.features.duckdb_store);
@@ -2054,6 +2110,70 @@ mod tests {
             )
             .unwrap();
         assert_eq!(transcript.transcript_text, "enclosure transcript");
+    }
+
+    #[test]
+    fn publisher_transcript_is_preferred_over_local_asr() {
+        const PUBLISHED: &str = "The publisher already wrote this transcript down, so running local automatic speech recognition over identical audio would be wasted work, and a feed-provided transcript is usually more accurate than any model because the show produced it themselves.";
+        struct PublishedTranscriptClient;
+        impl podcast::AudioClient for PublishedTranscriptClient {
+            fn fetch(
+                &self,
+                url: &str,
+            ) -> Result<podcast::AudioResponse, podcast::AudioClientError> {
+                assert!(url.ends_with("/episode-1.vtt"), "unexpected fetch: {url}");
+                Ok(podcast::AudioResponse {
+                    status: 200,
+                    content_type: Some("text/vtt".into()),
+                    body: format!("WEBVTT\n\n00:00:00.000 --> 00:00:04.000\n{PUBLISHED}\n")
+                        .into_bytes(),
+                })
+            }
+        }
+        struct PanickingAsr;
+        impl asr::AsrProvider for PanickingAsr {
+            fn transcribe(&self, _request: &asr::AsrRequest) -> Result<asr::AsrResult, asr::AsrError> {
+                panic!("ASR must not run when a publisher transcript exists");
+            }
+        }
+
+        let temp = tempdir().unwrap();
+        let mut service = service_at(temp.path());
+        let feed = feed_body()
+            .replace(
+                "<rss version=\"2.0\">",
+                "<rss version=\"2.0\" xmlns:podcast=\"https://podcastindex.org/namespace/1.0\">",
+            )
+            .replace(
+                "<enclosure url=\"https://fixture.test/episode-1.mp3\" type=\"audio/mpeg\"/>",
+                concat!(
+                    "<enclosure url=\"https://fixture.test/episode-1.mp3\" type=\"audio/mpeg\"/>",
+                    "<podcast:transcript url=\"https://fixture.test/episode-1.vtt\" type=\"text/vtt\"/>"
+                ),
+            );
+        let client = FixtureFeedClient::with_responses(vec![feed_response(200, feed, None)]);
+        let now = "2026-11-16T09:00:00Z".parse().unwrap();
+        service
+            .subscribe_podcast_feed(request(true), &client, now)
+            .unwrap();
+        let episode = service
+            .podcast_episodes(&SourceId::new("fixture-show").unwrap())
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            episode.transcript_url.as_deref(),
+            Some("https://fixture.test/episode-1.vtt")
+        );
+        let transcript = service
+            .transcribe_podcast_episode_from_enclosure(
+                &episode,
+                &PublishedTranscriptClient,
+                &PanickingAsr,
+                now + chrono::TimeDelta::seconds(2),
+            )
+            .unwrap();
+        assert_eq!(transcript.transcript_text, PUBLISHED);
+        assert!(transcript.provenance_json.contains("publisher_transcript"));
     }
 
     #[test]

@@ -298,6 +298,40 @@ struct RawEpisode {
     link: Option<String>,
     enclosure: Option<String>,
     pub_date: Option<String>,
+    transcript_url: Option<String>,
+    transcript_type: Option<String>,
+}
+
+impl RawEpisode {
+    /// Feeds commonly advertise the same transcript in several formats. Keep
+    /// one, preferring plain text, then VTT, then SRT, then JSON.
+    fn consider_transcript(&mut self, url: String, mime: String) {
+        let rank = transcript_rank(&mime);
+        let current = self
+            .transcript_type
+            .as_deref()
+            .map(transcript_rank)
+            .unwrap_or(u8::MAX);
+        if rank < current {
+            self.transcript_url = Some(url);
+            self.transcript_type = Some(mime);
+        }
+    }
+}
+
+fn transcript_rank(mime: &str) -> u8 {
+    let mime = mime.to_ascii_lowercase();
+    if mime.contains("text/plain") {
+        0
+    } else if mime.contains("vtt") {
+        1
+    } else if mime.contains("srt") || mime.contains("subrip") {
+        2
+    } else if mime.contains("json") {
+        3
+    } else {
+        4
+    }
 }
 
 /// Parse the RSS metadata required for source-linked episode discovery. Audio
@@ -342,6 +376,13 @@ pub fn parse_rss_feed(
                             }
                         }
                     }
+                    "transcript" if current_episode.is_some() => {
+                        if let Some((url, mime)) = transcript_ref(&element, feed_url) {
+                            if let Some(item) = current_episode.as_mut() {
+                                item.consider_transcript(url, mime);
+                            }
+                        }
+                    }
                     "guid" | "title" | "link" | "pubdate" if current_episode.is_some() => {
                         active_field = Some(name);
                         field_text.clear();
@@ -359,6 +400,13 @@ pub fn parse_rss_feed(
                     if let Some(value) = enclosure_url(&element, feed_url) {
                         if let Some(item) = current_episode.as_mut() {
                             item.enclosure = Some(value);
+                        }
+                    }
+                }
+                if name == "transcript" && current_episode.is_some() {
+                    if let Some((url, mime)) = transcript_ref(&element, feed_url) {
+                        if let Some(item) = current_episode.as_mut() {
+                            item.consider_transcript(url, mime);
                         }
                     }
                 }
@@ -456,6 +504,94 @@ fn enclosure_url(element: &quick_xml::events::BytesStart<'_>, feed_url: &Url) ->
     None
 }
 
+fn transcript_ref(
+    element: &quick_xml::events::BytesStart<'_>,
+    feed_url: &Url,
+) -> Option<(String, String)> {
+    let mut url = None;
+    let mut mime = None;
+    for attribute in element.attributes().with_checks(true).flatten() {
+        let value = quick_xml::escape::unescape(attribute.value.as_ref())
+            .ok()?
+            .into_owned();
+        match attribute.key.as_ref() {
+            "url" => url = resolve_http_url(feed_url, value.trim()),
+            "type" => {
+                let value = value.trim().to_ascii_lowercase();
+                if !value.is_empty() {
+                    mime = Some(value);
+                }
+            }
+            _ => {}
+        }
+    }
+    let url = url?;
+    let mime = mime.unwrap_or_else(|| "text/plain".to_owned());
+    Some((url, mime))
+}
+
+/// Reduce a publisher transcript document to prose. Handles plain text, WebVTT,
+/// SRT and the Podcasting 2.0 JSON transcript shape; anything else is treated
+/// as text so an unknown type cannot silently produce an empty transcript.
+pub fn publisher_transcript_text(body: &str, declared_type: Option<&str>) -> String {
+    let declared = declared_type.unwrap_or_default().to_ascii_lowercase();
+    let document = body.replace("\r\n", "\n").replace('\r', "\n");
+    let text = if declared.contains("json") || document.trim_start().starts_with('{') {
+        match serde_json::from_str::<serde_json::Value>(&document) {
+            Ok(value) => {
+                let segments = value
+                    .get("segments")
+                    .and_then(|segments| segments.as_array())
+                    .map(|segments| {
+                        segments
+                            .iter()
+                            .filter_map(|segment| {
+                                segment
+                                    .get("text")
+                                    .and_then(|text| text.as_str())
+                                    .map(str::to_owned)
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .filter(|text| !text.trim().is_empty());
+                segments
+                    .or_else(|| {
+                        value
+                            .get("text")
+                            .and_then(|text| text.as_str())
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_default()
+            }
+            Err(_) => document.clone(),
+        }
+    } else if declared.contains("vtt")
+        || declared.contains("srt")
+        || declared.contains("subrip")
+        || document.trim_start().starts_with("WEBVTT")
+    {
+        strip_cue_timing(&document)
+    } else {
+        document
+    };
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Drop cue indices and timing lines, keeping only spoken text.
+fn strip_cue_timing(document: &str) -> String {
+    document
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !line.eq_ignore_ascii_case("WEBVTT"))
+        .filter(|line| !line.contains("-->"))
+        .filter(|line| !line.chars().all(|c| c.is_ascii_digit()))
+        .map(|line| line.trim_start_matches(|c: char| c.is_ascii_digit()).trim())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn finish_episode(
     item: RawEpisode,
     feed_url: &Url,
@@ -488,6 +624,8 @@ fn finish_episode(
         published_at: item.pub_date.as_deref().and_then(parse_publication_date),
         discovered_at,
         state: PodcastEpisodeState::AwaitingLocalTranscription,
+        transcript_url: item.transcript_url,
+        transcript_type: item.transcript_type,
     })
 }
 
@@ -584,6 +722,57 @@ mod tests {
         );
         assert_eq!(feed.episodes[1].source_native_id, None);
         assert_eq!(feed.episodes[1].published_at, None);
+    }
+
+    #[test]
+    fn captures_publisher_transcript_and_prefers_plain_text() {
+        let feed = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:podcast="https://podcastindex.org/namespace/1.0"><channel><title>Fixture Show</title><item>
+  <guid>ep-002</guid><title>Transcripts</title>
+  <enclosure url="https://cdn.test/two.mp3" type="audio/mpeg"/>
+  <podcast:transcript url="https://cdn.test/two.srt" type="application/x-subrip"/>
+  <podcast:transcript url="https://cdn.test/two.vtt" type="text/vtt"/>
+  <podcast:transcript url="transcripts/two.txt" type="text/plain"/>
+  <podcast:transcript url="https://cdn.test/two.json" type="application/json"/>
+</item><item><title>No transcript</title>
+  <link>https://pod.test/three</link>
+  <enclosure url="https://cdn.test/three.mp3" type="audio/mpeg"/>
+</item></channel></rss>"#;
+        let feed_url = Url::parse("https://pod.test/show/feed.xml").unwrap();
+        let source_id = SourceId::new("show-1").unwrap();
+        let parsed = parse_rss_feed(feed, &feed_url, &source_id, Utc::now()).unwrap();
+        assert_eq!(
+            parsed.episodes[0].transcript_url.as_deref(),
+            Some("https://pod.test/show/transcripts/two.txt")
+        );
+        assert_eq!(
+            parsed.episodes[0].transcript_type.as_deref(),
+            Some("text/plain")
+        );
+        assert_eq!(parsed.episodes[1].transcript_url, None);
+    }
+
+    #[test]
+    fn publisher_transcript_text_reduces_every_advertised_format() {
+        let vtt = "WEBVTT\n\n1\n00:00:00.000 --> 00:00:02.000\nInflation is\ncooling.\n\n2\n00:00:02.000 --> 00:00:04.000\nPolicy stays tight.\n";
+        assert_eq!(
+            publisher_transcript_text(vtt, Some("text/vtt")),
+            "Inflation is cooling. Policy stays tight."
+        );
+        let srt = "1\n00:00:00,000 --> 00:00:02,000\nRates unchanged\n\n2\n00:00:02,000 --> 00:00:04,000\nWatch the spread\n";
+        assert_eq!(
+            publisher_transcript_text(srt, Some("application/x-subrip")),
+            "Rates unchanged Watch the spread"
+        );
+        let json = r#"{"version":"1.0.0","segments":[{"startTime":0.0,"text":"Hello"},{"startTime":1.0,"text":"world"}]}"#;
+        assert_eq!(
+            publisher_transcript_text(json, Some("application/json")),
+            "Hello world"
+        );
+        assert_eq!(
+            publisher_transcript_text("  Plain\ntext  ", Some("text/plain")),
+            "Plain text"
+        );
     }
 
     #[test]

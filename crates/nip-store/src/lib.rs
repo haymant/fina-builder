@@ -24,7 +24,8 @@ const MIGRATION_6: &str = include_str!("../migrations/0006_phase3_research.sql")
 const MIGRATION_7: &str = include_str!("../migrations/0007_phase2_graph.sql");
 const MIGRATION_8: &str = include_str!("../migrations/0008_provider_consent_audit.sql");
 const MIGRATION_9: &str = include_str!("../migrations/0009_source_registry.sql");
-const LATEST_SCHEMA_VERSION: u32 = 9;
+const MIGRATION_10: &str = include_str!("../migrations/0010_publisher_transcripts.sql");
+const LATEST_SCHEMA_VERSION: u32 = 10;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -529,14 +530,33 @@ impl Store {
                 |row| row.get(0),
             )?;
             if exists {
+                // Publisher transcript references are backfilled when a feed
+                // starts advertising one: rows recorded before this column
+                // existed would otherwise never see it. Identity metadata
+                // stays first-observation-wins.
+                if episode.transcript_url.is_some() {
+                    transaction.execute(
+                        "UPDATE nip_podcast_episodes
+                         SET transcript_url = COALESCE(transcript_url, ?),
+                             transcript_type = COALESCE(transcript_type, ?)
+                         WHERE source_id = ? AND identity_key = ?",
+                        params![
+                            episode.transcript_url,
+                            episode.transcript_type,
+                            episode.source_id.as_str(),
+                            identity_key
+                        ],
+                    )?;
+                }
                 continue;
             }
             let episode_id = stable_episode_id(episode.source_id.as_str(), &identity_key);
             transaction.execute(
                 "INSERT INTO nip_podcast_episodes
                     (episode_id, source_id, identity_key, source_native_id, canonical_url, title,
-                     enclosure_url, published_at, discovered_at, state)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     enclosure_url, published_at, discovered_at, state,
+                     transcript_url, transcript_type)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     episode_id,
                     episode.source_id.as_str(),
@@ -547,7 +567,9 @@ impl Store {
                     episode.enclosure_url,
                     episode.published_at,
                     episode.discovered_at,
-                    episode_state_as_str(episode.state)
+                    episode_state_as_str(episode.state),
+                    episode.transcript_url,
+                    episode.transcript_type
                 ],
             )?;
             inserted += 1;
@@ -562,7 +584,7 @@ impl Store {
     ) -> Result<Vec<PodcastEpisode>, StoreError> {
         let mut statement = self.connection.prepare(
             "SELECT source_id, source_native_id, canonical_url, title, enclosure_url,
-                    published_at, discovered_at, state
+                    published_at, discovered_at, state, transcript_url, transcript_type
              FROM nip_podcast_episodes WHERE source_id = ? ORDER BY discovered_at, episode_id",
         )?;
         let rows = statement.query_map(params![source_id.as_str()], raw_episode_from_row)?;
@@ -600,7 +622,7 @@ impl Store {
         };
         let sql = format!(
             "SELECT source_id, source_native_id, canonical_url, title, enclosure_url,
-                    published_at, discovered_at, state
+                    published_at, discovered_at, state, transcript_url, transcript_type
              FROM nip_podcast_episodes
              {filter}
              ORDER BY {order}
@@ -1588,6 +1610,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<u32, StoreError> {
         current_version = 9;
         applied_any = true;
     }
+    if current_version < 10 {
+        apply_migration(connection, 10, "publisher_transcripts", MIGRATION_10)?;
+        applied_any = true;
+    }
     let _ = current_version;
     if applied_any {
         // Migration 0009 rebuilds tables (DROP/RENAME). DuckDB cannot replay
@@ -1923,6 +1949,8 @@ struct RawEpisode {
     published_at: Option<DateTime<Utc>>,
     discovered_at: DateTime<Utc>,
     state: String,
+    transcript_url: Option<String>,
+    transcript_type: Option<String>,
 }
 
 fn raw_episode_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<RawEpisode> {
@@ -1935,6 +1963,8 @@ fn raw_episode_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<RawEpisode> {
         published_at: row.get(5)?,
         discovered_at: row.get(6)?,
         state: row.get(7)?,
+        transcript_url: row.get(8)?,
+        transcript_type: row.get(9)?,
     })
 }
 
@@ -1958,6 +1988,8 @@ impl TryFrom<RawEpisode> for PodcastEpisode {
             published_at: raw.published_at,
             discovered_at: raw.discovered_at,
             state,
+            transcript_url: raw.transcript_url,
+            transcript_type: raw.transcript_type,
         })
     }
 }
@@ -1996,6 +2028,8 @@ mod tests {
             published_at: Some("2026-11-15T12:00:00Z".parse().unwrap()),
             discovered_at: "2026-11-16T09:01:00Z".parse().unwrap(),
             state: PodcastEpisodeState::AwaitingLocalTranscription,
+            transcript_url: None,
+            transcript_type: None,
         }
     }
 
@@ -2006,7 +2040,7 @@ mod tests {
 
         {
             let store = Store::open(&path).unwrap();
-            assert_eq!(store.schema_version(), 9);
+            assert_eq!(store.schema_version(), 10);
             assert!(store.has_table("nip_schema_migrations").unwrap());
             assert!(store.has_table("nip_sources").unwrap());
             assert!(store.has_table("nip_events").unwrap());
@@ -2016,14 +2050,14 @@ mod tests {
         }
 
         let reopened = Store::open(&path).unwrap();
-        assert_eq!(reopened.schema_version(), 9);
+        assert_eq!(reopened.schema_version(), 10);
         let migration_count: i64 = reopened
             .connection
             .query_row("SELECT COUNT(*) FROM nip_schema_migrations", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 9);
+        assert_eq!(migration_count, 10);
     }
 
     #[test]
@@ -2052,7 +2086,7 @@ mod tests {
         drop(connection);
 
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version(), 9);
+        assert_eq!(store.schema_version(), 10);
         assert!(store.has_table("nip_events").unwrap());
         assert!(store.has_table("nip_podcast_subscriptions").unwrap());
     }
@@ -2149,6 +2183,62 @@ mod tests {
         assert_eq!(
             rows[0].state,
             PodcastEpisodeState::AwaitingLocalTranscription
+        );
+    }
+
+    #[test]
+    fn publisher_transcript_reference_is_backfilled_on_replay() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        store
+            .add_approved_subscription(&subscription("feed-a"))
+            .unwrap();
+        let first = episode("feed-a", Some("guid-1"), Some("https://example.test/ep-1"));
+        assert_eq!(
+            store
+                .record_discovered_episodes(std::slice::from_ref(&first))
+                .unwrap(),
+            1
+        );
+        let with_transcript = PodcastEpisode {
+            title: Some("A later refresh does not replace the title".into()),
+            transcript_url: Some("https://example.test/ep-1.vtt".into()),
+            transcript_type: Some("text/vtt".into()),
+            ..first.clone()
+        };
+        assert_eq!(
+            store
+                .record_discovered_episodes(&[with_transcript])
+                .unwrap(),
+            0,
+            "a replay must not create a duplicate row"
+        );
+        let rows = store
+            .discovered_episodes(&SourceId::new("feed-a").unwrap())
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].transcript_url.as_deref(),
+            Some("https://example.test/ep-1.vtt")
+        );
+        assert_eq!(rows[0].transcript_type.as_deref(), Some("text/vtt"));
+        assert_eq!(rows[0].title.as_deref(), Some("Episode 1"));
+
+        // A stored reference is not replaced by a different one.
+        let different = PodcastEpisode {
+            transcript_url: Some("https://example.test/ep-1.srt".into()),
+            transcript_type: Some("application/x-subrip".into()),
+            ..first.clone()
+        };
+        store
+            .record_discovered_episodes(std::slice::from_ref(&different))
+            .unwrap();
+        let rows = store
+            .discovered_episodes(&SourceId::new("feed-a").unwrap())
+            .unwrap();
+        assert_eq!(
+            rows[0].transcript_url.as_deref(),
+            Some("https://example.test/ep-1.vtt")
         );
     }
 
@@ -2346,7 +2436,7 @@ mod tests {
             error,
             StoreError::FutureSchema {
                 found: 99,
-                supported: 9
+                supported: 10
             }
         ));
     }

@@ -56,7 +56,9 @@ impl ComfyAsrStatus {
             .unwrap_or_else(|| "python3".to_owned());
         let python_present = binary_available(&python, &["--version"]);
         let ffmpeg_present = binary_available("ffmpeg", &["-version"]);
-        let comfyui_url = config.comfyui_url().map(|url| url.as_str().to_owned());
+        let comfyui_url = config
+            .resolve_comfyui_url()
+            .map(|url| url.as_str().to_owned());
         let (server_reachable, server_device, asr_nodes_present) = match comfyui_url.as_deref() {
             Some(url) => probe_server(url),
             None => (false, None, false),
@@ -87,11 +89,12 @@ impl ComfyAsrStatus {
         }
         if comfyui_url.is_none() {
             blockers.push(
-                "NIP_COMFYUI_URL is not set; point it at the loopback ComfyUI server that runs the Qwen3-ASR graph."
+                "no loopback ComfyUI endpoint could be resolved; NIP will not send audio to a remote ASR service."
                     .into(),
             );
             next_actions.push(
-                "Set NIP_COMFYUI_URL=http://127.0.0.1:8190 in .env and restart the desktop app.".into(),
+                "Start ComfyUI Desktop (or set NIP_COMFYUI_URL to the loopback server running the Qwen3-ASR graph)."
+                    .into(),
             );
         }
         if !render_script_present {

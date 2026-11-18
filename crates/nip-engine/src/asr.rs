@@ -260,12 +260,10 @@ pub struct ComfyUiAsrProvider {
 
 impl ComfyUiAsrProvider {
     pub fn from_env(staging_root: impl Into<PathBuf>) -> Result<Option<Self>, AsrError> {
-        match env::var("NIP_COMFYUI_URL") {
-            Ok(endpoint) if !endpoint.trim().is_empty() => {
-                Self::new(&endpoint, staging_root).map(Some)
-            }
-            Ok(_) | Err(env::VarError::NotPresent) => Ok(None),
-            Err(env::VarError::NotUnicode(_)) => Err(AsrError::InvalidInput),
+        let configured = env::var("NIP_COMFYUI_URL").ok();
+        match crate::comfy_discovery::from_process(configured.as_deref()) {
+            Some(endpoint) => Self::new(endpoint.url.as_str(), staging_root).map(Some),
+            None => Ok(None),
         }
     }
 

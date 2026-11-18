@@ -153,11 +153,17 @@ repository. NIP resolves the pack from `NIP_COMFY_DIR` (default `modules/comfy`)
 `scripts/render.py asr-long`. Configure:
 
 ```bash
-NIP_COMFYUI_URL=http://127.0.0.1:8190        # loopback ComfyUI with the Qwen3-ASR nodes
+NIP_COMFYUI_URL=http://127.0.0.1:8190        # optional; overrides loopback auto-discovery
 NIP_COMFY_DIR=/path/to/comfyui-flows         # optional; defaults to modules/comfy
 NIP_COMFY_REPO=https://github.com/haymant/comfyui-flows.git  # optional auto-clone source
 NIP_ASR_CHUNK_SECONDS=45                     # optional; Qwen3-ASR caps output at 256 tokens
 ```
+
+The endpoint is discovered at call time, so no port needs to be pinned per machine:
+an explicit `NIP_COMFYUI_URL` wins, then the pack's `COMFYUI_SERVER`, then the port
+recorded by the running ComfyUI Desktop instance (`comfy-procs/*.json`), then the
+documented default `8188`. Discovery is validated as a loopback URL, so it can never
+point ASR at another host.
 
 `nip_asr_status` names every missing prerequisite. A transcription run is a job: the
 Narrative workspace shows its download/transcribe/commit stage, cached audio, warnings,

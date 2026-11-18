@@ -135,6 +135,9 @@ export interface NipPodcastEpisode {
   published_at: string | null
   discovered_at: string
   state: string
+  /** Publisher-provided transcript advertised by `<podcast:transcript>`. */
+  transcript_url?: string | null
+  transcript_type?: string | null
 }
 
 export interface NipEpisodePage {

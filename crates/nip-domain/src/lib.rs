@@ -406,6 +406,12 @@ pub struct PodcastEpisode {
     pub published_at: Option<DateTime<Utc>>,
     pub discovered_at: DateTime<Utc>,
     pub state: PodcastEpisodeState,
+    /// Publisher-provided transcript advertised by `<podcast:transcript>`.
+    /// When present it is preferred over local ASR.
+    #[serde(default)]
+    pub transcript_url: Option<String>,
+    #[serde(default)]
+    pub transcript_type: Option<String>,
 }
 
 /// One stable page of discovered RSS metadata. `next_offset` is `None` when the

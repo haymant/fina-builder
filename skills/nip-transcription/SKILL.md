@@ -28,7 +28,6 @@ Use the desktop NIP endpoint or start one explicitly:
 
 ```bash
 NIP_DATA_DIR=/tmp/nip-asr-test NIP_LAKE_DIR=/tmp/nip-asr-test/lake \
-NIP_COMFYUI_URL=http://127.0.0.1:8190 \
   target/release/nip-engine --transport http --bind 127.0.0.1:8794
 ```
 

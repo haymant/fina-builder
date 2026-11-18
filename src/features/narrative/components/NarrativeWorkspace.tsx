@@ -125,6 +125,7 @@ export function EpisodePanel({ subscriptions, episodes, total, loading, hasMore,
   const showNames = useMemo(() => new Map(subscriptions.map((subscription) => [subscription.source_id, subscription.show_name])), [subscriptions])
   const sourceOptions = useMemo(() => [...showNames.entries()].sort((left, right) => left[1].localeCompare(right[1])), [showNames])
   const asrUsable = transcriptionAvailable && (asrStatus ? asrStatus.ready : true)
+  const hasPublisherTranscript = episodes.some((episode) => Boolean(episode.transcript_url))
   const jobsByEpisode = useMemo(() => {
     const map = new Map<string, NipTranscriptionJob>()
     for (const job of jobs) {
@@ -153,12 +154,17 @@ export function EpisodePanel({ subscriptions, episodes, total, loading, hasMore,
         <label className="episode-control episode-control-title"><span>Title contains</span><input type="search" aria-label="Filter episodes by title" placeholder="e.g. rates, inflation…" value={filters.title} onChange={(event) => onFiltersChange({ ...filters, title: event.target.value })} /></label>
       </div>
       <p className="episode-count" role="status">Showing {episodes.length.toLocaleString()} of {formatEpisodeCount(total)}{filters.sourceId === 'all' ? '' : ` · ${showNames.get(filters.sourceId) ?? filters.sourceId}`}{filters.title.trim() ? ` · title contains “${filters.title.trim()}”` : ''}</p>
-      {asrStatus && !asrStatus.ready ? <AsrReadiness status={asrStatus} preparing={asrBusy} message={asrMessage} onPrepare={onPrepareWorkspace ?? (() => {})} onRefresh={onRefreshAsr ?? (() => {})} /> : !transcriptionAvailable ? <p className="episode-empty episode-empty-error" role="alert"><strong>Local ASR is not configured.</strong> Set <code>NIP_COMFYUI_URL</code> to a loopback ComfyUI server running the Qwen3-ASR workflow and restart the app. NIP will not upload audio or substitute a remote ASR service.</p> : null}
+      {asrStatus && !asrStatus.ready ? <AsrReadiness status={asrStatus} preparing={asrBusy} message={asrMessage} onPrepare={onPrepareWorkspace ?? (() => {})} onRefresh={onRefreshAsr ?? (() => {})} /> : !transcriptionAvailable ? <p className="episode-empty episode-empty-error" role="alert"><strong>Local ASR is unavailable.</strong> Start ComfyUI Desktop (or set <code>NIP_COMFYUI_URL</code> to a loopback server) so NIP can reach the Qwen3-ASR workflow. NIP will not upload audio or substitute a remote ASR service.</p> : null}
+      {!asrUsable && hasPublisherTranscript ? <p className="episode-empty" role="status">Local ASR is blocked, but episodes that advertise a publisher transcript can still be transcribed without it: NIP fetches the feed text directly and never uploads audio.</p> : null}
       {loading && !episodes.length ? <p className="episode-empty"><RefreshCw size={14} className="animate-spin" /> Loading episodes…</p> : episodes.length ? <ul className="episode-list">{episodes.map((episode, index) => {
         const key = `${episode.source_id}:${episode.source_native_id ?? episode.canonical_url ?? episode.title ?? index}`
         const job = jobsByEpisode.get(key) ?? null
         const canTranscribe = !jobIsActive(job) && (episode.state === 'awaiting_local_transcription' || episode.state === 'failed' || episode.state === 'transcription_unavailable')
-        return <li className="episode-row" key={key}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><strong className="block truncate text-[11px] text-main">{episode.title ?? episode.source_native_id ?? 'Untitled episode'}</strong><p className="mt-1 text-[10px] text-muted">{showNames.get(episode.source_id) ?? episode.source_id} · {episode.source_native_id ?? 'No episode GUID'} · published {formatDate(episode.published_at)}</p></div><span className="narrative-chip">{episode.state.replaceAll('_', ' ')}</span></div>{canTranscribe && asrUsable ? <Button className="mt-2" variant="outline" size="sm" disabled={busyKey === key || !episode.enclosure_url} onClick={() => void onTranscribe(episode)}><Sparkles size={12} /> {busyKey === key ? 'Starting…' : episode.state === 'failed' || episode.state === 'transcription_unavailable' ? 'Retry local transcription' : 'Transcribe locally'}</Button> : episode.state === 'transcribed' ? <div className="mt-2 flex flex-wrap items-center gap-2"><span className="text-[10px] text-emerald-700">Transcript committed.</span>{onOpenTranscript ? <Button variant="outline" size="sm" onClick={() => onOpenTranscript(episode)}><FileText size={12} /> Open retained transcript</Button> : null}</div> : canTranscribe && !episode.enclosure_url ? <p className="mt-2 text-[10px] text-amber-700">No audio enclosure is available for this episode.</p> : canTranscribe ? null : <p className="mt-2 text-[10px] text-amber-700">Local transcription is unavailable for this episode. NIP will not upload audio or substitute a remote ASR service.</p>}
+        // A publisher transcript is fetched as text and needs no local ASR, so
+        // it must stay available while the ComfyUI/Qwen path is blocked.
+        const hasPublisherTranscript = Boolean(episode.transcript_url)
+        const canStart = canTranscribe && (asrUsable || hasPublisherTranscript)
+        return <li className="episode-row" key={key}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><strong className="block truncate text-[11px] text-main">{episode.title ?? episode.source_native_id ?? 'Untitled episode'}</strong><p className="mt-1 text-[10px] text-muted">{showNames.get(episode.source_id) ?? episode.source_id} · {episode.source_native_id ?? 'No episode GUID'} · published {formatDate(episode.published_at)}</p></div><span className="narrative-chip">{episode.state.replaceAll('_', ' ')}</span></div>{canStart ? <Button className="mt-2" variant="outline" size="sm" disabled={busyKey === key || (!episode.enclosure_url && !hasPublisherTranscript)} onClick={() => void onTranscribe(episode)}><Sparkles size={12} /> {busyKey === key ? 'Starting…' : hasPublisherTranscript ? (episode.state === 'failed' || episode.state === 'transcription_unavailable' ? 'Retry with publisher transcript' : 'Use publisher transcript') : episode.state === 'failed' || episode.state === 'transcription_unavailable' ? 'Retry local transcription' : 'Transcribe locally'}</Button> : episode.state === 'transcribed' ? <div className="mt-2 flex flex-wrap items-center gap-2"><span className="text-[10px] text-emerald-700">Transcript committed.</span>{onOpenTranscript ? <Button variant="outline" size="sm" onClick={() => onOpenTranscript(episode)}><FileText size={12} /> Open retained transcript</Button> : null}</div> : canTranscribe && !episode.enclosure_url ? <p className="mt-2 text-[10px] text-amber-700">No audio enclosure is available for this episode.</p> : canTranscribe ? null : <p className="mt-2 text-[10px] text-amber-700">Local transcription is unavailable for this episode. NIP will not upload audio or substitute a remote ASR service.</p>}
         {job ? <JobProgress job={job} mediaBase={mediaBase} onOpenEvent={onOpenJobEvent} /> : null}
       </li>
       })}</ul> : total ? <p className="episode-empty">No episodes match the current filters. Clear the title filter or choose another source.</p> : <p className="episode-empty">No RSS episodes discovered yet. Run a due-feed refresh after the initial sync.</p>}
@@ -201,6 +207,33 @@ function EventRow({ event, onOpen }: { event: NipEvent; onOpen: () => void }) {
       <div className="narrative-event-icon"><FileText size={15} /></div>
       <div className="min-w-0 flex-1 text-left"><div className="flex items-center gap-2"><strong className="truncate text-xs text-main">{event.source_native_id || event.event_id}</strong><span className="narrative-chip">{event.source_id}</span></div><p className="mt-1 line-clamp-2 text-[11px] text-muted">{preview}</p><p className="mt-1 text-[10px] text-muted">Published {formatDate(event.times.published_at)} · captured {formatDate(event.times.captured_at)}</p></div><ChevronRight size={15} className="shrink-0 text-muted" />
     </button>
+  )
+}
+
+export function TranscriptDialog({ event, busy, status, extractionAvailable, onClose, onExtract, onOpenInList }: { event: NipEvent; busy: boolean; status: string | null; extractionAvailable: boolean; onClose: () => void; onExtract: () => void; onOpenInList: () => void }) {
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [onClose])
+  return (
+    <div className="narrative-dialog-backdrop" data-testid="transcript-dialog" onMouseDown={onClose}>
+      <div className="narrative-dialog" role="dialog" aria-modal="true" aria-label="Retained transcript" onMouseDown={(event) => event.stopPropagation()}>
+        <header className="narrative-dialog-head">
+          <div className="min-w-0"><p className="eyebrow">Retained transcript</p><h2 className="mt-1 truncate text-sm font-semibold text-main">{event.source_native_id || event.event_id}</h2><p className="mt-1 text-[10px] text-muted">{event.source_id} · published {formatDate(event.times.published_at)} · captured {formatDate(event.times.captured_at)}</p></div>
+          <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
+        </header>
+        <p className="narrative-dialog-text">{event.content_text || 'No retained content text.'}</p>
+        <footer className="narrative-dialog-foot">
+          <code className="text-[10px] text-muted">content hash {event.content_hash.slice(0, 18)}…</code>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={onOpenInList}>Show in event list</Button>
+            {extractionAvailable ? <Button size="sm" disabled={busy} onClick={onExtract}>{busy ? 'Extracting…' : 'Extract claims'}</Button> : null}
+          </div>
+        </footer>
+        {status ? <p className="narrative-dialog-status" role="status">{status}</p> : null}
+      </div>
+    </div>
   )
 }
 
@@ -278,6 +311,9 @@ export function NarrativeWorkspace({ view = 'overview' }: { view?: NarrativeView
   const [clusterMessage, setClusterMessage] = useState<string | null>(null)
   const [rebuildingClusters, setRebuildingClusters] = useState(false)
   const [selectedEvent, setSelectedEvent] = useState<NipEvent | null>(null)
+  const [transcriptEvent, setTranscriptEvent] = useState<NipEvent | null>(null)
+  const [derivedMessage, setDerivedMessage] = useState<string | null>(null)
+  const [derivedBusy, setDerivedBusy] = useState(false)
   const [selectedClaimId, setSelectedClaimId] = useState<string>()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -356,7 +392,7 @@ export function NarrativeWorkspace({ view = 'overview' }: { view?: NarrativeView
   }
 
   const loadJobs = useCallback(async () => {
-    try { setJobs(await narrativeApi.listPodcastTranscriptionJobs(undefined, 30)) } catch { /* the next poll retries */ }
+    try { setJobs(await narrativeApi.listPodcastTranscriptionJobs(undefined, 30)); jobsLoaded.current = true } catch { /* the next poll retries */ }
   }, [])
 
   const loadAsrStatus = useCallback(async () => {
@@ -383,21 +419,51 @@ export function NarrativeWorkspace({ view = 'overview' }: { view?: NarrativeView
     return () => window.clearInterval(handle)
   }, [activeJobCount, loadJobs])
 
-  const jobStates = useRef(new Map<string, string>())
+  const settledJobs = useRef<Set<string> | null>(null)
+  const jobsLoaded = useRef(false)
+
+  /**
+   * A new transcript changes every derived projection. Rebuild them in the
+   * order the service requires — clusters, then the graph that cites them —
+   * and reload only after both have committed, so Radar, Timeline, Graph and
+   * the cluster panel never read the previous run.
+   */
+  const refreshDerived = useCallback(async () => {
+    setDerivedBusy(true)
+    setDerivedMessage('New transcript committed. Rebuilding narrative clusters, radar signals, and the graph…')
+    try {
+      const nextClusters = await narrativeApi.rebuildNarrativeClusters()
+      setClusters(nextClusters)
+      const nextGraph = await narrativeApi.rebuildNarrativeGraph()
+      setGraph(nextGraph)
+      await load()
+      await loadEpisodePage(episodeFilters, 0, false)
+      await loadMedia()
+      setDerivedMessage(`Rebuilt ${nextClusters.length} narrative cluster${nextClusters.length === 1 ? '' : 's'} and the graph. Radar, Timeline, Graph and clusters now read the fresh projection.`)
+    } catch (reason) {
+      setDerivedMessage(reason instanceof Error ? reason.message : 'The narrative clusters and graph could not be rebuilt from the new transcript.')
+      await load()
+    } finally { setDerivedBusy(false) }
+  }, [load, loadEpisodePage, episodeFilters, loadMedia])
+
   useEffect(() => {
-    let completed = false
-    for (const job of jobs) {
-      const previous = jobStates.current.get(job.job_id)
-      jobStates.current.set(job.job_id, job.state)
-      if (previous && previous !== job.state && (job.state === 'transcribed' || job.state === 'failed')) completed = true
+    const settled = jobs.filter((job) => job.state === 'transcribed' || job.state === 'failed')
+    if (settledJobs.current === null) {
+      // Seed from the first authoritative list: jobs that finished before this
+      // view opened are history, not work this session should re-derive.
+      if (!jobsLoaded.current) return
+      settledJobs.current = new Set(settled.map((job) => `${job.job_id}:${job.state}`))
+      return
     }
-    if (completed) {
-      void load()
-      void loadEpisodePage(episodeFilters, 0, false)
-      void loadMedia()
-      void narrativeApi.rebuildNarrativeGraph().catch(() => null)
-    }
-  }, [jobs, load, loadEpisodePage, episodeFilters, loadMedia])
+    const fresh = settled.filter((job) => !settledJobs.current?.has(`${job.job_id}:${job.state}`))
+    if (!fresh.length) return
+    for (const job of fresh) settledJobs.current.add(`${job.job_id}:${job.state}`)
+    if (fresh.some((job) => job.state === 'transcribed')) { void refreshDerived(); return }
+    // A failed run still changes episode state and the cached audio list.
+    void load()
+    void loadEpisodePage(episodeFilters, 0, false)
+    void loadMedia()
+  }, [jobs, refreshDerived, load, loadEpisodePage, episodeFilters, loadMedia])
 
   const cancelTranscription = async (job: NipTranscriptionJob) => {
     try {
@@ -420,7 +486,10 @@ export function NarrativeWorkspace({ view = 'overview' }: { view?: NarrativeView
       setActiveView('overview')
       setTranscribeError(false)
       setTranscribeMessage(null)
-      setSelectedEvent(lookup.event)
+      // Show the transcript in a card over the page. Scrolling the event list
+      // to the newest row loses the text again as soon as infinite scroll
+      // appends the next page of episodes.
+      setTranscriptEvent(lookup.event)
     } catch (reason) {
       setTranscribeError(true)
       setTranscribeMessage(reason instanceof Error ? reason.message : 'The retained transcript could not be opened.')
@@ -464,17 +533,29 @@ export function NarrativeWorkspace({ view = 'overview' }: { view?: NarrativeView
     try {
       const next = await narrativeApi.rebuildNarrativeClusters()
       setClusters(next)
-      setClusterMessage(`${next.length} narrative cluster${next.length === 1 ? '' : 's'} rebuilt from canonical events.`)
+      // The graph cites clusters, so it is stale the moment they change.
+      const nextGraph = await narrativeApi.rebuildNarrativeGraph()
+      setGraph(nextGraph)
+      setClusterMessage(`${next.length} narrative cluster${next.length === 1 ? '' : 's'} rebuilt from canonical events; the graph and radar now read them.`)
       await load()
     } catch (reason) {
       setClusterMessage(reason instanceof Error ? reason.message : 'The cluster projection could not be rebuilt.')
     } finally { setRebuildingClusters(false) }
   }
 
+  const extractClaims = async (event: NipEvent) => {
+    setExtracting(true); setProviderMessage(null)
+    try {
+      const nextClaims = await narrativeApi.extractClaimsFromEvent(event.event_id)
+      setProviderMessage(`${nextClaims.length} claim${nextClaims.length === 1 ? '' : 's'} committed with source evidence.`)
+      try { setGraph(await narrativeApi.rebuildNarrativeGraph()) } catch { /* the claims are already committed */ }
+      await load()
+    } catch (reason) { setProviderMessage(reason instanceof Error ? reason.message : 'Claim extraction is unavailable.') } finally { setExtracting(false) }
+  }
+
   const extractSelectedEvent = async () => {
     if (!selectedEvent) return
-    setExtracting(true); setProviderMessage(null)
-    try { const nextClaims = await narrativeApi.extractClaimsFromEvent(selectedEvent.event_id); setProviderMessage(`${nextClaims.length} claim${nextClaims.length === 1 ? '' : 's'} committed with source evidence.`); await load() } catch (reason) { setProviderMessage(reason instanceof Error ? reason.message : 'Claim extraction is unavailable.') } finally { setExtracting(false) }
+    await extractClaims(selectedEvent)
   }
   const submitSearch = (event: FormEvent) => { event.preventDefault(); setActiveQuery(query.trim()) }
   const selectedClaim = claims.find((claim) => claim.claim_id === selectedClaimId)
@@ -487,8 +568,9 @@ export function NarrativeWorkspace({ view = 'overview' }: { view?: NarrativeView
     <div className="narrative-content">
       <aside className="narrative-sidebar"><StatusCard health={health} subscriptions={subscriptions} loading={loading} /><AddSourceForm onSubmitted={reloadAll} /><OperationalMonitor resource={resourceStatus} extraction={extractionStatus} /><ProviderStatusPanel status={providerStatus} busy={providerBusy} onGrant={grantProviderConsent} onRevoke={revokeProviderConsent} />{providerMessage ? <p className="narrative-sidebar-note" role="status">{providerMessage}</p> : null}<SourceRegistry sources={sources} onChanged={reloadAll} /><PollingStatus subscriptions={subscriptions} onRefresh={refreshDue} refreshing={refreshing} /><PanelCard title="Workspace" bodyClassName="narrative-card-body" subtitle="Evidence before interpretation" collapsible={false}><nav className="narrative-nav" aria-label="Narrative workspace"><button type="button" className={activeView === 'overview' ? 'is-active' : ''} onClick={() => setActiveView('overview')}><FileText size={14} /> Event review <span>{events.length}</span></button><button type="button" className={activeView === 'radar' ? 'is-active' : ''} onClick={() => setActiveView('radar')}><BarChart3 size={14} /> Radar <span>{signalSnapshot?.signals.length ?? 0}</span></button><button type="button" className={activeView === 'graph' ? 'is-active' : ''} onClick={() => setActiveView('graph')}><Network size={14} /> Graph <span>{resourceStatus?.graph_edge_count ?? 0}</span></button><button type="button" className={activeView === 'themes' ? 'is-active' : ''} onClick={() => setActiveView('themes')}><ShieldCheck size={14} /> ETF Themes <span>{mappings.length}</span></button><button type="button" className={activeView === 'editorial' ? 'is-active' : ''} onClick={() => setActiveView('editorial')}><Sparkles size={14} /> Editorial <span>{editorialCandidates.length}</span></button><button type="button" className={activeView === 'claims' ? 'is-active' : ''} onClick={() => setActiveView('claims')}><ShieldCheck size={14} /> Claim Explorer <span>{claims.length}</span></button></nav></PanelCard><div className="narrative-sidebar-note"><ShieldCheck size={14} /><span>Raw events remain immutable. Derived claims always link back to evidence.</span></div></aside>
       <main className="narrative-main">
+        {derivedMessage ? <div className={`narrative-notice ${derivedBusy ? 'narrative-notice-info' : 'narrative-notice-success'}`} role="status" data-testid="derived-refresh"><RefreshCw size={15} className={derivedBusy ? 'animate-spin' : ''} /><div className="min-w-0 flex-1"><strong>{derivedBusy ? 'Updating derived views' : 'Derived views updated'}</strong><p>{derivedMessage}</p></div>{derivedBusy ? null : <Button variant="ghost" size="sm" onClick={() => setDerivedMessage(null)}>Dismiss</Button>}</div> : null}
         <div className="narrative-tabs" role="tablist" aria-label="Narrative views"><button type="button" role="tab" aria-selected={activeView === 'overview'} className={activeView === 'overview' ? 'is-active' : ''} onClick={() => setActiveView('overview')}>Event review</button><button type="button" role="tab" aria-selected={activeView === 'radar'} className={activeView === 'radar' ? 'is-active' : ''} onClick={() => setActiveView('radar')}>Radar</button><button type="button" role="tab" aria-selected={activeView === 'graph'} className={activeView === 'graph' ? 'is-active' : ''} onClick={() => setActiveView('graph')}>Graph</button><button type="button" role="tab" aria-selected={activeView === 'timeline'} className={activeView === 'timeline' ? 'is-active' : ''} onClick={() => setActiveView('timeline')}>Timeline</button><button type="button" role="tab" aria-selected={activeView === 'themes'} onClick={() => setActiveView('themes')}>ETF Themes</button><button type="button" role="tab" aria-selected={activeView === 'editorial'} onClick={() => setActiveView('editorial')}>Editorial</button><button type="button" role="tab" aria-selected={activeView === 'claims'} className={activeView === 'claims' ? 'is-active' : ''} onClick={() => setActiveView('claims')}>Claim Explorer</button></div>
-        {activeView === 'graph' ? <PanelCard title="Narrative Graph" subtitle={`Versioned derived projection · ${graph?.nodes.length ?? 0} nodes · ${graph?.edges.length ?? 0} evidence edges · ${claims.length} claims · ${clusters.length} clusters`} bodyClassName="narrative-card-body" collapsible={false} actions={<><Button variant="outline" size="sm" disabled={rebuildingClusters} onClick={() => void rebuildClusters()}><Sparkles size={13} /> {rebuildingClusters ? 'Rebuilding clusters…' : 'Rebuild clusters'}</Button><Button variant="outline" size="sm" onClick={async () => { const next = await narrativeApi.rebuildNarrativeGraph(); setGraph(next); await load() }}><Network size={13} /> Rebuild graph</Button></>}><GraphExplorer graph={graph} events={events} onOpenEvent={(eventId) => { const event = events.find((candidate) => candidate.event_id === eventId); if (event) { setSelectedEvent(event); setActiveView('overview') } }} onBackToEvents={() => setActiveView('overview')} />{clusterMessage ? <p className="mt-2 text-[10px] text-muted" role="status">{clusterMessage}</p> : null}</PanelCard> : activeView === 'themes' ? <PanelCard title="ETF Themes" bodyClassName="narrative-card-body" subtitle="Manual, dated research mappings · not investment recommendations" collapsible={false}><div className="space-y-3"><EtfMappingForm events={events} onSaved={load} />{mappings.length ? mappings.map((mapping) => <article className="evidence-card" key={mapping.mapping_id}><div className="flex items-center justify-between gap-2"><strong className="text-sm text-main">{mapping.ticker}</strong><span className="narrative-chip">v{mapping.version} · {mapping.review_status}</span></div><p className="mt-1 text-xs text-main">{mapping.rationale}</p><p className="mt-2 text-[10px] text-muted">Narrative {mapping.narrative_id} · effective {formatDate(mapping.effective_from)} · known {formatDate(mapping.known_at)}</p><div className="mt-2 flex flex-wrap gap-1"><span className="narrative-chip">Ticker: {mapping.ticker_status}</span><span className="narrative-chip">Market data: {mapping.market_data_coverage}</span><span className="narrative-chip">Validity: {mapping.mapping_validity}</span></div><p className="mt-2 text-[10px] text-amber-700">Backtest unavailable: required point-in-time price/mapping data is incomplete.</p></article>) : <div className="narrative-empty"><ShieldCheck size={22} /><p>No manual ETF mappings yet.</p><span>Mappings require a dated rationale and source-event evidence.</span></div>}</div></PanelCard> : activeView === 'editorial' ? <PanelCard title="Editorial Planning" bodyClassName="narrative-card-body" subtitle="Ranked topic candidates for human review · no finished content or CTR prediction" collapsible={false}><div className="space-y-3">{editorialCandidates.length ? editorialCandidates.map((candidate) => <article className="evidence-card" key={candidate.candidate_id}><div className="flex items-center justify-between gap-2"><strong className="text-sm text-main">#{candidate.rank} · {candidate.title_angle}</strong><span className="narrative-chip">{candidate.review_status}</span></div><p className="mt-2 text-[10px] text-muted">Run {candidate.derivation_run_id} · {candidate.evidence_event_ids.length} evidence events</p><div className="mt-2 flex flex-wrap gap-1">{Object.entries(candidate.component_values).map(([key, value]) => <span className="narrative-chip" key={key}>{key}: {value}</span>)}</div>{candidate.review_reason ? <p className="mt-2 text-xs text-main">Review: {candidate.review_reason} · {candidate.reviewer}</p> : <p className="mt-2 text-[10px] text-amber-700">Awaiting human review. Novelty and CTR components are not available.</p>}{candidate.review_status === 'unreviewed' ? <div className="mt-3 flex gap-2"><Button size="sm" variant="outline" onClick={async () => { const reason = window.prompt('Review reason', 'Needs additional source review.') || 'Needs additional source review.'; await narrativeApi.reviewEditorialCandidate({ candidateId: candidate.candidate_id, status: 'deferred', reason, reviewer: 'local-editor', reviewedAt: new Date().toISOString() }); await load() }}>Defer for review</Button><Button size="sm" onClick={async () => { await narrativeApi.reviewEditorialCandidate({ candidateId: candidate.candidate_id, status: 'relevant', reason: 'Relevant for editorial review.', reviewer: 'local-editor', reviewedAt: new Date().toISOString() }); await load() }}>Mark relevant</Button></div> : null}</article>) : <div className="narrative-empty"><Sparkles size={22} /><p>No editorial candidates yet.</p><span>Topic candidates must retain narrative, claim, and event evidence.</span></div>}</div></PanelCard> : activeView === 'claims' ? <PanelCard title="Claim Explorer" subtitle="Every interpretation stays connected to the source event" collapsible={false} bodyClassName="overflow-auto"><ClaimExplorer claims={claims} events={evidenceEvents} selectedClaimId={selectedClaimId} onSelectClaim={(claim) => setSelectedClaimId(claim.claim_id)} onBack={() => setActiveView('overview')} /></PanelCard> : activeView === 'radar' || activeView === 'timeline' ? <PanelCard title={activeView === 'radar' ? 'Narrative Radar' : 'Narrative Timeline'} subtitle={`Descriptive ${activeView} · ${signalSnapshot?.coverage ?? 'unknown'} source coverage · ${signalSnapshot?.formula_version ?? 'signal unavailable'}`} collapsible={false} bodyClassName="narrative-card-body"><SignalExplorer signals={signalSnapshot?.signals ?? []} mode={activeView} onOpenEvent={(eventId) => { const event = events.find((candidate) => candidate.event_id === eventId); if (event) { setSelectedEvent(event); setActiveView('overview') } }} /></PanelCard> : <div className="space-y-4"><EpisodePanel subscriptions={subscriptions} episodes={episodes} total={episodeTotal} loading={episodesLoading} hasMore={episodeNextOffset !== null} filters={episodeFilters} onFiltersChange={setEpisodeFilters} onLoadMore={loadMoreEpisodes} busyKey={transcribingKey} message={transcribeMessage} messageIsError={transcribeError} onTranscribe={transcribeEpisode} transcriptionAvailable={capabilities?.features.local_audio_transcription ?? false} jobs={jobs} asrStatus={asrStatus} mediaBase={mediaBase} asrBusy={asrPreparing} asrMessage={asrMessage} onPrepareWorkspace={() => void prepareComfyWorkspace()} onRefreshAsr={() => void loadAsrStatus()} onOpenTranscript={(episode) => void openRetainedTranscript({ sourceId: episode.source_id, sourceNativeId: episode.source_native_id, canonicalUrl: episode.canonical_url })} onOpenJobEvent={(job) => void openRetainedTranscript({ sourceId: job.source_id, sourceNativeId: job.source_native_id, canonicalUrl: job.canonical_url })} />
+        {activeView === 'graph' ? <PanelCard title="Narrative Graph" subtitle={`Versioned derived projection · ${graph?.nodes.length ?? 0} nodes · ${graph?.edges.length ?? 0} evidence edges · ${claims.length} claims · ${clusters.length} clusters`} bodyClassName="narrative-card-body" collapsible={false} actions={<><Button variant="outline" size="sm" disabled={rebuildingClusters} onClick={() => void rebuildClusters()}><Sparkles size={13} /> {rebuildingClusters ? 'Rebuilding clusters…' : 'Rebuild clusters'}</Button><Button variant="outline" size="sm" onClick={async () => { const next = await narrativeApi.rebuildNarrativeGraph(); setGraph(next); await load() }}><Network size={13} /> Rebuild graph</Button></>}><GraphExplorer graph={graph} events={events} onOpenEvent={(eventId) => { const event = events.find((candidate) => candidate.event_id === eventId); if (event) { setSelectedEvent(event); setActiveView('overview') } }} onBackToEvents={() => setActiveView('overview')} />{clusterMessage ? <p className="mt-2 text-[10px] text-muted" role="status">{clusterMessage}</p> : null}</PanelCard> : activeView === 'themes' ? <PanelCard title="ETF Themes" bodyClassName="narrative-card-body" subtitle="Manual, dated research mappings · not investment recommendations" collapsible={false}><div className="space-y-3"><EtfMappingForm events={events} onSaved={load} />{mappings.length ? mappings.map((mapping) => <article className="evidence-card" key={mapping.mapping_id}><div className="flex items-center justify-between gap-2"><strong className="text-sm text-main">{mapping.ticker}</strong><span className="narrative-chip">v{mapping.version} · {mapping.review_status}</span></div><p className="mt-1 text-xs text-main">{mapping.rationale}</p><p className="mt-2 text-[10px] text-muted">Narrative {mapping.narrative_id} · effective {formatDate(mapping.effective_from)} · known {formatDate(mapping.known_at)}</p><div className="mt-2 flex flex-wrap gap-1"><span className="narrative-chip">Ticker: {mapping.ticker_status}</span><span className="narrative-chip">Market data: {mapping.market_data_coverage}</span><span className="narrative-chip">Validity: {mapping.mapping_validity}</span></div><p className="mt-2 text-[10px] text-amber-700">Backtest unavailable: required point-in-time price/mapping data is incomplete.</p></article>) : <div className="narrative-empty"><ShieldCheck size={22} /><p>No manual ETF mappings yet.</p><span>Mappings require a dated rationale and source-event evidence.</span></div>}</div></PanelCard> : activeView === 'editorial' ? <PanelCard title="Editorial Planning" bodyClassName="narrative-card-body" subtitle="Ranked topic candidates for human review · no finished content or CTR prediction" collapsible={false}><div className="space-y-3">{editorialCandidates.length ? editorialCandidates.map((candidate) => <article className="evidence-card" key={candidate.candidate_id}><div className="flex items-center justify-between gap-2"><strong className="text-sm text-main">#{candidate.rank} · {candidate.title_angle}</strong><span className="narrative-chip">{candidate.review_status}</span></div><p className="mt-2 text-[10px] text-muted">Run {candidate.derivation_run_id} · {candidate.evidence_event_ids.length} evidence events</p><div className="mt-2 flex flex-wrap gap-1">{Object.entries(candidate.component_values).map(([key, value]) => <span className="narrative-chip" key={key}>{key}: {value}</span>)}</div>{candidate.review_reason ? <p className="mt-2 text-xs text-main">Review: {candidate.review_reason} · {candidate.reviewer}</p> : <p className="mt-2 text-[10px] text-amber-700">Awaiting human review. Novelty and CTR components are not available.</p>}{candidate.review_status === 'unreviewed' ? <div className="mt-3 flex gap-2"><Button size="sm" variant="outline" onClick={async () => { const reason = window.prompt('Review reason', 'Needs additional source review.') || 'Needs additional source review.'; await narrativeApi.reviewEditorialCandidate({ candidateId: candidate.candidate_id, status: 'deferred', reason, reviewer: 'local-editor', reviewedAt: new Date().toISOString() }); await load() }}>Defer for review</Button><Button size="sm" onClick={async () => { await narrativeApi.reviewEditorialCandidate({ candidateId: candidate.candidate_id, status: 'relevant', reason: 'Relevant for editorial review.', reviewer: 'local-editor', reviewedAt: new Date().toISOString() }); await load() }}>Mark relevant</Button></div> : null}</article>) : <div className="narrative-empty"><Sparkles size={22} /><p>No editorial candidates yet.</p><span>Topic candidates must retain narrative, claim, and event evidence.</span></div>}</div></PanelCard> : activeView === 'claims' ? <PanelCard title="Claim Explorer" subtitle="Every interpretation stays connected to the source event" collapsible={false} bodyClassName="overflow-auto"><ClaimExplorer claims={claims} events={evidenceEvents} selectedClaimId={selectedClaimId} onSelectClaim={(claim) => setSelectedClaimId(claim.claim_id)} onBack={() => setActiveView('overview')} /></PanelCard> : activeView === 'radar' || activeView === 'timeline' ? <PanelCard title={activeView === 'radar' ? 'Narrative Radar' : 'Narrative Timeline'} subtitle={`Descriptive ${activeView} · ${signalSnapshot?.coverage ?? 'unknown'} source coverage · ${signalSnapshot?.formula_version ?? 'signal unavailable'}`} collapsible={false} bodyClassName="narrative-card-body" actions={activeView === 'radar' ? <Button variant="outline" size="sm" disabled={rebuildingClusters} onClick={() => void rebuildClusters()}><Sparkles size={13} /> {rebuildingClusters ? 'Rebuilding clusters…' : 'Rebuild clusters'}</Button> : undefined}><SignalExplorer signals={signalSnapshot?.signals ?? []} mode={activeView} onOpenEvent={(eventId) => { const event = events.find((candidate) => candidate.event_id === eventId); if (event) { setSelectedEvent(event); setActiveView('overview') } }} />{activeView === 'radar' && clusterMessage ? <p className="mt-2 text-[10px] text-muted" role="status">{clusterMessage}</p> : null}</PanelCard> : <div className="space-y-4"><EpisodePanel subscriptions={subscriptions} episodes={episodes} total={episodeTotal} loading={episodesLoading} hasMore={episodeNextOffset !== null} filters={episodeFilters} onFiltersChange={setEpisodeFilters} onLoadMore={loadMoreEpisodes} busyKey={transcribingKey} message={transcribeMessage} messageIsError={transcribeError} onTranscribe={transcribeEpisode} transcriptionAvailable={capabilities?.features.local_audio_transcription ?? false} jobs={jobs} asrStatus={asrStatus} mediaBase={mediaBase} asrBusy={asrPreparing} asrMessage={asrMessage} onPrepareWorkspace={() => void prepareComfyWorkspace()} onRefreshAsr={() => void loadAsrStatus()} onOpenTranscript={(episode) => void openRetainedTranscript({ sourceId: episode.source_id, sourceNativeId: episode.source_native_id, canonicalUrl: episode.canonical_url })} onOpenJobEvent={(job) => void openRetainedTranscript({ sourceId: job.source_id, sourceNativeId: job.source_native_id, canonicalUrl: job.canonical_url })} />
           <PanelCard title="Transcription activity" bodyClassName="narrative-card-body" subtitle="Every local run, its cached audio, warnings and the exact step that failed" collapsible={false} actions={<Button variant="outline" size="sm" onClick={() => void loadJobs()}><RefreshCw size={12} /> Refresh</Button>}>
             <TranscriptionActivity jobs={jobs} mediaBase={mediaBase} onCancel={(job) => void cancelTranscription(job)} onOpenEvent={(job) => void openRetainedTranscript({ sourceId: job.source_id, sourceNativeId: job.source_native_id, canonicalUrl: job.canonical_url })} />
           </PanelCard>
@@ -497,5 +579,6 @@ export function NarrativeWorkspace({ view = 'overview' }: { view?: NarrativeView
           </PanelCard><PanelCard title="Search retained events" bodyClassName="narrative-card-body" subtitle={semanticMode ? 'Qdrant hybrid semantic + lexical retrieval · model/provider must be configured' : 'Authoritative DuckDB text and metadata search'} collapsible={false}><form className="narrative-search" onSubmit={submitSearch}><Search size={15} className="text-muted" /><input aria-label="Search retained events" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search transcript text, source IDs, or event content…" /><Button type="submit" size="sm">Search</Button></form><label className="mt-3 flex items-center gap-2 text-[11px] text-muted"><input type="checkbox" checked={semanticMode} onChange={(event) => setSemanticMode(event.target.checked)} /> Use optional semantic index <span className="narrative-chip">BGE-M3 / RRF</span></label>{activeQuery ? <p className="mt-2 text-[10px] text-muted">Showing {semanticMode ? 'semantic' : 'text'} results for “{activeQuery}”</p> : null}</PanelCard>{clusters.length ? <PanelCard title="Narrative clusters" bodyClassName="narrative-card-body" subtitle="Versioned derived projection · not an investment score" collapsible={false}><div className="grid gap-2 sm:grid-cols-2">{clusters.map((cluster) => <div className="evidence-card" key={`${cluster.derivation_run_id}-${cluster.cluster_id}`}><div className="flex items-center justify-between gap-2"><strong className="text-xs text-main">{cluster.label}</strong><span className="narrative-chip">{cluster.member_count} events</span></div><p className="mt-1 text-[10px] text-muted">{cluster.algorithm_version} · {cluster.derivation_run_id}</p></div>)}</div></PanelCard> : null}<PanelCard title="Retained events" subtitle={`${events.length} event${events.length === 1 ? '' : 's'} in the current page · origins for transcripts and graph edges`} collapsible={false} bodyClassName="overflow-auto"><div className="narrative-event-list">{loading ? <div className="narrative-empty"><RefreshCw size={20} className="animate-spin" /><p>Loading the local event ledger…</p></div> : events.length ? events.map((event) => <EventRow key={event.event_id} event={event} onOpen={() => setSelectedEvent(event)} />) : <div className="narrative-empty"><WifiOff size={22} /><p>No retained events match this view.</p><span>Import a permitted local document or subscribe to a reviewed feed before searching.</span></div>}</div></PanelCard>{selectedEvent ? <PanelCard title="Event detail" subtitle="Immutable source observation" collapsible={false} actions={<><Button variant="outline" size="sm" onClick={() => void extractSelectedEvent()} disabled={extracting || providerStatus?.extraction_state !== 'available'}>{extracting ? 'Extracting…' : 'Extract claims'}</Button><Button variant="ghost" size="sm" onClick={() => setSelectedEvent(null)}>Close</Button></>}><div className="event-detail">{providerStatus?.remote && providerStatus.consent !== 'granted' ? <div className="narrative-notice narrative-notice-warning" role="status" data-testid="event-consent"><ShieldCheck size={16} /><div className="min-w-0 flex-1"><strong>Remote extraction is blocked</strong><p>{providerStatus.disclosure ?? 'Transcript text would leave this device.'}</p><Button className="mt-2" size="sm" disabled={providerBusy} onClick={() => void grantProviderConsent()} data-testid="event-consent-grant"><ShieldCheck size={13} /> {providerBusy ? 'Recording…' : 'Allow remote extraction'}</Button></div></div> : null}<div className="event-detail-banner"><CheckCircle2 size={16} /><span>Source-linked record · content hash <code>{selectedEvent.content_hash.slice(0, 18)}…</code></span></div><h2 className="mt-3 text-base font-semibold text-main">{selectedEvent.source_native_id || selectedEvent.event_id}</h2><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-main">{selectedEvent.content_text || 'No retained content text.'}</p><dl className="narrative-provenance mt-4"><div><dt>Source</dt><dd>{selectedEvent.source_id}</dd></div><div><dt>Published</dt><dd>{formatDate(selectedEvent.times.published_at)}</dd></div><div><dt>Captured</dt><dd>{formatDate(selectedEvent.times.captured_at)}</dd></div><div><dt>Ingested</dt><dd>{formatDate(selectedEvent.times.ingested_at)}</dd></div></dl></div></PanelCard> : null}</div>}
       </main>
     </div>
+    {transcriptEvent ? <TranscriptDialog event={transcriptEvent} busy={extracting} status={providerMessage} extractionAvailable={providerStatus?.extraction_state === 'available'} onClose={() => setTranscriptEvent(null)} onExtract={() => void extractClaims(transcriptEvent)} onOpenInList={() => { setSelectedEvent(transcriptEvent); setTranscriptEvent(null); setActiveView('overview') }} /> : null}
   </div>
 }

@@ -249,11 +249,25 @@ impl NipConfig {
         self.comfyui_url.as_ref()
     }
 
+    /// The endpoint local ASR should actually use. An explicit
+    /// `NIP_COMFYUI_URL` always wins; otherwise the port of the running
+    /// ComfyUI Desktop instance is discovered at call time, so the same
+    /// checkout works on every machine without a pinned `.env` value.
+    ///
+    /// Resolution is deliberately not cached: starting ComfyUI after the app
+    /// has already spawned the engine must take effect without a restart.
+    pub fn resolve_comfyui_url(&self) -> Option<LoopbackUrl> {
+        crate::comfy_discovery::from_process(self.comfyui_url.as_ref().map(LoopbackUrl::as_str))
+            .map(|endpoint| endpoint.url)
+    }
+
     /// True when NIP can actually transcribe locally: either the deterministic
-    /// test fixture or a configured loopback ComfyUI ASR server together with
-    /// the documented CLI from the independent `comfy` pack.
+    /// test fixture or a resolvable loopback ComfyUI ASR server together with
+    /// the documented CLI from the independent `comfy` pack. A discovered
+    /// endpoint is still only a candidate; `nip_asr_status` reports whether the
+    /// server is reachable and has the Qwen3-ASR nodes loaded.
     pub fn local_asr_available(&self) -> bool {
-        self.test_mode || (self.comfyui_url.is_some() && self.comfy.ready())
+        self.test_mode || (self.resolve_comfyui_url().is_some() && self.comfy.ready())
     }
 
     /// The external `comfy` workflow pack: workspace, CLI, optional clone URL.

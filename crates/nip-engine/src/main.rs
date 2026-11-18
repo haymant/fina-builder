@@ -547,7 +547,7 @@ impl NipMcp {
     }
 
     #[tool(
-        description = "Download an approved episode enclosure and transcribe it with the configured local ASR provider (NIP_COMFYUI_URL), or the deterministic fixture in NIP_TEST_MODE. No remote ASR fallback."
+        description = "Transcribe an approved episode: a publisher-provided transcript (Podcasting 2.0 <podcast:transcript>) is used when the feed advertises one, otherwise the enclosure is downloaded and transcribed with the configured local ASR provider (NIP_COMFYUI_URL, or the running ComfyUI Desktop discovered on loopback), or the deterministic fixture in NIP_TEST_MODE. No remote ASR fallback."
     )]
     fn transcribe_podcast_episode(
         &self,
@@ -584,7 +584,7 @@ impl NipMcp {
             let test_mode = service.config().test_mode();
             let comfyui_url = service
                 .config()
-                .comfyui_url()
+                .resolve_comfyui_url()
                 .map(|url| url.as_str().to_owned());
             let staging_root = service.config().asr_staging_root();
             let render_script = service.config().comfy().render_script().to_path_buf();
@@ -623,10 +623,27 @@ impl NipMcp {
             };
         }
 
+        // Publisher transcripts are authored text, cost one request and need no
+        // GPU, so they are tried before an ASR endpoint is required at all.
+        {
+            let mut service = match self.service.lock() {
+                Ok(service) => service,
+                Err(_) => return structured_error("internal", "NIP service lock failed"),
+            };
+            let client = HttpAudioClient::default();
+            match service.publisher_transcript(&episode, &client, Utc::now()) {
+                Ok(Some(transcript)) => {
+                    return structured_success(serde_json::to_value(transcript).unwrap())
+                }
+                Ok(None) => {}
+                Err(error) => return transcription_error(error),
+            }
+        }
+
         let Some(comfyui_url) = comfyui_url else {
             return structured_error(
                 "transcription_unavailable",
-                "local ASR is not configured; set NIP_COMFYUI_URL to a loopback ComfyUI server running the Qwen3-ASR workflow",
+                "local ASR is unavailable; start ComfyUI Desktop or set NIP_COMFYUI_URL to a loopback server running the Qwen3-ASR workflow",
             );
         };
         let request = match podcast_asr_request(&episode, &HttpAudioClient::default()) {
@@ -725,11 +742,11 @@ impl NipMcp {
                 return structured_error("not_found", "podcast episode was not found");
             };
             let config = service.config();
-            if !config.test_mode() {
-                if config.comfyui_url().is_none() {
+            if !config.test_mode() && episode.transcript_url.is_none() {
+                if config.resolve_comfyui_url().is_none() {
                     return structured_error(
                         "transcription_unavailable",
-                        "NIP_COMFYUI_URL is not configured; call nip_asr_status for the exact blockers",
+                        "no loopback ComfyUI endpoint was resolved; start ComfyUI Desktop or set NIP_COMFYUI_URL, then call nip_asr_status for the exact blockers",
                     );
                 }
                 if !config.comfy().ready() {
@@ -746,7 +763,9 @@ impl NipMcp {
                 episode.clone(),
                 JobContext {
                     test_mode: config.test_mode(),
-                    comfyui_url: config.comfyui_url().map(|url| url.as_str().to_owned()),
+                    comfyui_url: config
+                        .resolve_comfyui_url()
+                        .map(|url| url.as_str().to_owned()),
                     render_script: config.comfy().render_script().to_path_buf(),
                     staging_root: config.asr_staging_root(),
                     chunk_seconds: config.comfy().chunk_seconds(),
@@ -1532,6 +1551,93 @@ fn spawn_transcription_job(
     }
 }
 
+/// Prefer the transcript the publisher advertises in the feed. The job finishes
+/// without downloading audio or starting a local model when it is usable, so
+/// the return value means "handled": either transcribed or failed for good.
+fn use_publisher_transcript(
+    service: &Arc<Mutex<NipService>>,
+    registry: &JobRegistry,
+    job_id: &str,
+    episode: &PodcastEpisode,
+    client: &HttpAudioClient,
+) -> bool {
+    if episode.transcript_url.is_none() {
+        return false;
+    }
+    registry.update(job_id, |job| {
+        job.record(
+            "info",
+            "publisher_transcript",
+            "checking the transcript reference advertised by the feed",
+        )
+    });
+    let mut service = match service.lock() {
+        Ok(service) => service,
+        Err(_) => {
+            registry.update(job_id, |job| {
+                job.fail("internal", "internal", "NIP service lock failed")
+            });
+            return true;
+        }
+    };
+    let transcript = match service.publisher_transcript(episode, client, Utc::now()) {
+        Ok(Some(transcript)) => transcript,
+        Ok(None) => {
+            registry.update(job_id, |job| {
+                job.record(
+                    "info",
+                    "publisher_transcript",
+                    "no usable publisher transcript; falling back to local ASR",
+                )
+            });
+            return false;
+        }
+        Err(error) => {
+            registry.update(job_id, |job| {
+                job.fail("commit", "storage_unavailable", error.to_string())
+            });
+            return true;
+        }
+    };
+    let characters = transcript.transcript_text.chars().count();
+    let preview = preview_text(&transcript.transcript_text);
+    let directory = registry.job_dir(job_id);
+    let path = directory.join("transcript.txt");
+    if let Err(error) = fs::create_dir_all(&directory)
+        .and_then(|_| fs::write(&path, &transcript.transcript_text))
+    {
+        registry.update(job_id, |job| {
+            job.fail(
+                "commit",
+                "storage_unavailable",
+                format!("the transcript artifact could not be written: {error}"),
+            )
+        });
+        return true;
+    }
+    let event_id = service
+        .event_for_episode(episode)
+        .ok()
+        .flatten()
+        .map(|event| event.event_id.as_str().to_owned());
+    registry.update(job_id, |job| {
+        job.event_id = event_id;
+        job.transcript_characters = Some(characters as u64);
+        job.transcript_preview = Some(preview);
+        job.transcript_path = Some(path.display().to_string());
+        job.record(
+            "info",
+            "transcribed",
+            format!(
+                "used the publisher transcript · committed {characters} characters to the local ledger"
+            ),
+        );
+        job.state = "transcribed".into();
+        job.finished_at = Some(Utc::now());
+    });
+    true
+}
+
 fn run_transcription_job(
     service: Arc<Mutex<NipService>>,
     registry: JobRegistry,
@@ -1541,6 +1647,22 @@ fn run_transcription_job(
     context: JobContext,
 ) {
     let cancel = registry.cancel_flag(&job_id);
+    if cancel.load(Ordering::SeqCst) {
+        finish_cancelled(&registry, &job_id);
+        return;
+    }
+
+    let client = if context.test_mode {
+        HttpAudioClient::for_test()
+    } else {
+        HttpAudioClient::default()
+    };
+    // Publisher text is authored and needs no GPU, so it runs before the ASR
+    // slot lock: a feed transcript must never wait behind a local model.
+    if use_publisher_transcript(&service, &registry, &job_id, &episode, &client) {
+        return;
+    }
+
     let guard = gate.lock();
     let guard = match guard {
         Ok(guard) => guard,
@@ -1560,11 +1682,6 @@ fn run_transcription_job(
         job.record("info", "download", "downloading the episode enclosure")
     });
 
-    let client = if context.test_mode {
-        HttpAudioClient::for_test()
-    } else {
-        HttpAudioClient::default()
-    };
     let mut request = match podcast_asr_request(&episode, &client) {
         Ok(request) => request,
         Err(error) => {
@@ -1640,7 +1757,7 @@ fn run_transcription_job(
                 job.fail(
                     "transcribe",
                     "transcription_unavailable",
-                    "NIP_COMFYUI_URL is not configured",
+                    "no loopback ComfyUI endpoint was resolved; start ComfyUI Desktop or set NIP_COMFYUI_URL",
                 )
             });
             drop(guard);
