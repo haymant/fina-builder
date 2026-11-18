@@ -75,6 +75,8 @@ export interface NipProviderStatus {
   model: string | null
   reasoning_effort: string | null
   provider_api: string | null
+  /** `open_ai_compatible` or `opencode_open_ai_compatible`. */
+  provider_type?: string | null
   remote: boolean
   consent: 'granted' | 'missing' | 'revoked' | 'not_required' | string
   consent_recorded_at: string | null

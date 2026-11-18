@@ -85,6 +85,14 @@ describe('ProviderStatusPanel', () => {
     expect(screen.getByRole('button', { name: /Allow remote extraction/ })).toBeTruthy()
   })
 
+  it('documents how to start the OpenCode adapter when that provider type cannot run', () => {
+    render(<ProviderStatusPanel status={{ ...providerStatus, provider_type: 'opencode_open_ai_compatible', consent: 'granted', extraction_state: 'unavailable' }} busy={false} onGrant={vi.fn()} onRevoke={vi.fn()} />)
+    expect(screen.getByText('How to start the OpenCode adapter')).toBeTruthy()
+    expect(screen.getByText(/npm run build --workspace @rigai\/opencode/)).toBeTruthy()
+    expect(screen.getByText(/RIGA_OPENCODE_PORT=8791/)).toBeTruthy()
+    expect(screen.getByText(/127\.0\.0\.1:8791\/v1/)).toBeTruthy()
+  })
+
   it('shows unavailable bridge state without falling back to a fake provider', () => {
     render(<ProviderStatusPanel status={{ ...providerStatus, configured: false, bridge_state: 'not_configured', provider_kind: null, provider_id: null, model: null, remote: false, consent: 'not_required', extraction_state: 'unavailable', warnings: ['riga_bridge_not_configured'] }} busy={false} onGrant={vi.fn()} onRevoke={vi.fn()} />)
     expect(screen.getByText('Provider bridge not configured')).toBeTruthy()
