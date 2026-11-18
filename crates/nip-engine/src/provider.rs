@@ -213,10 +213,23 @@ impl RigaBridgeClaimProvider {
             .header("Content-Type", "application/json")
             .send(payload)
             .map_err(|_| NipError::ProviderUnavailable)?;
-        match response.status().as_u16() {
-            200 => {}
-            401 | 403 => return Err(NipError::ProviderUnavailable),
-            _ => return Err(NipError::ProviderUnavailable),
+        let status_code = response.status().as_u16();
+        if status_code != 200 {
+            // The bridge reports why the run failed (endpoint down, provider
+            // not configured, model missing, run timed out). Keep that reason:
+            // "provider unavailable" alone tells the operator nothing.
+            let body = response.body_mut().read_to_string().unwrap_or_default();
+            let message = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
+                .filter(|message| !message.trim().is_empty())
+                .unwrap_or_else(|| format!("the provider bridge returned HTTP {status_code}"));
+            return Err(NipError::ExtractionRejected(message));
         }
         let body = response
             .body_mut()
@@ -329,6 +342,69 @@ fn stable_hash(value: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn event() -> EventRecord {
+        EventRecord {
+            schema_version: 1,
+            event_id: nip_domain::EventId::new("event-1").unwrap(),
+            source_id: nip_domain::SourceId::new("fixture-show").unwrap(),
+            source_native_id: None,
+            canonical_url: None,
+            content_hash: "hash".into(),
+            content_text: Some("A retained transcript".into()),
+            times: nip_domain::EventTimes {
+                published_at: None,
+                source_updated_at: None,
+                captured_at: "2026-11-18T01:00:00Z".parse().unwrap(),
+                ingested_at: "2026-11-18T01:00:01Z".parse().unwrap(),
+            },
+            revision_of: None,
+        }
+    }
+
+    fn configured_status() -> RigaBridgeProviderStatus {
+        RigaBridgeProviderStatus {
+            configured: true,
+            provider_kind: Some("remote".into()),
+            provider_id: Some("provider-a".into()),
+            model: Some("model-a".into()),
+            reasoning_effort: Some("low".into()),
+            provider_api: Some("chat".into()),
+            provider_type: Some("open_ai_compatible".into()),
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_failed_provider_run_keeps_the_bridge_reason() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 4096];
+            let _ = stream.read(&mut buffer);
+            let body = r#"{"code":"extraction_failed","message":"the provider run did not complete"}"#;
+            let response = format!(
+                "HTTP/1.1 502 Bad Gateway\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        let provider =
+            RigaBridgeClaimProvider::new(&format!("http://{address}"), "token").unwrap();
+        let error = provider
+            .extract_with_status(&event(), &configured_status())
+            .unwrap_err();
+        // "provider unavailable" alone leaves an operator with no next step;
+        // the bridge knows whether the endpoint or the run failed.
+        assert!(
+            matches!(&error, NipError::ExtractionRejected(message) if message == "the provider run did not complete"),
+            "unexpected error: {error}"
+        );
+        server.join().unwrap();
+    }
 
     #[test]
     fn status_validation_requires_a_kind_and_model_only_when_configured() {

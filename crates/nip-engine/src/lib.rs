@@ -148,6 +148,8 @@ pub enum NipError {
     EventNotFound,
     #[error("the configured RIGA provider is unavailable")]
     ProviderUnavailable,
+    #[error("claim extraction failed: {0}")]
+    ExtractionRejected(String),
     #[error("remote transcript extraction requires NIP-specific consent for the selected provider/model")]
     RemoteConsentRequired,
     #[error("no remote provider is configured; remote consent does not apply")]
