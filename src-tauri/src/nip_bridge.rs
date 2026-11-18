@@ -256,20 +256,69 @@ async fn run_extraction(
     session_id: &str,
     prompt: String,
 ) -> Result<String, ()> {
+    let started = std::time::Instant::now();
     let mut events = service
         .start_run(run_id.to_owned(), session_id.to_owned(), prompt)
         .await
-        .map_err(|_| ())?;
+        .map_err(|error| eprintln!("NIP bridge: run {run_id} could not start: {error}"))?;
     let deadline = tokio::time::Instant::now() + RUN_TIMEOUT;
+    // A silent ten-minute wait is impossible to diagnose: keep the event shape
+    // in the log so "the run did not complete" says what it was doing.
+    let mut last_label = "none";
+    let mut text_chunks = 0_u64;
+    let mut last_progress = std::time::Instant::now();
     loop {
         match tokio::time::timeout_at(deadline, events.recv()).await {
             Ok(Ok(envelope)) => match envelope.event {
-                riga_kernel::events::RigaEvent::RunCompleted { output } => return Ok(output),
-                riga_kernel::events::RigaEvent::RunFailed { .. } => return Err(()),
-                _ => {}
+                riga_kernel::events::RigaEvent::RunCompleted { output } => {
+                    eprintln!(
+                        "NIP bridge: run {run_id} completed in {}s ({text_chunks} text chunks)",
+                        started.elapsed().as_secs()
+                    );
+                    return Ok(output);
+                }
+                riga_kernel::events::RigaEvent::RunFailed { message } => {
+                    eprintln!(
+                        "NIP bridge: run {run_id} failed in {}s: {message}",
+                        started.elapsed().as_secs()
+                    );
+                    return Err(());
+                }
+                event => {
+                    let label = match &event {
+                        riga_kernel::events::RigaEvent::TextDelta { .. } => "text",
+                        riga_kernel::events::RigaEvent::ReasoningDelta { .. } => "reasoning",
+                        riga_kernel::events::RigaEvent::ToolCallStarted { .. } => "tool_call",
+                        riga_kernel::events::RigaEvent::ToolResult { .. } => "tool_result",
+                        _ => "event",
+                    };
+                    if label == "text" {
+                        text_chunks += 1;
+                    }
+                    last_label = label;
+                    if matches!(label, "tool_call" | "tool_result")
+                        || last_progress.elapsed() >= std::time::Duration::from_secs(15)
+                    {
+                        eprintln!(
+                            "NIP bridge: run {run_id} {label} after {}s ({text_chunks} text chunks)",
+                            started.elapsed().as_secs()
+                        );
+                        last_progress = std::time::Instant::now();
+                    }
+                }
             },
-            Ok(Err(_)) => return Err(()),
+            Ok(Err(_)) => {
+                eprintln!(
+                    "NIP bridge: run {run_id} event channel closed after {}s",
+                    started.elapsed().as_secs()
+                );
+                return Err(());
+            }
             Err(_) => {
+                eprintln!(
+                    "NIP bridge: run {run_id} timed out after {}s (last event: {last_label}, {text_chunks} text chunks)",
+                    started.elapsed().as_secs()
+                );
                 let _ = service.cancel_run(run_id).await;
                 return Err(());
             }
