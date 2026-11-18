@@ -792,6 +792,7 @@ impl NipService {
                 model: None,
                 reasoning_effort: None,
                 provider_api: None,
+                provider_type: None,
                 remote: false,
                 consent: "not_required".into(),
                 consent_recorded_at: None,
@@ -811,6 +812,7 @@ impl NipService {
                     model: None,
                     reasoning_effort: None,
                     provider_api: None,
+                    provider_type: None,
                     remote: false,
                     consent: "not_required".into(),
                     consent_recorded_at: None,
@@ -880,6 +882,7 @@ impl NipService {
             model: status.model,
             reasoning_effort: status.reasoning_effort,
             provider_api: status.provider_api,
+            provider_type: status.provider_type,
             remote,
             consent,
             consent_recorded_at,
@@ -2600,6 +2603,9 @@ mod tests {
         let status = service.provider_status().unwrap();
         assert!(status.configured);
         assert_eq!(status.bridge_state, "ready");
+        // The Narrative UI shows adapter instructions for the OpenCode type,
+        // so the provider type has to survive the bridge boundary.
+        assert_eq!(status.provider_type.as_deref(), Some("open_ai_compatible"));
         assert_eq!(status.consent, "missing");
         assert_eq!(status.extraction_state, "consent_required");
         assert!(status.warnings.contains(&"remote_consent_missing".into()));

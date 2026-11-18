@@ -314,6 +314,9 @@ pub struct ProviderStatus {
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub provider_api: Option<String>,
+    /// `open_ai_compatible` or `opencode_open_ai_compatible`; the latter is
+    /// served by the RIGA OpenCode adapter on loopback port 8791.
+    pub provider_type: Option<String>,
     pub remote: bool,
     /// `granted`, `missing`, `revoked`, or `not_required`.
     pub consent: String,
