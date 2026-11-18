@@ -1,5 +1,8 @@
 pub mod asr;
+pub mod comfy;
 pub mod config;
+pub mod jobs;
+pub mod media;
 pub mod podcast;
 pub mod provider;
 pub mod semantic;
@@ -1120,9 +1123,29 @@ impl NipService {
     pub fn rebuild_graph(&mut self, run_id: String) -> Result<NarrativeGraph, NipError> {
         let clusters = self.store.clusters()?;
         let claims = self.store.claims()?;
+        let events = self.store.all_events()?;
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
         let mut event_nodes = BTreeSet::new();
+        // Every retained event is an origin node, even before claims or
+        // clusters exist. The graph then always shows where a derivation came
+        // from instead of an empty projection.
+        for event in &events {
+            let event_id = event.event_id.as_str().to_owned();
+            if !event_nodes.insert(event_id.clone()) {
+                continue;
+            }
+            nodes.push(NarrativeGraphNode {
+                node_id: format!("event:{event_id}"),
+                node_type: "event".into(),
+                label: event
+                    .source_native_id
+                    .clone()
+                    .or_else(|| event.canonical_url.clone())
+                    .unwrap_or_else(|| event_id.clone()),
+                evidence_event_ids: vec![event_id],
+            });
+        }
         for cluster in &clusters {
             let evidence: Vec<String> = cluster
                 .members
@@ -1199,6 +1222,20 @@ impl NipService {
         };
         self.store.save_graph(&graph)?;
         Ok(graph)
+    }
+
+    /// The retained transcript event for a podcast episode, if it has been
+    /// committed. This is the origin the UI links back to.
+    pub fn event_for_episode(
+        &self,
+        episode: &PodcastEpisode,
+    ) -> Result<Option<EventRecord>, NipError> {
+        let Some(native_id) = episode.source_native_id.as_deref() else {
+            return Ok(None);
+        };
+        Ok(self
+            .store
+            .event_for_source_native(&episode.source_id, native_id)?)
     }
 
     pub fn graph(&self) -> Result<Option<NarrativeGraph>, NipError> {
@@ -1417,7 +1454,9 @@ impl NipService {
                     }
                     AsrError::InvalidInput
                     | AsrError::MalformedOutput
-                    | AsrError::AudioPreparation => PodcastEpisodeState::Failed,
+                    | AsrError::AudioPreparation
+                    | AsrError::OutOfMemory
+                    | AsrError::ProviderError(_) => PodcastEpisodeState::Failed,
                 };
                 self.store.set_episode_state(episode, state)?;
                 return Err(match state {
@@ -1480,7 +1519,9 @@ impl NipService {
             }
             AsrError::InvalidInput
             | AsrError::MalformedOutput
-            | AsrError::AudioPreparation => PodcastEpisodeState::Failed,
+            | AsrError::AudioPreparation
+            | AsrError::OutOfMemory
+            | AsrError::ProviderError(_) => PodcastEpisodeState::Failed,
         };
         self.store.set_episode_state(episode, state)?;
         Ok(())
@@ -1529,6 +1570,7 @@ pub fn podcast_asr_request(
     Ok(AsrRequest {
         job_id: format!("episode-{}", stable_episode_job_id(episode)),
         audio: response.body,
+        audio_path: None,
         file_name: file_name.to_owned(),
         mime_type: mime_type.to_owned(),
         language: None,
@@ -1919,6 +1961,7 @@ mod tests {
                 asr::AsrRequest {
                     job_id: "fixture-job-1".into(),
                     audio: b"synthetic audio".to_vec(),
+                    audio_path: None,
                     file_name: "episode.mp3".into(),
                     mime_type: "audio/mpeg".into(),
                     language: None,
@@ -1936,6 +1979,40 @@ mod tests {
                 .state,
             PodcastEpisodeState::Transcribed
         );
+        let origin = service.event_for_episode(&episode).unwrap().unwrap();
+        assert_eq!(
+            origin.source_native_id.as_deref(),
+            Some("episode-1"),
+            "the episode row must be able to open its retained origin"
+        );
+    }
+
+    #[test]
+    fn graph_projection_includes_retained_events_as_origin_nodes() {
+        let temp = tempdir().unwrap();
+        let mut service = service_at(temp.path());
+        let import = LocalEventImport {
+            source_id: SourceId::new("manual-fixture").unwrap(),
+            source_display_name: "Synthetic fixture document".into(),
+            source_native_id: Some("origin-1".into()),
+            canonical_url: None,
+            title: Some("Origin fixture".into()),
+            content_text: "Rates remain restrictive until inflation cools.".into(),
+            published_at: Some("2026-11-15T12:00:00Z".parse().unwrap()),
+            source_updated_at: None,
+            rights_statement: "User-owned synthetic fixture".into(),
+            user_confirmed_rights: true,
+        };
+        let event = service
+            .import_local_event(&import, "2026-11-16T09:00:00Z".parse().unwrap())
+            .unwrap();
+        assert!(service.graph().unwrap().is_none());
+        let graph = service.rebuild_graph("graph-fixture".into()).unwrap();
+        assert!(graph
+            .nodes
+            .iter()
+            .any(|node| node.node_id == format!("event:{}", event.event_id.as_str())));
+        assert!(graph.edges.is_empty());
     }
 
     #[test]

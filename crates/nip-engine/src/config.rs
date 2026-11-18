@@ -27,6 +27,8 @@ pub enum ConfigError {
     AppDataUnavailable,
     #[error("NIP_COMFYUI_URL must be an HTTP(S) loopback URL without credentials")]
     InvalidComfyUiUrl,
+    #[error("NIP_COMFY_REPO must be a clone URL, an absolute path, or empty")]
+    InvalidComfyRepo,
     #[error("NIP_RIGA_BRIDGE_URL must be an HTTP(S) loopback URL without credentials")]
     InvalidRigaBridgeUrl,
     #[error("NIP_RIGA_BRIDGE_TOKEN is required when NIP_RIGA_BRIDGE_URL is configured")]
@@ -63,12 +65,49 @@ impl RigaBridgeConfig {
     }
 }
 
+/// The `comfy` pack is an independent workflow repository with a documented
+/// CLI (`scripts/render.py`). fina-builder never embeds or re-implements those
+/// workflows: it resolves the checkout, can clone it from a configured GitHub
+/// URL, and runs the CLI for each chunk of an episode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComfyWorkspaceConfig {
+    workspace: PathBuf,
+    render_script: PathBuf,
+    repo: Option<String>,
+    chunk_seconds: u32,
+}
+
+impl ComfyWorkspaceConfig {
+    pub fn workspace(&self) -> &Path {
+        &self.workspace
+    }
+
+    pub fn render_script(&self) -> &Path {
+        &self.render_script
+    }
+
+    pub fn repo(&self) -> Option<&str> {
+        self.repo.as_deref()
+    }
+
+    pub fn chunk_seconds(&self) -> u32 {
+        self.chunk_seconds
+    }
+
+    /// Ready means the documented CLI is present on disk. The ComfyUI server
+    /// itself is checked separately over loopback.
+    pub fn ready(&self) -> bool {
+        self.render_script.is_file()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NipConfig {
     data_dir: PathBuf,
     lake_dir: PathBuf,
     test_mode: bool,
     comfyui_url: Option<LoopbackUrl>,
+    comfy: ComfyWorkspaceConfig,
     riga_bridge: Option<RigaBridgeConfig>,
 }
 
@@ -82,6 +121,10 @@ impl NipConfig {
             "TAC_LAKE_DIR",
             "NIP_TEST_MODE",
             "NIP_COMFYUI_URL",
+            "NIP_COMFY_DIR",
+            "NIP_COMFY_REPO",
+            "NIP_COMFY_RENDER",
+            "NIP_ASR_CHUNK_SECONDS",
             "NIP_RIGA_BRIDGE_URL",
             "NIP_RIGA_BRIDGE_TOKEN",
         ]
@@ -116,6 +159,7 @@ impl NipConfig {
             .filter(|value| !value.trim().is_empty())
             .map(|value| LoopbackUrl::parse(value).map_err(|_| ConfigError::InvalidComfyUiUrl))
             .transpose()?;
+        let comfy = resolve_comfy_workspace(values, &repo_root, app_data_root.as_deref(), debug_build)?;
         let riga_bridge = resolve_riga_bridge(values)?;
 
         let configured_data = configured_path(values, "NIP_DATA_DIR")?;
@@ -180,6 +224,7 @@ impl NipConfig {
             lake_dir,
             test_mode,
             comfyui_url,
+            comfy,
             riga_bridge,
         })
     }
@@ -205,9 +250,15 @@ impl NipConfig {
     }
 
     /// True when NIP can actually transcribe locally: either the deterministic
-    /// test fixture or a configured loopback ComfyUI ASR workflow.
+    /// test fixture or a configured loopback ComfyUI ASR server together with
+    /// the documented CLI from the independent `comfy` pack.
     pub fn local_asr_available(&self) -> bool {
-        self.test_mode || self.comfyui_url.is_some()
+        self.test_mode || (self.comfyui_url.is_some() && self.comfy.ready())
+    }
+
+    /// The external `comfy` workflow pack: workspace, CLI, optional clone URL.
+    pub fn comfy(&self) -> &ComfyWorkspaceConfig {
+        &self.comfy
     }
 
     /// NIP-owned staging area for audio handed to the local ASR adapter.
@@ -218,6 +269,62 @@ impl NipConfig {
     pub fn riga_bridge(&self) -> Option<&RigaBridgeConfig> {
         self.riga_bridge.as_ref()
     }
+}
+
+fn resolve_comfy_workspace(
+    values: &BTreeMap<String, String>,
+    repo_root: &Path,
+    app_data_root: Option<&Path>,
+    debug_build: bool,
+) -> Result<ComfyWorkspaceConfig, ConfigError> {
+    let workspace = match configured_path(values, "NIP_COMFY_DIR")? {
+        Some(path) => normalize_absolute(&path, repo_root),
+        // A source checkout ships the pack beside the app; prefer it even in a
+        // release build launched from that checkout. A packaged app elsewhere
+        // falls back to app data (and can clone it from NIP_COMFY_REPO).
+        None if debug_build
+            || repo_root
+                .join("modules")
+                .join("comfy")
+                .join("scripts")
+                .join("render.py")
+                .is_file() =>
+        {
+            repo_root.join("modules").join("comfy")
+        }
+        None => app_data_root
+            .map(|root| normalize_absolute(root, Path::new("/")))
+            .ok_or(ConfigError::AppDataUnavailable)?
+            .join("fina-builder")
+            .join("NIP")
+            .join("comfy"),
+    };
+    let render_script = match configured_path(values, "NIP_COMFY_RENDER")? {
+        Some(path) => normalize_absolute(&path, repo_root),
+        None => workspace.join("scripts").join("render.py"),
+    };
+    let repo = values
+        .get("NIP_COMFY_REPO")
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    if let Some(repo) = repo.as_deref() {
+        // `git clone` is spawned without a shell; still reject option-like
+        // values so a configured URL can never become a git flag.
+        if repo.starts_with('-') || repo.chars().any(char::is_control) {
+            return Err(ConfigError::InvalidComfyRepo);
+        }
+    }
+    let chunk_seconds = values
+        .get("NIP_ASR_CHUNK_SECONDS")
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|value| (10..=600).contains(value))
+        .unwrap_or(crate::asr::DEFAULT_CHUNK_SECONDS);
+    Ok(ComfyWorkspaceConfig {
+        workspace,
+        render_script,
+        repo,
+        chunk_seconds,
+    })
 }
 
 fn resolve_riga_bridge(
@@ -471,6 +578,89 @@ mod tests {
         assert_eq!(
             NipConfig::resolve(&env(&[("NIP_TEST_MODE", "yes")]), root, None, true).unwrap_err(),
             ConfigError::InvalidTestMode
+        );
+    }
+
+    #[test]
+    fn comfy_workspace_is_configurable_and_defaults_to_the_dev_checkout() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let config = NipConfig::resolve(&env(&[]), root, None, true).unwrap();
+        assert_eq!(config.comfy().workspace(), root.join("modules/comfy"));
+        assert_eq!(
+            config.comfy().render_script(),
+            root.join("modules/comfy/scripts/render.py")
+        );
+        assert_eq!(config.comfy().chunk_seconds(), 45);
+        assert!(!config.local_asr_available());
+
+        let custom = NipConfig::resolve(
+            &env(&[
+                ("NIP_COMFYUI_URL", "http://127.0.0.1:8190"),
+                ("NIP_COMFY_DIR", "vendor/comfy"),
+                ("NIP_ASR_CHUNK_SECONDS", "30"),
+            ]),
+            root,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(custom.comfy().workspace(), root.join("vendor/comfy"));
+        assert_eq!(
+            custom.comfy().render_script(),
+            root.join("vendor/comfy/scripts/render.py")
+        );
+        assert_eq!(custom.comfy().chunk_seconds(), 30);
+        // The pack is not present in this fixture, so ASR stays unavailable.
+        assert!(!custom.local_asr_available());
+    }
+
+    #[test]
+    fn comfy_clone_url_is_optional_and_rejects_git_flags() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let config = NipConfig::resolve(
+            &env(&[("NIP_COMFY_REPO", "https://github.com/haymant/comfyui-flows.git")]),
+            root,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            config.comfy().repo(),
+            Some("https://github.com/haymant/comfyui-flows.git")
+        );
+        assert_eq!(
+            NipConfig::resolve(&env(&[("NIP_COMFY_REPO", "--upload-pack=evil")]), root, None, true)
+                .unwrap_err(),
+            ConfigError::InvalidComfyRepo
+        );
+    }
+
+    #[test]
+    fn a_source_checkout_prefers_its_own_comfy_pack_even_in_release_builds() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join("modules/comfy/scripts")).unwrap();
+        std::fs::write(root.join("modules/comfy/scripts/render.py"), b"# cli\n").unwrap();
+        let app_data = temp.path().join("os-data");
+        let config = NipConfig::resolve(&env(&[]), root, Some(&app_data), false).unwrap();
+        assert_eq!(config.comfy().workspace(), root.join("modules/comfy"));
+        assert!(config.comfy().ready());
+        assert_eq!(
+            config.comfy().render_script(),
+            root.join("modules/comfy/scripts/render.py")
+        );
+    }
+
+    #[test]
+    fn packaged_default_comfy_workspace_lives_in_app_data() {
+        let temp = tempdir().unwrap();
+        let app_data = temp.path().join("os-data");
+        let config = NipConfig::resolve(&env(&[]), temp.path(), Some(&app_data), false).unwrap();
+        assert_eq!(
+            config.comfy().workspace(),
+            app_data.join("fina-builder/NIP/comfy")
         );
     }
 

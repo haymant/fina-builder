@@ -128,7 +128,7 @@ npm run test:e2e:demo -- --grep @demo-dashboard-note
 npm run test:e2e:demo -- --grep @demo-trade-fixings
 ```
 
-The Playwright config explicitly records 1280×720. Successful recordings are under `playwright/test-results/`; generated test artifacts and finished videos under `playwright/recordings/` are ignored by Git. The runner only captures the selected browser flow; use [`skills/demo/SKILL.md`](./skills/demo/SKILL.md) to derive narration from its `test.step` names, synthesize and synchronize audio, export MP4, and verify the result. It does not automatically create speech or upload video. Narration uses the local `edge-tts` narrator selected with `npm run demo:narrate` — Andrew by default, with `steffan`, `thomas`, or `eric` as alternatives; speech generation does not clone or imitate a real person's voice.
+The Playwright config explicitly records 1280×720. Successful recordings are under `playwright/test-results/`; generated test artifacts and finished videos under `playwright/recordings/` are ignored by Git. The runner only captures the selected browser flow; use [`skills/playwright-demo/SKILL.md`](../../skills/playwright-demo/SKILL.md) to add spotlight dimming for verification targets, derive narration from the fixture's `demo-timeline.json`, synthesize and synchronize audio, export MP4, and verify the result. The exporter rejects silent files, so a screen-only WebM is not a deliverable. Narration uses the local `edge-tts` narrator selected with `npm run demo:narrate` — Andrew by default, with `steffan`, `thomas`, or `eric` as alternatives; speech generation does not clone or imitate a real person's voice.
 
 Install FFmpeg helper separately if recording fails:
 

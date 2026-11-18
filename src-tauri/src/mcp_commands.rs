@@ -378,6 +378,16 @@ pub fn nip_mcp_reset(state: State<'_, NipServiceState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Loopback base URL of the running NIP service. The webview uses it to play
+/// cached audio/video from `/media/<job_id>/<name>` without exposing filesystem
+/// paths to the renderer.
+#[tauri::command]
+pub fn nip_service_url(state: State<'_, NipServiceState>) -> Result<String, String> {
+    state
+        .url()
+        .ok_or_else(|| "NIP service is not running".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

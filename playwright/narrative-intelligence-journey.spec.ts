@@ -31,10 +31,10 @@ test('an analyst sets up NIP, approves one feed, transcribes locally, consents, 
   await expect(page.getByText('Policy outlook fixture')).toBeVisible()
 
   await page.getByRole('button', { name: 'Transcribe locally' }).click()
-  await expect(page.getByText('Episode transcribed locally.')).toBeVisible()
-  await expect(page.getByRole('button', { name: /nip-fixture-episode-1/ })).toBeVisible()
+  await expect(page.getByText('Transcript committed.', { exact: false })).toBeVisible({ timeout: 120_000 })
+  await expect(page.getByRole('button', { name: /Open retained transcript/ }).first()).toBeVisible()
 
-  await page.getByRole('button', { name: /nip-fixture-episode-1/ }).click()
+  await page.getByRole('button', { name: /Open retained transcript/ }).first().click()
   await expect(page.getByText(/Source-linked record/)).toBeVisible()
   await expect(page.locator('.event-detail').getByText(/fixture research team expects policy/)).toBeVisible()
 

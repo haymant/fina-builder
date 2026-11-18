@@ -1,6 +1,6 @@
 import { nip } from '../../api/nipTransport'
 import { toSnakeKeys } from '../../api/keyCase'
-import type { NipCapabilities, NipClaim, NipEditorialCandidate, NipEditorialReviewAudit, NipEmbeddingManifest, NipEpisodePage, NipEtfMapping, NipEventSearchPage, NipExtractionStatus, NipHealth, NipNarrativeCluster, NipNarrativeGraph, NipNarrativeSignalSnapshot, NipPodcastEpisode, NipPodcastSubscription, NipProviderConsent, NipProviderStatus, NipResourceStatus, NipSemanticResult, NipSource, NipSourceKind, NipSourceState } from './types'
+import type { NipAsrStatus, NipCapabilities, NipClaim, NipComfyWorkspaceReport, NipEditorialCandidate, NipEditorialReviewAudit, NipEpisodeEventLookup, NipEmbeddingManifest, NipEpisodePage, NipEtfMapping, NipEventSearchPage, NipExtractionStatus, NipHealth, NipMediaArtifact, NipNarrativeCluster, NipNarrativeGraph, NipNarrativeSignalSnapshot, NipPodcastEpisode, NipPodcastSubscription, NipProviderConsent, NipProviderStatus, NipResourceStatus, NipSemanticResult, NipSource, NipSourceKind, NipSourceState, NipTranscriptionJob } from './types'
 
 function fromTransport<T>(value: unknown): T {
   return toSnakeKeys(value) as T
@@ -70,6 +70,32 @@ export const narrativeApi = {
       source_native_id: args.sourceNativeId,
       canonical_url: args.canonicalUrl,
     }).then((value) => fromTransport<Record<string, unknown>>(value)),
+  asrStatus: () => nip.callTool('nip_asr_status').then((value) => fromTransport<NipAsrStatus>(value)),
+  ensureComfyWorkspace: () => nip.callTool('ensure_comfy_workspace').then((value) => fromTransport<NipComfyWorkspaceReport>(value)),
+  findPodcastEpisodeEvent: (args: { sourceId: string; sourceNativeId?: string | null; canonicalUrl?: string | null }) =>
+    nip.callTool('find_podcast_episode_event', {
+      source_id: args.sourceId,
+      source_native_id: args.sourceNativeId,
+      canonical_url: args.canonicalUrl,
+    }).then((value) => fromTransport<NipEpisodeEventLookup>(value)),
+  startPodcastTranscription: (args: { sourceId: string; sourceNativeId?: string | null; canonicalUrl?: string | null }) =>
+    nip.callTool('start_podcast_transcription', {
+      source_id: args.sourceId,
+      source_native_id: args.sourceNativeId,
+      canonical_url: args.canonicalUrl,
+    }).then((value) => fromTransport<NipTranscriptionJob>(value)),
+  podcastTranscriptionStatus: (jobId: string) =>
+    nip.callTool('podcast_transcription_status', { job_id: jobId }).then((value) => fromTransport<NipTranscriptionJob>(value)),
+  listPodcastTranscriptionJobs: (sourceId?: string, limit = 20) =>
+    nip.callTool('list_podcast_transcription_jobs', { source_id: sourceId, limit }).then((value) => fromTransport<NipTranscriptionJob[]>(value)),
+  cancelPodcastTranscription: (jobId: string) =>
+    nip.callTool('cancel_podcast_transcription', { job_id: jobId }).then((value) => fromTransport<NipTranscriptionJob>(value)),
+  deletePodcastTranscriptionJob: (jobId: string, deleteArtifacts = true) =>
+    nip.callTool('delete_podcast_transcription_job', { job_id: jobId, delete_artifacts: deleteArtifacts }).then((value) => fromTransport<{ removed: boolean }>(value)),
+  listMediaArtifacts: (limit = 50) =>
+    nip.callTool('list_media_artifacts', { limit }).then((value) => fromTransport<NipMediaArtifact[]>(value)),
+  deleteMediaArtifact: (jobId: string, name: string) =>
+    nip.callTool('delete_media_artifact', { job_id: jobId, name }).then((value) => fromTransport<{ removed: boolean }>(value)),
   semanticSearch: (text: string, limit = 20) => nip.callTool('semantic_search', { text, limit }).then((value) => fromTransport<NipSemanticResult[]>(value)),
   rebuildSemanticIndex: () => nip.callTool('rebuild_semantic_index').then((value) => fromTransport<NipEmbeddingManifest>(value)),
   rebuildNarrativeClusters: () => nip.callTool('rebuild_narrative_clusters').then((value) => fromTransport<NipNarrativeCluster[]>(value)),

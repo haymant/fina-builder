@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test as base, expect } from '@playwright/test'
 import { WorkspacePage } from '../pages/WorkspacePage'
+import { createDemo, type DemoDirector } from '../support/demo'
 import { TradeRepositoryPage } from '../pages/TradeRepositoryPage'
 import { createWorkspaceSeed, type WorkspaceSeed } from '../support/workspaceState'
 
@@ -12,6 +13,7 @@ type Fixtures = {
   workspaceSeed: WorkspaceSeed
   stubEngines: boolean
   collectCoverage: void
+  demo: DemoDirector
 }
 
 export const test = base.extend<Fixtures>({
@@ -34,6 +36,19 @@ export const test = base.extend<Fixtures>({
   }, { auto: true }],
   workspaceSeed: [createWorkspaceSeed(), { option: true }],
   stubEngines: [true, { option: true }],
+  demo: async ({ page }, use, testInfo) => {
+    const director = createDemo(page)
+    await use(director)
+    await director.clear()
+
+    const beats = director.timeline()
+    if (beats.length) {
+      await writeFile(
+        testInfo.outputPath('demo-timeline.json'),
+        `${JSON.stringify({ beats }, null, 2)}\n`,
+      )
+    }
+  },
   workspace: async ({ page, workspaceSeed, stubEngines }, use) => {
     await page.addInitScript((state) => {
       if (sessionStorage.getItem('__playwright_seeded') !== '1') {

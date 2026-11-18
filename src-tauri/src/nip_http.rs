@@ -416,6 +416,52 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
     if let Some(url) = comfyui_url {
         env.push(("NIP_COMFYUI_URL".to_string(), url));
     }
+    // The external `comfy` pack is configured by the user as well. Forward only
+    // NIP-owned tooling keys, never unrelated secrets from .env.
+    let tooling_keys = [
+        "NIP_COMFY_DIR",
+        "NIP_COMFY_REPO",
+        "NIP_COMFY_RENDER",
+        "NIP_ASR_CHUNK_SECONDS",
+        "NIP_ASR_CHUNK_TIMEOUT_SECONDS",
+        "NIP_PYTHON_BIN",
+        "NIP_FFMPEG_BIN",
+        "NIP_FFPROBE_BIN",
+    ];
+    for key in tooling_keys {
+        if env.iter().any(|(existing, _)| existing == key) {
+            continue;
+        }
+        if let Ok(value) = std::env::var(key) {
+            if !value.trim().is_empty() {
+                env.push((key.to_string(), value));
+            }
+        }
+    }
+    for (key, value) in crate::mcp_commands::engine_env(app) {
+        let wanted = tooling_keys.contains(&key.as_str());
+        if wanted && !env.iter().any(|(existing, _)| existing == &key) {
+            env.push((key, value));
+        }
+    }
+    let logs_dir = data_dir.join("logs");
+    let engine_log = logs_dir.join("nip-engine.log");
+    let log_handle = std::fs::create_dir_all(&logs_dir)
+        .ok()
+        .and_then(|_| {
+            // Keep the diagnostic file bounded; it is rotated only at startup.
+            if std::fs::metadata(&engine_log)
+                .map(|metadata| metadata.len() > 2 * 1024 * 1024)
+                .unwrap_or(false)
+            {
+                let _ = std::fs::remove_file(&engine_log);
+            }
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&engine_log)
+                .ok()
+        });
 
     let bind = format!("127.0.0.1:{port}");
     let mut command = Command::new(&binary);
@@ -427,7 +473,11 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
         .envs(env.iter().map(|(key, value)| (key.clone(), value.clone())))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(match log_handle {
+            // Every failed ASR step stays reviewable instead of disappearing.
+            Some(handle) => Stdio::from(handle),
+            None => Stdio::null(),
+        });
     // A dev restart (or a crash) must not leave an orphaned nip-engine holding
     // the single-writer DuckDB lock. On Linux the child dies with the host.
     #[cfg(target_os = "linux")]

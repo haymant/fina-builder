@@ -27,6 +27,47 @@ fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// Persist uncaught webview errors next to the app data. The window can go
+/// blank when React throws; without this the only evidence is a white screen.
+#[tauri::command]
+fn report_frontend_error(
+    app: tauri::AppHandle,
+    context: String,
+    message: String,
+) -> Result<(), String> {
+    use std::io::Write;
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let logs = directory.join("logs");
+    std::fs::create_dir_all(&logs).map_err(|error| error.to_string())?;
+    let path = logs.join("frontend-errors.log");
+    if std::fs::metadata(&path)
+        .map(|metadata| metadata.len() > 1024 * 1024)
+        .unwrap_or(false)
+    {
+        let _ = std::fs::remove_file(&path);
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| error.to_string())?;
+    let observed_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let entry = serde_json::json!({
+        "at_ms": observed_at,
+        "context": context,
+        "message": message.chars().take(20_000).collect::<String>(),
+    });
+    writeln!(file, "{entry}").map_err(|error| error.to_string())?;
+    eprintln!("{entry}");
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -85,6 +126,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_external,
+            report_frontend_error,
             // MCP registry (visual atlas + vendored engines).
             mcp_commands::get_riga_mcp_path,
             mcp_commands::get_tac_engine_path,
@@ -103,6 +145,7 @@ pub fn run() {
             mcp_commands::nip_mcp_list_tools,
             mcp_commands::nip_mcp_call_tool,
             mcp_commands::nip_mcp_reset,
+            mcp_commands::nip_service_url,
             // RIGA agent (chat panel).
             riga_agent::kernel_health,
             riga_agent::riga_transport_connect,

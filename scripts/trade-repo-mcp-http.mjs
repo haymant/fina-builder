@@ -83,16 +83,35 @@ async function handle(msg) {
   }
 }
 
+let httpServer = null
+let readline = null
+let shuttingDown = false
+
+// Close SQLite before Node tears the environment down. better-sqlite3's
+// statement destructors otherwise abort in RemoveEnvironmentCleanupHook when a
+// SIGTERM ends a `npm run tauri:dev` session, which makes the dev wrapper
+// report a fake startup failure.
+async function shutdown(code) {
+  if (shuttingDown) return
+  shuttingDown = true
+  try { readline?.close() } catch { /* already closed */ }
+  try { httpServer?.close() } catch { /* already stopped */ }
+  try { await store.close() } catch (error) { log('store close failed:', error?.message ?? error) }
+  process.exit(code)
+}
+process.once('SIGINT', () => void shutdown(130))
+process.once('SIGTERM', () => void shutdown(143))
+
 if (args.has('--stdio')) {
-  const rl = createInterface({ input: process.stdin })
-  rl.on('line', async (line) => {
+  readline = createInterface({ input: process.stdin })
+  readline.on('line', async (line) => {
     if (!line.trim()) return
     const reply = await handle(JSON.parse(line))
     if (reply) process.stdout.write(`${JSON.stringify(reply)}\n`)
   })
 } else {
   const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', 'Access-Control-Allow-Headers': 'content-type, mcp-session-id, accept, mcp-protocol-version', 'Access-Control-Expose-Headers': 'Mcp-Session-Id' }
-  createServer(async (req, res) => {
+  httpServer = createServer(async (req, res) => {
     if (req.method === 'OPTIONS') { res.writeHead(204, CORS); return res.end() }
     if (req.method === 'GET' && req.url === '/health') { res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, store: store.kind })) }
     if (req.method !== 'POST' || !(req.url ?? '').startsWith('/mcp')) { res.writeHead(404, CORS); return res.end() }
@@ -108,5 +127,6 @@ if (args.has('--stdio')) {
     if (!reply) { res.writeHead(202, CORS); return res.end() }
     res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' })
     res.end(JSON.stringify(reply))
-  }).listen(port, '127.0.0.1', () => log(`listening on http://127.0.0.1:${port}/mcp`))
+  })
+  httpServer.listen(port, '127.0.0.1', () => log(`listening on http://127.0.0.1:${port}/mcp`))
 }

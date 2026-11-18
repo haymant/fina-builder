@@ -5,7 +5,16 @@ description: Select classified fina-builder Playwright journeys, capture a succe
 
 # Fina Playwright Demo
 
+> **Use [`skills/playwright-demo/SKILL.md`](../../../skills/playwright-demo/SKILL.md)
+> for new demos.** It adds spotlight dimming for verification targets, a
+> machine-readable beat timeline, and a single `export-demo.mjs` gate that
+> rejects silent MP4s. Keep this document as the detailed capture reference.
+
 Skill scripts live in `playwright/skills/demo/scripts/`: `playwright-demo.mjs` runs the video-enabled capture, and `demo-narration.mjs` generates narrator clips.
+
+**Narration is mandatory.** A passing test and a screen-only WebM are not a
+finished demo. The final MP4 must contain an audible AAC narration stream; never
+publish the raw recording or a silent re-encode.
 
 ## Select a user journey
 
@@ -37,7 +46,17 @@ Skill scripts live in `playwright/skills/demo/scripts/`: `playwright-demo.mjs` r
 
    Write the cue script one line per cue; blank lines and `#` comments are ignored. The script writes `cue-01.mp3` … and `narration.json` with measured durations. Use `--list` to print the voice table and `--rate`/`--pitch` only when a cue must be tightened. Install `edge-tts` once (`python3 -m venv .venv-tts && .venv-tts/bin/pip install edge-tts`) and point `EDGE_TTS_BIN` at the binary, or use any existing `edge-tts` on `PATH`. Keep the spoken text verbatim in the cue file; keep style in the surrounding direction, not in the audio. Use one voice consistently for the whole video. Do not clone or imitate a real person's identifiable voice. A sample may inform non-identity traits only; an authorized complete recording may be used as-is, not extended in that voice.
 6. Create one short audio clip per cue when timing matters. Read the durations from `narration.json`, and confirm the video and each clip with `ffprobe`. Align clips to the actual UI state/action timestamps with short natural pauses. If a cue does not fit its hold, tighten the wording or adjust the demo holds and record again; do not let a line describe an action that has already left the screen. If the flow, test holds, script, or voice changes, recalculate cue times.
-7. Use a two-stage FFmpeg export:
+7. Prefer the gated exporter instead of hand-written FFmpeg:
+
+   ```bash
+   EDGE_TTS_BIN="$PWD/.venv-tts/bin/edge-tts" \
+   node skills/playwright-demo/scripts/export-demo.mjs \
+     --video <run>/video.webm --timeline <run>/demo-timeline.json \
+     --cues playwright/recordings/<slug>/cues.txt --out <out>.mp4
+   ```
+
+   It builds the WAV master and muxes in two stages, then fails on silent audio
+   or wrong streams. If you export manually, use a two-stage FFmpeg export:
    - Build an audio-only master WAV: delay each voice clip with `adelay=<milliseconds>:all=1`, combine using `amix`, pad the intended tail with `apad`, and verify its duration/transcript.
    - In a separate command, mux the WebM and WAV using explicit stream maps and target duration; encode H.264 video and AAC audio in MP4.
 

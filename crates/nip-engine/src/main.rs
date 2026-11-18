@@ -1,20 +1,27 @@
 use std::{
     env,
+    fs,
     net::SocketAddr,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::ExitCode,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::Ordering,
+        Arc, Mutex,
+    },
     thread,
     time::Duration,
 };
 
 use chrono::{DateTime, Utc};
 use nip_domain::{
-    EtfMapping, EventRecord, EventSearchQuery, LocalEventImport, PodcastSubscriptionState, SourceId,
-    SourceKind, SourceState, SourceUpdate,
+    EtfMapping, EventRecord, EventSearchQuery, LocalEventImport, PodcastEpisode,
+    PodcastSubscriptionState, SourceId, SourceKind, SourceState, SourceUpdate,
 };
 use nip_engine::{
     asr::{AsrError, AsrProvider, ComfyUiAsrProvider, DeterministicFakeAsrProvider},
+    comfy::{self, ComfyAsrStatus, ComfyWorkspaceReport},
+    jobs::{cleanup_working_audio, JobRegistry, TranscriptionJob},
+    media,
     podcast::{HttpAudioClient, HttpFeedClient},
     podcast_asr_request,
     semantic::{
@@ -41,12 +48,66 @@ const IN_PROCESS_REFRESH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 #[derive(Clone)]
 struct NipMcp {
     service: Arc<Mutex<NipService>>,
+    jobs: JobRegistry,
+    /// One long GPU job at a time: SDXL covers and the ASR model share an 8 GB
+    /// card, so concurrent transcriptions would fight for the same VRAM.
+    gate: Arc<Mutex<()>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SourceParams {
     source_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct StartTranscriptionParams {
+    source_id: String,
+    source_native_id: Option<String>,
+    canonical_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FindEpisodeEventParams {
+    source_id: String,
+    source_native_id: Option<String>,
+    canonical_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct TranscriptionJobParams {
+    job_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ListTranscriptionJobsParams {
+    source_id: Option<String>,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct RemoveTranscriptionJobParams {
+    job_id: String,
+    #[serde(default)]
+    delete_artifacts: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ListMediaParams {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DeleteMediaParams {
+    job_id: String,
+    name: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -492,7 +553,7 @@ impl NipMcp {
         &self,
         Parameters(params): Parameters<EpisodeParams>,
     ) -> CallToolResult {
-        let (episode, test_mode, comfyui_url, staging_root) = {
+        let (episode, test_mode, comfyui_url, staging_root, render_script, chunk_seconds) = {
             let service = match self.service.lock() {
                 Ok(service) => service,
                 Err(_) => return structured_error("internal", "NIP service lock failed"),
@@ -526,7 +587,16 @@ impl NipMcp {
                 .comfyui_url()
                 .map(|url| url.as_str().to_owned());
             let staging_root = service.config().asr_staging_root();
-            (episode, test_mode, comfyui_url, staging_root)
+            let render_script = service.config().comfy().render_script().to_path_buf();
+            let chunk_seconds = service.config().comfy().chunk_seconds();
+            (
+                episode,
+                test_mode,
+                comfyui_url,
+                staging_root,
+                render_script,
+                chunk_seconds,
+            )
         };
 
         if test_mode {
@@ -563,9 +633,19 @@ impl NipMcp {
             Ok(request) => request,
             Err(error) => return transcription_error(error),
         };
-        let provider = match ComfyUiAsrProvider::new(&comfyui_url, staging_root) {
+        let provider = match ComfyUiAsrProvider::with_render_script(
+            &comfyui_url,
+            staging_root,
+            render_script,
+            chunk_seconds,
+        ) {
             Ok(provider) => provider,
             Err(error) => return structured_error("transcription_unavailable", error.to_string()),
+        };
+        // Serialize with background jobs: one GPU, one ASR run.
+        let _gate = match self.gate.lock() {
+            Ok(gate) => gate,
+            Err(_) => return structured_error("internal", "the local ASR slot lock failed"),
         };
         let result = match provider.transcribe(&request) {
             Ok(result) => result,
@@ -583,6 +663,274 @@ impl NipMcp {
         match service.commit_podcast_transcript(&episode, result, Utc::now()) {
             Ok(transcript) => structured_success(serde_json::to_value(transcript).unwrap()),
             Err(error) => transcription_error(error),
+        }
+    }
+
+    #[tool(
+        description = "Report whether local ASR is ready: the external comfy pack CLI, its workspace/commit, Python, ffmpeg, the loopback ComfyUI server and the Qwen3-ASR nodes. Returns exact blockers and next actions instead of a dead button."
+    )]
+    fn nip_asr_status(&self) -> CallToolResult {
+        let status = match self.service.lock() {
+            Ok(service) => ComfyAsrStatus::collect(service.config()),
+            Err(_) => return structured_error("internal", "NIP service lock failed"),
+        };
+        structured_success(serde_json::to_value(status).unwrap())
+    }
+
+    #[tool(
+        description = "Clone the configured comfy workflow pack (NIP_COMFY_REPO) into NIP_COMFY_DIR when the CLI is missing. Never overwrites a non-empty directory."
+    )]
+    fn ensure_comfy_workspace(&self) -> CallToolResult {
+        let report: Result<ComfyWorkspaceReport, String> = match self.service.lock() {
+            Ok(service) => comfy::ensure_workspace(service.config()),
+            Err(_) => return structured_error("internal", "NIP service lock failed"),
+        };
+        match report {
+            Ok(report) => structured_success(serde_json::to_value(report).unwrap()),
+            Err(message) => structured_error("comfy_workspace_unavailable", message),
+        }
+    }
+
+    #[tool(
+        description = "Start a long-running local transcription job and return immediately. Poll podcast_transcription_status for the current step (download, split, chunk progress, commit), cached audio, transcript preview, warnings and the exact failing step."
+    )]
+    fn start_podcast_transcription(
+        &self,
+        Parameters(params): Parameters<StartTranscriptionParams>,
+    ) -> CallToolResult {
+        let (episode, context) = {
+            let service = match self.service.lock() {
+                Ok(service) => service,
+                Err(_) => return structured_error("internal", "NIP service lock failed"),
+            };
+            let source_id = match SourceId::new(params.source_id.clone()) {
+                Ok(source) => source,
+                Err(error) => return structured_error("invalid_request", error.message),
+            };
+            let episodes = match service.podcast_episodes(&source_id) {
+                Ok(episodes) => episodes,
+                Err(error) => return structured_error("storage_unavailable", error.to_string()),
+            };
+            let episode = episodes.into_iter().find(|episode| {
+                params
+                    .source_native_id
+                    .as_deref()
+                    .is_none_or(|id| episode.source_native_id.as_deref() == Some(id))
+                    && params
+                        .canonical_url
+                        .as_deref()
+                        .is_none_or(|url| episode.canonical_url.as_deref() == Some(url))
+            });
+            let Some(episode) = episode else {
+                return structured_error("not_found", "podcast episode was not found");
+            };
+            let config = service.config();
+            if !config.test_mode() {
+                if config.comfyui_url().is_none() {
+                    return structured_error(
+                        "transcription_unavailable",
+                        "NIP_COMFYUI_URL is not configured; call nip_asr_status for the exact blockers",
+                    );
+                }
+                if !config.comfy().ready() {
+                    return structured_error(
+                        "transcription_unavailable",
+                        format!(
+                            "the comfy pack CLI is missing at {}; call nip_asr_status or ensure_comfy_workspace",
+                            config.comfy().render_script().display()
+                        ),
+                    );
+                }
+            }
+            (
+                episode.clone(),
+                JobContext {
+                    test_mode: config.test_mode(),
+                    comfyui_url: config.comfyui_url().map(|url| url.as_str().to_owned()),
+                    render_script: config.comfy().render_script().to_path_buf(),
+                    staging_root: config.asr_staging_root(),
+                    chunk_seconds: config.comfy().chunk_seconds(),
+                },
+            )
+        };
+
+        if let Some(active) =
+            self.jobs
+                .active_for(episode.source_id.as_str(), episode.source_native_id.as_deref())
+        {
+            return structured_success(serde_json::to_value(active).unwrap());
+        }
+
+        let job_id = format!("job-{}", Utc::now().timestamp_millis());
+        let now = Utc::now();
+        let job = TranscriptionJob {
+            job_id: job_id.clone(),
+            source_id: episode.source_id.as_str().to_owned(),
+            source_native_id: episode.source_native_id.clone(),
+            canonical_url: episode.canonical_url.clone(),
+            title: episode.title.clone(),
+            state: "queued".into(),
+            step: "queued".into(),
+            detail: Some("waiting for the local ASR slot".into()),
+            error_code: None,
+            error_message: None,
+            audio_bytes: None,
+            audio_content_type: None,
+            audio_path: None,
+            audio_url_path: None,
+            audio_duration_seconds: None,
+            chunks_total: None,
+            chunks_completed: 0,
+            transcript_characters: None,
+            transcript_preview: None,
+            transcript_path: None,
+            event_id: None,
+            warnings: Vec::new(),
+            started_at: now,
+            updated_at: now,
+            finished_at: None,
+            events: Vec::new(),
+        };
+        let job = self.jobs.create(job);
+        spawn_transcription_job(
+            self.service.clone(),
+            self.jobs.clone(),
+            self.gate.clone(),
+            episode,
+            job_id,
+            context,
+        );
+        structured_success(serde_json::to_value(job).unwrap())
+    }
+
+    #[tool(
+        description = "Read one transcription job: current step, chunk progress, cached audio path/size/duration, transcript preview and every warning/error event."
+    )]
+    fn podcast_transcription_status(
+        &self,
+        Parameters(params): Parameters<TranscriptionJobParams>,
+    ) -> CallToolResult {
+        match self.jobs.get(&params.job_id) {
+            Some(job) => structured_success(serde_json::to_value(job).unwrap()),
+            None => structured_error("not_found", "transcription job was not found"),
+        }
+    }
+
+    #[tool(
+        description = "List recent transcription jobs (newest first) with their stage, cached audio, transcript preview and errors, so an operator can review what was downloaded and transcribed."
+    )]
+    fn list_podcast_transcription_jobs(
+        &self,
+        Parameters(params): Parameters<ListTranscriptionJobsParams>,
+    ) -> CallToolResult {
+        let jobs = self
+            .jobs
+            .list(params.source_id.as_deref(), params.limit.unwrap_or(20) as usize);
+        structured_success(serde_json::to_value(jobs).unwrap())
+    }
+
+    #[tool(
+        description = "Request cancellation of a running transcription job. The pack CLI is terminated; the episode stays awaiting a retry."
+    )]
+    fn cancel_podcast_transcription(
+        &self,
+        Parameters(params): Parameters<TranscriptionJobParams>,
+    ) -> CallToolResult {
+        match self.jobs.cancel(&params.job_id) {
+            Some(mut job) => {
+                if !job.is_terminal() {
+                    self.jobs.update(&params.job_id, |job| {
+                        job.record("warn", "cancelled", "cancellation requested; stopping the local ASR CLI");
+                    });
+                    job = self.jobs.get(&params.job_id).unwrap_or(job);
+                }
+                structured_success(serde_json::to_value(job).unwrap())
+            }
+            None => structured_error("not_found", "transcription job was not found"),
+        }
+    }
+
+    #[tool(
+        description = "Return the retained transcript event committed for a podcast episode, so the UI can open the origin instead of only saying a transcript exists."
+    )]
+    fn find_podcast_episode_event(
+        &self,
+        Parameters(params): Parameters<FindEpisodeEventParams>,
+    ) -> CallToolResult {
+        let service = match self.service.lock() {
+            Ok(service) => service,
+            Err(_) => return structured_error("internal", "NIP service lock failed"),
+        };
+        let source_id = match SourceId::new(params.source_id.clone()) {
+            Ok(source) => source,
+            Err(error) => return structured_error("invalid_request", error.message),
+        };
+        let episodes = match service.podcast_episodes(&source_id) {
+            Ok(episodes) => episodes,
+            Err(error) => return structured_error("storage_unavailable", error.to_string()),
+        };
+        let episode = episodes.into_iter().find(|episode| {
+            params
+                .source_native_id
+                .as_deref()
+                .is_none_or(|id| episode.source_native_id.as_deref() == Some(id))
+                && params
+                    .canonical_url
+                    .as_deref()
+                    .is_none_or(|url| episode.canonical_url.as_deref() == Some(url))
+        });
+        let Some(episode) = episode else {
+            return structured_success(json!({"event": null}));
+        };
+        match service.event_for_episode(&episode) {
+            Ok(event) => structured_success(json!({"event": event})),
+            Err(error) => structured_error("storage_unavailable", error.to_string()),
+        }
+    }
+
+    #[tool(
+        description = "Remove a transcription job report. With delete_artifacts=true the cached audio/transcript files are deleted too."
+    )]
+    fn delete_podcast_transcription_job(
+        &self,
+        Parameters(params): Parameters<RemoveTranscriptionJobParams>,
+    ) -> CallToolResult {
+        let removed = self.jobs.remove(&params.job_id, params.delete_artifacts);
+        structured_success(json!({"removed": removed, "job_id": params.job_id}))
+    }
+
+    #[tool(
+        description = "List cached audio/video artifacts (downloaded episode audio and any files the comfy pack produced) with a safe playback URL path, size, MIME type and job linkage."
+    )]
+    fn list_media_artifacts(
+        &self,
+        Parameters(params): Parameters<ListMediaParams>,
+    ) -> CallToolResult {
+        let root = match self.service.lock() {
+            Ok(service) => service.config().asr_staging_root(),
+            Err(_) => return structured_error("internal", "NIP service lock failed"),
+        };
+        let artifacts = media::list_artifacts(&root, params.limit.unwrap_or(50) as usize);
+        structured_success(serde_json::to_value(artifacts).unwrap())
+    }
+
+    #[tool(
+        description = "Delete one cached media artifact. Only files inside the NIP media cache with an audio/video extension can be removed."
+    )]
+    fn delete_media_artifact(
+        &self,
+        Parameters(params): Parameters<DeleteMediaParams>,
+    ) -> CallToolResult {
+        let root = match self.service.lock() {
+            Ok(service) => service.config().asr_staging_root(),
+            Err(_) => return structured_error("internal", "NIP service lock failed"),
+        };
+        match media::resolve_artifact(&root, &params.job_id, &params.name) {
+            Ok(artifact) => match fs::remove_file(&artifact.path) {
+                Ok(()) => structured_success(json!({"removed": true, "name": params.name})),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(message) => structured_error("not_found", message),
         }
     }
 
@@ -1151,7 +1499,341 @@ impl ServerHandler for NipMcp {
 fn structured_success(value: Value) -> CallToolResult {
     CallToolResult::structured(value)
 }
-fn structured_error(code: impl Into<String>, message: impl Into<String>) -> CallToolResult {
+
+/// Everything a background job needs after it leaves the service lock.
+#[derive(Debug, Clone)]
+struct JobContext {
+    test_mode: bool,
+    comfyui_url: Option<String>,
+    render_script: PathBuf,
+    staging_root: PathBuf,
+    chunk_seconds: u32,
+}
+
+fn spawn_transcription_job(
+    service: Arc<Mutex<NipService>>,
+    registry: JobRegistry,
+    gate: Arc<Mutex<()>>,
+    episode: PodcastEpisode,
+    job_id: String,
+    context: JobContext,
+) {
+    let spawned = thread::Builder::new()
+        .name(format!("nip-transcribe-{job_id}"))
+        .spawn(move || run_transcription_job(service, registry, gate, episode, job_id, context));
+    if let Err(error) = spawned {
+        eprintln!(
+            "{}",
+            json!({
+                "event": "nip_transcription_job_spawn_failed",
+                "detail": error.to_string()
+            })
+        );
+    }
+}
+
+fn run_transcription_job(
+    service: Arc<Mutex<NipService>>,
+    registry: JobRegistry,
+    gate: Arc<Mutex<()>>,
+    episode: PodcastEpisode,
+    job_id: String,
+    context: JobContext,
+) {
+    let cancel = registry.cancel_flag(&job_id);
+    let guard = gate.lock();
+    let guard = match guard {
+        Ok(guard) => guard,
+        Err(_) => {
+            registry.update(&job_id, |job| {
+                job.fail("internal", "internal", "the local ASR slot lock failed")
+            });
+            return;
+        }
+    };
+    if cancel.load(Ordering::SeqCst) {
+        finish_cancelled(&registry, &job_id);
+        drop(guard);
+        return;
+    }
+    registry.update(&job_id, |job| {
+        job.record("info", "download", "downloading the episode enclosure")
+    });
+
+    let client = if context.test_mode {
+        HttpAudioClient::for_test()
+    } else {
+        HttpAudioClient::default()
+    };
+    let mut request = match podcast_asr_request(&episode, &client) {
+        Ok(request) => request,
+        Err(error) => {
+            let (code, message) = transcription_failure(&error);
+            registry.update(&job_id, |job| job.fail("download", code, message));
+            drop(guard);
+            return;
+        }
+    };
+    request.job_id = job_id.clone();
+
+    // Persist the downloaded audio before ASR: the review panel can replay
+    // exactly what was sent to the model, and a failed run keeps its input.
+    let directory = registry.job_dir(&job_id);
+    let audio_name = saved_audio_name(&request.file_name, &request.mime_type);
+    let audio_path = directory.join(&audio_name);
+    if let Err(error) = fs::create_dir_all(&directory).and_then(|_| fs::write(&audio_path, &request.audio)) {
+        registry.update(&job_id, |job| {
+            job.fail(
+                "download",
+                "storage_unavailable",
+                format!("the downloaded audio could not be stored: {error}"),
+            )
+        });
+        drop(guard);
+        return;
+    }
+    request.audio_path = Some(audio_path.clone());
+    let bytes = request.audio.len() as u64;
+    let duration = audio_duration_seconds(&audio_path);
+    registry.update(&job_id, |job| {
+        job.audio_bytes = Some(bytes);
+        job.audio_content_type = Some(request.mime_type.clone());
+        job.audio_path = Some(audio_path.display().to_string());
+        job.audio_url_path = Some(format!("{job_id}/{audio_name}"));
+        job.audio_duration_seconds = duration;
+        job.record(
+            "info",
+            "downloaded",
+            format!(
+                "downloaded {:.1} MB of {} audio{}",
+                bytes as f64 / (1024.0 * 1024.0),
+                request.mime_type,
+                duration
+                    .map(|value| format!(" · {:.0}s", value))
+                    .unwrap_or_default()
+            ),
+        );
+    });
+    if cancel.load(Ordering::SeqCst) {
+        finish_cancelled(&registry, &job_id);
+        drop(guard);
+        return;
+    }
+
+    let provider: Box<dyn AsrProvider> = if context.test_mode {
+        match DeterministicFakeAsrProvider::new(
+            "The fixture research team expects policy to remain restrictive until inflation cools.",
+            Some("en".into()),
+        ) {
+            Ok(provider) => Box::new(provider),
+            Err(error) => {
+                registry.update(&job_id, |job| {
+                    job.fail("transcribe", error.code(), error.to_string())
+                });
+                drop(guard);
+                return;
+            }
+        }
+    } else {
+        let Some(url) = context.comfyui_url.as_deref() else {
+            registry.update(&job_id, |job| {
+                job.fail(
+                    "transcribe",
+                    "transcription_unavailable",
+                    "NIP_COMFYUI_URL is not configured",
+                )
+            });
+            drop(guard);
+            return;
+        };
+        match ComfyUiAsrProvider::with_render_script(
+            url,
+            &context.staging_root,
+            &context.render_script,
+            context.chunk_seconds,
+        ) {
+            Ok(provider) => Box::new(provider.with_cancel(cancel.clone())),
+            Err(error) => {
+                registry.update(&job_id, |job| {
+                    job.fail("transcribe", error.code(), error.to_string())
+                });
+                drop(guard);
+                return;
+            }
+        }
+    };
+
+    let progress_registry = registry.clone();
+    let progress_job = job_id.clone();
+    let result = provider.transcribe_with_progress(&request, &move |progress| {
+        progress_registry.apply_progress(&progress_job, &progress);
+    });
+    drop(guard);
+
+    match result {
+        Ok(result) => {
+            let characters = result.text.chars().count();
+            let preview = preview_text(&result.text);
+            if let Err(error) = fs::write(directory.join("transcript.txt"), &result.text) {
+                registry.update(&job_id, |job| {
+                    job.fail(
+                        "commit",
+                        "storage_unavailable",
+                        format!("the transcript artifact could not be written: {error}"),
+                    )
+                });
+                return;
+            }
+            let committed = service
+                .lock()
+                .map_err(|_| "NIP service lock failed".to_owned())
+                .and_then(|mut service| {
+                    service
+                        .commit_podcast_transcript(&episode, result, Utc::now())
+                        .map(|_| service.event_for_episode(&episode).ok().flatten())
+                        .map_err(|error: NipError| error.to_string())
+                });
+            match committed {
+                Ok(event) => registry.update(&job_id, |job| {
+                    job.event_id = event.map(|event| event.event_id.as_str().to_owned());
+                    job.transcript_characters = Some(characters as u64);
+                    job.transcript_preview = Some(preview);
+                    job.transcript_path = Some(
+                        directory.join("transcript.txt").display().to_string(),
+                    );
+                    job.record(
+                        "info",
+                        "transcribed",
+                        format!("committed {characters} characters to the local ledger"),
+                    );
+                    job.state = "transcribed".into();
+                    job.finished_at = Some(Utc::now());
+                }),
+                Err(message) => registry.update(&job_id, |job| {
+                    job.fail("commit", "transcription_failed", message)
+                }),
+            }
+            cleanup_working_audio(&directory);
+        }
+        Err(AsrError::Cancelled) => finish_cancelled(&registry, &job_id),
+        Err(error) => {
+            if let Ok(mut service) = service.lock() {
+                let _ = service.record_transcription_failure(&episode, error.clone());
+            }
+            let code = error.code();
+            let message = asr_error_message(&error);
+            registry.update(&job_id, |job| job.fail("transcribe", code, message));
+            cleanup_working_audio(&directory);
+        }
+    }
+}
+
+fn finish_cancelled(registry: &JobRegistry, job_id: &str) {
+    cleanup_working_audio(&registry.job_dir(job_id));
+    registry.update(job_id, |job| {
+        job.record("warn", "cancelled", "transcription cancelled; the episode is ready to retry");
+        job.state = "cancelled".into();
+        job.finished_at = Some(Utc::now());
+    });
+}
+
+fn saved_audio_name(file_name: &str, mime_type: &str) -> String {
+    const PLAYABLE: &[&str] = &["mp3", "m4a", "aac", "ogg", "opus", "wav", "flac"];
+    let extension = Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_lowercase())
+        .filter(|value| PLAYABLE.contains(&value.as_str()))
+        .unwrap_or_else(|| {
+            match mime_type {
+                "audio/mpeg" => "mp3",
+                "audio/mp4" | "audio/aac" => "m4a",
+                "audio/ogg" | "audio/opus" => "ogg",
+                "audio/flac" => "flac",
+                "audio/wav" | "audio/x-wav" => "wav",
+                _ => "audio",
+            }
+            .to_owned()
+        });
+    format!("source.{extension}")
+}
+
+
+fn preview_text(text: &str) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let preview: String = collapsed.chars().take(320).collect();
+    if preview.len() < collapsed.len() {
+        format!("{preview}…")
+    } else {
+        preview
+    }
+}
+
+/// Best-effort duration for the review panel. The pack owns media processing;
+/// this only reads a header so the UI can show "31.2 MB · 42 min".
+fn audio_duration_seconds(path: &Path) -> Option<f64> {
+    let ffprobe = env::var("NIP_FFPROBE_BIN")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "ffprobe".to_owned());
+    let output = std::process::Command::new(ffprobe)
+        .arg("-v")
+        .arg("error")
+        .arg("-show_entries")
+        .arg("format=duration")
+        .arg("-of")
+        .arg("default=nw=1:nk=1")
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<f64>()
+        .ok()
+}
+
+fn transcription_failure(error: &NipError) -> (&'static str, String) {
+    match error {
+        NipError::AudioUnavailable => (
+            "audio_unavailable",
+            "the podcast audio enclosure could not be downloaded".into(),
+        ),
+        NipError::UnsupportedAudio => (
+            "unsupported_audio",
+            "the episode has no supported audio enclosure".into(),
+        ),
+        other => ("transcription_failed", other.to_string()),
+    }
+}
+
+fn asr_error_message(error: &AsrError) -> String {
+    match error {
+        AsrError::Unavailable => {
+            "the local ASR provider is unavailable; no remote fallback was attempted".into()
+        }
+        AsrError::Timeout => {
+            "local ASR timed out; the pack CLI was stopped and no transcript was committed".into()
+        }
+        AsrError::OutOfMemory => {
+            "local ASR ran out of GPU memory. The pack frees VRAM and retries by splitting chunks; close other GPU apps or lower NIP_ASR_CHUNK_SECONDS and retry."
+                .into()
+        }
+        AsrError::AudioPreparation => {
+            "audio could not be split for local ASR; check that ffmpeg can read the episode".into()
+        }
+        AsrError::MalformedOutput => {
+            "the local ASR provider returned an empty or malformed transcript".into()
+        }
+        AsrError::InvalidInput => "the episode audio is not a valid local ASR input".into(),
+        AsrError::Cancelled => "transcription was cancelled".into(),
+        AsrError::ProviderError(message) => message.clone(),
+    }
+}fn structured_error(code: impl Into<String>, message: impl Into<String>) -> CallToolResult {
     CallToolResult::structured_error(json!({"code": code.into(), "message": message.into()}))
 }
 
@@ -1181,20 +1863,8 @@ fn transcription_error(error: NipError) -> CallToolResult {
 }
 
 fn asr_error(error: AsrError) -> CallToolResult {
-    match error {
-        AsrError::Unavailable | AsrError::Timeout | AsrError::Cancelled => structured_error(
-            "transcription_unavailable",
-            "the local ASR provider is unavailable or timed out; no remote fallback was attempted",
-        ),
-        AsrError::InvalidInput | AsrError::MalformedOutput => structured_error(
-            "transcription_failed",
-            "the local ASR provider rejected the audio or returned a malformed transcript",
-        ),
-        AsrError::AudioPreparation => structured_error(
-            "transcription_failed",
-            "audio could not be split for local ASR; install ffmpeg and retry",
-        ),
-    }
+    let code = error.code();
+    structured_error(code, asr_error_message(&error))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1303,8 +1973,11 @@ async fn run() -> Result<(), String> {
             return Err("NIP service initialization failed".to_owned());
         }
     };
+    let jobs = JobRegistry::open(service.config().asr_staging_root());
     let server = NipMcp {
         service: Arc::new(Mutex::new(service)),
+        jobs,
+        gate: Arc::new(Mutex::new(())),
     };
     start_in_process_refresh_scheduler(server.service.clone());
     match cli.transport {
@@ -1395,6 +2068,19 @@ async fn serve_http(
         config,
     );
     let health_server = server.clone();
+    let media_root = server
+        .service
+        .lock()
+        .map(|service| service.config().asr_staging_root())
+        .unwrap_or_default();
+    let media_handler = {
+        let root = media_root.clone();
+        move |axum::extract::Path((job_id, name)): axum::extract::Path<(String, String)>,
+              headers: axum::http::HeaderMap| {
+            let root = root.clone();
+            async move { serve_media(&root, &job_id, &name, &headers) }
+        }
+    };
     let router = axum::Router::new()
         .route(
             "/health",
@@ -1407,6 +2093,7 @@ async fn serve_http(
                 axum::Json(body)
             }),
         )
+        .route("/media/{job_id}/{name}", axum::routing::get(media_handler))
         .nest_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind(bind)
         .await
@@ -1418,4 +2105,119 @@ async fn serve_http(
         })
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Serve cached audio/video for the review player. Playback is local-only:
+/// the MCP server is bound to loopback, and every path is resolved inside the
+/// media cache. Range requests are supported so long audio can seek.
+fn serve_media(
+    root: &Path,
+    job_id: &str,
+    name: &str,
+    headers: &axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::body::Body;
+    use axum::http::{header, StatusCode};
+    use axum::response::IntoResponse;
+
+    let artifact = match media::resolve_artifact(root, job_id, name) {
+        Ok(artifact) => artifact,
+        Err(message) => return (StatusCode::NOT_FOUND, message).into_response(),
+    };
+    let bytes = match fs::read(&artifact.path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return (StatusCode::NOT_FOUND, "media file could not be read").into_response()
+        }
+    };
+    let total = bytes.len();
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| parse_byte_range(value, total));
+    match range {
+        Some((start, end)) => {
+            let slice = bytes[start..=end].to_vec();
+            axum::response::Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(header::CONTENT_TYPE, artifact.mime)
+                .header(header::ACCEPT_RANGES, "bytes")
+                .header(
+                    header::CONTENT_RANGE,
+                    format!("bytes {start}-{end}/{total}"),
+                )
+                .header(header::CONTENT_LENGTH, end - start + 1)
+                .body(Body::from(slice))
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        }
+        None => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, artifact.mime)
+            .header(header::ACCEPT_RANGES, "bytes")
+            .header(header::CONTENT_LENGTH, total)
+            .body(Body::from(bytes))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+    }
+}
+
+/// `bytes=start-end`, `bytes=start-`, `bytes=-suffix`. Returns inclusive bounds.
+fn parse_byte_range(value: &str, total: usize) -> Option<(usize, usize)> {
+    let spec = value.trim().strip_prefix("bytes=")?;
+    let (start, end) = spec.split_once('-')?;
+    if total == 0 {
+        return None;
+    }
+    if start.is_empty() {
+        let suffix: usize = end.trim().parse().ok()?;
+        if suffix == 0 {
+            return None;
+        }
+        let start = total.saturating_sub(suffix);
+        return Some((start, total - 1));
+    }
+    let start: usize = start.trim().parse().ok()?;
+    if start >= total {
+        return None;
+    }
+    let end = if end.trim().is_empty() {
+        total - 1
+    } else {
+        end.trim().parse::<usize>().ok()?.min(total - 1)
+    };
+    (end >= start).then_some((start, end))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byte_ranges_support_browser_seeking() {
+        assert_eq!(parse_byte_range("bytes=0-99", 1000), Some((0, 99)));
+        assert_eq!(parse_byte_range("bytes=900-", 1000), Some((900, 999)));
+        assert_eq!(parse_byte_range("bytes=-50", 1000), Some((950, 999)));
+        assert_eq!(parse_byte_range("bytes=0-100000", 1000), Some((0, 999)));
+        assert_eq!(parse_byte_range("bytes=1000-", 1000), None);
+        assert_eq!(parse_byte_range("bytes=-0", 1000), None);
+        assert_eq!(parse_byte_range("items=0-1", 1000), None);
+        assert_eq!(parse_byte_range("bytes=0-1", 0), None);
+    }
+
+    #[test]
+    fn cached_audio_names_stay_inside_the_job_directory() {
+        assert_eq!(saved_audio_name("episode.mp3", "audio/mpeg"), "source.mp3");
+        assert_eq!(saved_audio_name("../../etc/passwd", "audio/mpeg"), "source.mp3");
+        assert_eq!(saved_audio_name("noext", "audio/mp4"), "source.m4a");
+        assert_eq!(saved_audio_name("x", "audio/ogg"), "source.ogg");
+        assert_eq!(saved_audio_name("x.weird", "audio/mpeg"), "source.mp3");
+    }
+
+    #[test]
+    fn transcript_previews_are_single_line_and_bounded() {
+        let preview = preview_text(&format!("{}\n\nsecond paragraph", "word ".repeat(120)));
+        assert!(!preview.contains('\n'));
+        assert!(preview.chars().count() <= 321);
+        assert!(preview.ends_with('…'));
+        assert_eq!(preview_text("short text"), "short text");
+    }
 }

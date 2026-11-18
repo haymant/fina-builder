@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { ClaimExplorer, EpisodePanel, OperationalMonitor, ProviderStatusPanel, SetupChecklist } from '../components/NarrativeWorkspace'
-import type { NipClaim, NipEvent, NipExtractionStatus, NipPodcastEpisode, NipPodcastSubscription, NipProviderStatus, NipResourceStatus } from '../types'
+import { ClaimExplorer, EpisodePanel, GraphExplorer, OperationalMonitor, ProviderStatusPanel, SetupChecklist } from '../components/NarrativeWorkspace'
+import type { NipClaim, NipEvent, NipExtractionStatus, NipNarrativeGraph, NipPodcastEpisode, NipPodcastSubscription, NipProviderStatus, NipResourceStatus } from '../types'
 
 const event: NipEvent = {
   schema_version: 1,
@@ -196,6 +196,37 @@ describe('EpisodePanel', () => {
     expect(screen.queryByRole('button', { name: /Transcribe locally/ })).toBeNull()
   })
 
+  it('shows the exact ASR blockers instead of the button when the capability is stale', () => {
+    const asrStatus = {
+      ready: false, configured: true, comfyui_url: 'http://127.0.0.1:8190', workspace: '/repo/modules/comfy',
+      workspace_present: true, render_script: '/repo/modules/comfy/scripts/render.py', render_script_present: true,
+      repo_url: 'https://github.com/haymant/comfyui-flows.git', chunk_seconds: 45, python: 'python3',
+      python_present: true, ffmpeg_present: true, server_reachable: false, server_device: null,
+      asr_nodes_present: false, pack_commit: '3de8194',
+      blockers: ['ComfyUI is not reachable at http://127.0.0.1:8190'],
+      next_actions: ['Start ComfyUI Desktop (or scripts/open_comfyui.sh) and retry.'],
+    }
+    renderPanel({ asrStatus, onPrepareWorkspace: vi.fn(), onRefreshAsr: vi.fn() })
+    expect(screen.getByTestId('asr-blockers').textContent).toContain('ComfyUI is not reachable')
+    expect(screen.queryByRole('button', { name: /Transcribe locally/ })).toBeNull()
+  })
+
+  it('shows the failing step and cached audio for a job attached to the episode', () => {
+    const job = {
+      job_id: 'job-9', source_id: 'fixture-show', source_native_id: 'nip-fixture-episode-1', canonical_url: null,
+      title: 'Policy outlook fixture', state: 'failed', step: 'transcribe', detail: 'chunk 3/7',
+      error_code: 'transcription_oom', error_message: 'local ASR ran out of GPU memory', audio_bytes: 31457280,
+      audio_content_type: 'audio/mpeg', audio_path: '/tmp/source.mp3', audio_url_path: 'job-9/source.mp3',
+      audio_duration_seconds: 1500, chunks_total: 7, chunks_completed: 2, transcript_characters: null,
+      transcript_preview: null, transcript_path: null, event_id: null, warnings: [], started_at: '2026-11-18T01:00:00Z',
+      updated_at: '2026-11-18T01:01:00Z', finished_at: '2026-11-18T01:01:00Z', events: [],
+    }
+    renderPanel({ jobs: [job], mediaBase: 'http://127.0.0.1:1/media' })
+    expect(screen.getByText(/Failed at transcribe/)).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toContain('local ASR ran out of GPU memory')
+    expect(screen.getByTestId('cached-audio-player').getAttribute('src')).toBe('http://127.0.0.1:1/media/job-9/source.mp3')
+  })
+
   it('offers a retry after the local provider reported unavailable', () => {
     renderPanel({ episodes: [{ ...episode, state: 'transcription_unavailable' }] })
     expect(screen.getByRole('button', { name: /Retry local transcription/ })).toBeTruthy()
@@ -205,6 +236,13 @@ describe('EpisodePanel', () => {
   it('explains a non-retryable transcription state without implying a remote fallback', () => {
     renderPanel({ episodes: [{ ...episode, state: 'not_eligible' }] })
     expect(screen.getByText(/will not upload audio or substitute a remote ASR service/)).toBeTruthy()
+  })
+
+  it('links a transcribed episode to its retained transcript event', () => {
+    const onOpenTranscript = vi.fn()
+    renderPanel({ episodes: [{ ...episode, state: 'transcribed' }], onOpenTranscript })
+    fireEvent.click(screen.getByRole('button', { name: /Open retained transcript/ }))
+    expect(onOpenTranscript).toHaveBeenCalledWith({ ...episode, state: 'transcribed' })
   })
 
   it('sends sort, source and title changes to the server-side query', () => {
@@ -221,5 +259,40 @@ describe('EpisodePanel', () => {
     renderPanel({ total: 128, hasMore: true })
     expect(screen.getByText(/Showing 1 of 128 episodes/)).toBeTruthy()
     expect(screen.getByText(/Scroll for more episodes/)).toBeTruthy()
+  })
+})
+
+const graph: NipNarrativeGraph = {
+  graph_id: 'graph-1',
+  derivation_run_id: 'graph-run-1',
+  algorithm_version: 'nip-graph-v1',
+  created_at: '2026-11-18T01:00:00Z',
+  nodes: [
+    { node_id: 'event:event-fixture-1', node_type: 'event', label: 'episode-1', evidence_event_ids: ['event-fixture-1'] },
+    { node_id: 'claim:claim-fixture-1', node_type: 'claim', label: 'Policy remains restrictive.', evidence_event_ids: ['event-fixture-1'] },
+  ],
+  edges: [
+    { edge_id: 'edge:claim:1', from_node_id: 'claim:claim-fixture-1', to_node_id: 'event:event-fixture-1', edge_type: 'claim_support', evidence_event_ids: ['event-fixture-1'], confidence_millis: 920, derivation_run_id: 'graph-run-1' },
+  ],
+}
+
+describe('GraphExplorer', () => {
+  it('shows retained origins and links each node and edge back to its event', () => {
+    const onOpenEvent = vi.fn()
+    render(<GraphExplorer graph={graph} events={[event]} onOpenEvent={onOpenEvent} />)
+    expect(screen.getByText('Retained origins')).toBeTruthy()
+    expect(screen.getByText('1 retained origins')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'episode-1' }))
+    expect(onOpenEvent).toHaveBeenCalledWith('event-fixture-1')
+    fireEvent.click(screen.getAllByRole('button', { name: /Origin episode-1/ })[0])
+    expect(onOpenEvent).toHaveBeenCalledWith('event-fixture-1')
+  })
+
+  it('explains the prerequisites when the projection has no origin nodes', () => {
+    const onBackToEvents = vi.fn()
+    render(<GraphExplorer graph={{ ...graph, nodes: [], edges: [] }} events={[event]} onOpenEvent={vi.fn()} onBackToEvents={onBackToEvents} />)
+    expect(screen.getByTestId('graph-empty').textContent).toContain('no origin nodes yet')
+    fireEvent.click(screen.getByRole('button', { name: /Open retained events/ }))
+    expect(onBackToEvents).toHaveBeenCalled()
   })
 })

@@ -201,10 +201,10 @@ test.describe('Narrative Intelligence first-run setup', () => {
     await expect(page.getByText('Illustrative Test Corpus').first()).toBeVisible()
     await expect(page.getByText('Policy outlook fixture')).toBeVisible()
     await page.getByRole('button', { name: 'Transcribe locally' }).click()
-    await expect.poll(() => state.transcribed).toBe(true)
-    await expect(page.getByText('Episode transcribed locally.')).toBeVisible()
+    await expect.poll(() => state.transcribed, { timeout: 120_000 }).toBe(true)
+    await expect(page.getByText('Transcript committed.', { exact: false })).toBeVisible({ timeout: 120_000 })
 
-    await page.getByRole('button', { name: /nip-fixture-episode-1/ }).click()
+    await page.getByRole('button', { name: /Open retained transcript/ }).first().click()
     await expect(page.getByText(/Source-linked record/)).toBeVisible()
     await expect(page.getByTestId('event-consent')).toBeVisible()
     await page.getByTestId('event-consent-grant').click()

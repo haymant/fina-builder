@@ -328,3 +328,84 @@ export interface NipSource {
   event_count: number
   episode_count: number
 }
+
+export interface NipAsrStatus {
+  ready: boolean
+  configured: boolean
+  comfyui_url: string | null
+  workspace: string
+  workspace_present: boolean
+  render_script: string
+  render_script_present: boolean
+  repo_url: string | null
+  chunk_seconds: number
+  python: string
+  python_present: boolean
+  ffmpeg_present: boolean
+  server_reachable: boolean
+  server_device: string | null
+  asr_nodes_present: boolean
+  pack_commit: string | null
+  blockers: string[]
+  next_actions: string[]
+}
+
+export interface NipTranscriptionJobEvent {
+  at: string
+  level: string
+  step: string
+  detail: string
+}
+
+export interface NipTranscriptionJob {
+  job_id: string
+  source_id: string
+  source_native_id: string | null
+  canonical_url: string | null
+  title: string | null
+  state: string
+  step: string
+  detail: string | null
+  error_code: string | null
+  error_message: string | null
+  audio_bytes: number | null
+  audio_content_type: string | null
+  audio_path: string | null
+  audio_url_path: string | null
+  audio_duration_seconds: number | null
+  chunks_total: number | null
+  chunks_completed: number
+  transcript_characters: number | null
+  transcript_preview: string | null
+  transcript_path: string | null
+  event_id: string | null
+  warnings: string[]
+  started_at: string
+  updated_at: string
+  finished_at: string | null
+  events: NipTranscriptionJobEvent[]
+}
+
+export interface NipMediaArtifact {
+  job_id: string
+  name: string
+  url_path: string
+  kind: 'audio' | 'video' | string
+  mime: string
+  bytes: number
+  modified_at: string
+  title: string | null
+  source_id: string | null
+}
+
+export interface NipComfyWorkspaceReport {
+  workspace: string
+  render_script: string
+  cloned: boolean
+  commit: string | null
+  message: string
+}
+
+export interface NipEpisodeEventLookup {
+  event: NipEvent | null
+}

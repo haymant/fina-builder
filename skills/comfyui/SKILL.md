@@ -57,7 +57,26 @@ python3 modules/comfy/scripts/render.py asr \
 
 `render.py asr` uploads the audio to ComfyUI's input, submits
 `workflows/api/qwen3_asr_local.api.json`, polls `/history/{prompt_id}`, and reads
-the transcript from `outputs`. The live round-trip test is:
+the transcript from `outputs`.
+
+For a podcast-length file use `asr-long`, which chunks at 45s (the Qwen3-ASR
+node caps output at 256 tokens), releases ComfyUI VRAM first, retries after an
+OOM by halving the chunk, and writes a review sidecar:
+
+```bash
+python3 modules/comfy/scripts/render.py asr-long \
+  --server http://127.0.0.1:8190 \
+  --audio episode.mp3 --chunk-seconds 45 \
+  --output /tmp/episode.txt
+```
+
+fina-builder does not embed these graphs. NIP resolves the pack from
+`NIP_COMFY_DIR` (default `modules/comfy`), optionally clones it from
+`NIP_COMFY_REPO`, then invokes exactly this CLI and only wraps artifacts,
+progress and job state. If a capability is missing, extend the pack and its
+CLI; do not add an ASR workflow inside fina-builder.
+
+The live round-trip test is:
 
 ```bash
 (cd modules/comfy && COMFY_ROUNDTRIP=1 COMFYUI_SERVER=http://127.0.0.1:8190 \

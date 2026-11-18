@@ -46,7 +46,13 @@ The **Approved sources** and **Refresh status** cards show feed URL, rights-conf
 
 The **Discovered episodes** card is the primary ingestion surface. It lists RSS metadata (episode GUID, title, publication time, enclosure, state) and never asks the user to import each episode file.
 
-For an episode in `awaiting_local_transcription`, choose **Transcribe locally**. In the current test/demo environment this calls the deterministic local ASR fixture. In a production configuration, local transcription remains gated on a validated ComfyUI/ASR runtime and the cleanup/retention acceptance tests in docs 59/60. The UI reports transcription as unavailable rather than uploading audio to a remote ASR service or silently substituting a cloud provider.
+For an episode in `awaiting_local_transcription`, choose **Transcribe locally**. The action starts a job and
+returns immediately; the episode row then shows the current stage (download → split → chunk n/N → commit),
+the cached audio player, and the exact failing step and code if anything goes wrong. In a production
+configuration the job calls the independent `comfy` pack CLI (`render.py asr-long`) through a loopback
+ComfyUI; **Cached media** replays the downloaded audio and any generated audio/video until the user deletes
+it. The UI reports missing prerequisites from `nip_asr_status` instead of uploading audio to a remote ASR
+service or silently substituting a cloud provider.
 
 A successful run commits one immutable event with:
 
@@ -113,7 +119,7 @@ Narration transcript (timing is the final mix):
 | 0:06 | Five setup gates: service, provider, source, transcript, and claims. |
 | 0:12 | Rights confirmation comes before any fetch. One approval subscribes and syncs. |
 | 0:19 | RSS discovery finds the episode automatically, with no file import. |
-| 0:25 | Transcribe locally. Audio is temporary; the transcript keeps source and hash. |
+| 0:25 | Transcribe locally. The job shows download/chunk/commit progress, keeps the downloaded audio reviewable, and the transcript keeps source and hash. |
 | 0:31 | The retained event is immutable and separates publication, capture, and ingestion time. |
 | 0:36 | Remote extraction needs consent, bound to this provider and model. |
 | 0:43 | Extraction commits evidence-linked claims with full derivation provenance. |

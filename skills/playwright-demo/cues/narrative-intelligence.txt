@@ -1,0 +1,20 @@
+# Narrative Intelligence — one cue per recorded demo beat.
+# Keep each line in beat order. The exporter uses demo-timeline.json.
+Narrative Intelligence runs inside fina-builder. Open the Narrative menu and choose the workspace. This demo uses a synthetic feed and a local ledger.
+The desktop workspace is ready.
+The workspace opens on the local NIP ledger, with no cloud service in the path.
+Five gates: service, provider, source, transcript, and evidence-linked claims.
+Rights confirmation comes before any fetch. One approval subscribes the feed and starts the sync.
+RSS discovery finds the episode. Only metadata arrives until you transcribe.
+Transcribe locally. Long audio is split into five-minute chunks, and the job line shows each step through commit.
+The retained event is immutable: source, publication, capture and ingestion times, plus a content hash.
+Remote extraction stays blocked until consent is granted for this provider and model.
+Once granted, extraction may send text to that provider. Revocation is audited.
+Extraction commits claims with evidence quotes and a full derivation record.
+Claim Explorer shows confidence, provider, model, prompt version, and every linked source quote.
+Clusters and the graph are versioned projections. Every edge points back to retained evidence.
+Follow an edge and the graph opens the immutable origin event, not a copy.
+Radar compares completed UTC weeks and labels coverage honestly. Timeline keeps the same point-in-time evidence and never invents a score.
+ETF mappings are dated research records. Editorial candidates stay unreviewed until a person decides.
+Cached media and the per-step job log stay reviewable, so you can replay the exact downloaded audio.
+That is the journey: rights, discovery, local transcription, retained evidence, and derived views you can verify.

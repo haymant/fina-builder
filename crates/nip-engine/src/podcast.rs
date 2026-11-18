@@ -11,7 +11,7 @@ use url::Url;
 
 pub const PRODUCTION_POLL_INTERVAL: TimeDelta = TimeDelta::hours(6);
 const MAX_FEED_BYTES: u64 = 4 * 1024 * 1024;
-pub const MAX_AUDIO_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_AUDIO_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_BACKOFF: TimeDelta = TimeDelta::hours(6);
 const BASE_BACKOFF: TimeDelta = TimeDelta::minutes(1);
 
@@ -81,7 +81,7 @@ impl HttpAudioClient {
     fn new(allow_loopback: bool) -> Self {
         let config = Agent::config_builder()
             .http_status_as_error(false)
-            .timeout_global(Some(Duration::from_secs(60)))
+            .timeout_global(Some(Duration::from_secs(300)))
             .max_redirects(0)
             .build();
         Self {

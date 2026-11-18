@@ -58,6 +58,14 @@ small Rust MCP client. This is deliberate — the DuckDB ledger has a single wri
 second stdio `nip-engine` would fail on the database lock. Do not add NIP to the stdio
 engine list.
 
+Audio/video processing is not implemented in this repo. The independent `comfy` pack
+(`scripts/render.py`) owns it; NIP resolves `NIP_COMFY_DIR` (default `modules/comfy`),
+optionally clones `NIP_COMFY_REPO` into it, and invokes `render.py asr-long`. NIP keeps
+the downloaded audio and transcript as reviewable artifacts under
+`<NIP_DATA_DIR>/asr-staging/<job_id>/` and serves them on the loopback `/media` route so
+the desktop can replay them. Add new media capabilities to the pack and its CLI; only the
+artifact/job wrapper belongs here.
+
 The frontend reaches the engines through the same transports the tiles use
 (`src/api/rigaTransport.ts`, `src/api/tacTransport.ts`) — Tauri IPC in the desktop, HTTP
 (`/riga/mcp`, `/tac/mcp`) in the browser.

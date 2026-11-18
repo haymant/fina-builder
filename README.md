@@ -147,6 +147,23 @@ PLAYWRIGHT_NIP=on npm run test:e2e:journey:narrative
 PLAYWRIGHT_NIP=on npm run test:e2e:demo -- --grep @demo-narrative-research
 ```
 
+Local transcription is performed by the independent `comfy` workflow pack, not by this
+repository. NIP resolves the pack from `NIP_COMFY_DIR` (default `modules/comfy`), or clones
+`NIP_COMFY_REPO` into that directory with the **Clone comfy pack** action, and invokes
+`scripts/render.py asr-long`. Configure:
+
+```bash
+NIP_COMFYUI_URL=http://127.0.0.1:8190        # loopback ComfyUI with the Qwen3-ASR nodes
+NIP_COMFY_DIR=/path/to/comfyui-flows         # optional; defaults to modules/comfy
+NIP_COMFY_REPO=https://github.com/haymant/comfyui-flows.git  # optional auto-clone source
+NIP_ASR_CHUNK_SECONDS=45                     # optional; Qwen3-ASR caps output at 256 tokens
+```
+
+`nip_asr_status` names every missing prerequisite. A transcription run is a job: the
+Narrative workspace shows its download/transcribe/commit stage, cached audio, warnings,
+transcript preview, and the exact step that failed. Cached audio/video can be replayed from
+the **Cached media** tile card and deleted explicitly.
+
 The live tests use a disposable DuckDB store, a loopback RSS/audio fixture, and a deterministic
 loopback provider bridge. They do not contact a public feed, remote ASR, or public model endpoint.
 

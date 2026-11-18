@@ -1,33 +1,48 @@
+//! NIP's narrow local-ASR boundary.
+//!
+//! The `comfy` pack is an independent audio/video workflow repository with a
+//! documented CLI. fina-builder never embeds those graphs or re-implements the
+//! ComfyUI protocol: this adapter resolves `modules/comfy/scripts/render.py`
+//! (or the checkout named by `NIP_COMFY_DIR` / `NIP_COMFY_RENDER`, optionally
+//! cloned from `NIP_COMFY_REPO`) and runs its `asr-long` mode once per episode.
+//!
+//! Everything that needs GPU knowledge — chunking, releasing VRAM, recovering
+//! from `torch.OutOfMemoryError`, and warning about the Qwen3-ASR 256-token cap
+//! — lives in the pack. This file only runs the tool and maps its progress
+//! lines and exit status onto NIP's progress/error types.
+
 use std::env;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::net::{IpAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use thiserror::Error;
-use ureq::Agent;
 use url::Url;
 
-const MAX_AUDIO_BYTES: usize = 64 * 1024 * 1024;
+/// Podcast enclosures are capped before they are held in memory by the engine.
+const MAX_AUDIO_BYTES: usize = 256 * 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES: usize = 2 * 1024 * 1024;
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
-const HISTORY_POLL_INTERVAL: Duration = Duration::from_millis(500);
-const MAX_HISTORY_POLLS: usize = 3_600; // 30 minutes for a long local episode
-/// Long episodes are split into short mono 16 kHz WAV chunks. A full hour in
-/// one prompt exhausts an 8 GB GPU even with the 0.6B model.
-const ASR_CHUNK_SECONDS: u32 = 300;
-const WORKFLOW_VERSION: &str = "qwen3-asr-local-v1";
-const WORKFLOW_JSON: &str =
-    include_str!("../../../modules/comfy/workflows/api/qwen3_asr_local.api.json");
+/// 45 seconds of speech stays below the `Qwen3ASRLoader` 256-token cap for
+/// English; the pack's `asr-long` mode warns when a chunk still looks cut.
+pub const DEFAULT_CHUNK_SECONDS: u32 = 45;
+const DEFAULT_CHUNK_TIMEOUT: Duration = Duration::from_secs(7_200);
+const PROGRESS_PREFIX: &str = "[asr-long]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AsrRequest {
     pub job_id: String,
     pub audio: Vec<u8>,
+    /// Set when the caller already persisted the download (the desktop job
+    /// store does). Otherwise the adapter writes the bytes into its staging
+    /// directory before invoking the CLI.
+    pub audio_path: Option<PathBuf>,
     pub file_name: String,
     pub mime_type: String,
     pub language: Option<String>,
@@ -73,12 +88,61 @@ pub enum AsrError {
     AudioPreparation,
     #[error("ASR operation was cancelled")]
     Cancelled,
+    #[error("local ASR ran out of GPU memory")]
+    OutOfMemory,
+    #[error("{0}")]
+    ProviderError(String),
+}
+
+impl AsrError {
+    /// Stable code shown by the UI and recorded on the episode/job.
+    pub fn code(&self) -> &'static str {
+        match self {
+            AsrError::InvalidInput => "invalid_audio",
+            AsrError::Unavailable => "transcription_unavailable",
+            AsrError::Timeout => "transcription_timeout",
+            AsrError::MalformedOutput => "transcription_empty",
+            AsrError::AudioPreparation => "audio_preparation_failed",
+            AsrError::Cancelled => "transcription_cancelled",
+            AsrError::OutOfMemory => "transcription_oom",
+            AsrError::ProviderError(_) => "transcription_failed",
+        }
+    }
+}
+
+/// Progress reported while a long episode is transcribed. The desktop records
+/// these as human-readable job steps so an operator can see which stage failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AsrProgress {
+    FreedMemory,
+    Prepared { chunks: usize, chunk_seconds: u32 },
+    ChunkStarted { index: usize, total: usize },
+    ChunkFinished {
+        index: usize,
+        total: usize,
+        characters: usize,
+    },
+    Retrying {
+        index: usize,
+        total: usize,
+        reason: String,
+    },
+    Warning { message: String },
 }
 
 /// NIP's narrow local-ASR boundary. Implementations must not fetch source URLs,
 /// write canonical records, or select a remote fallback.
 pub trait AsrProvider: Send + Sync {
     fn transcribe(&self, request: &AsrRequest) -> Result<AsrResult, AsrError>;
+
+    /// Default implementation keeps simple providers (and tests) unchanged.
+    fn transcribe_with_progress(
+        &self,
+        request: &AsrRequest,
+        _progress: &dyn Fn(AsrProgress),
+    ) -> Result<AsrResult, AsrError> {
+        self.transcribe(request)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -163,11 +227,35 @@ fn is_loopback_host(host: &str) -> bool {
             .unwrap_or(false)
 }
 
+/// Sidecar written by `render.py asr-long` next to the transcript.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AsrLongReport {
+    #[serde(default)]
+    pub chunks: usize,
+    #[serde(default)]
+    pub chunk_seconds: u32,
+    #[serde(default)]
+    pub duration_seconds: Option<f64>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    #[serde(default)]
+    pub device: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// Local ASR driven by the independent `comfy` pack CLI.
+///
+/// The wrapper owns only process invocation and artifact/status reporting.
 #[derive(Debug)]
 pub struct ComfyUiAsrProvider {
     endpoint: LoopbackUrl,
     staging_root: PathBuf,
-    agent: Agent,
+    render_script: PathBuf,
+    python: String,
+    chunk_seconds: u32,
+    chunk_timeout: Duration,
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 impl ComfyUiAsrProvider {
@@ -181,20 +269,77 @@ impl ComfyUiAsrProvider {
         }
     }
 
+    /// Resolve the CLI from the environment. Prefer
+    /// [`ComfyUiAsrProvider::with_render_script`] so the resolved workspace in
+    /// `NipConfig` is the single source of truth.
     pub fn new(endpoint: &str, staging_root: impl Into<PathBuf>) -> Result<Self, AsrError> {
+        let render_script = env::var("NIP_COMFY_RENDER")
+            .ok()
+            .map(PathBuf::from)
+            .filter(|path| path.is_file())
+            .or_else(|| {
+                let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+                let candidate = repo.join("modules/comfy/scripts/render.py");
+                candidate.is_file().then_some(candidate)
+            })
+            .ok_or_else(|| {
+                AsrError::ProviderError(
+                    "the comfy pack CLI was not found; set NIP_COMFY_DIR or NIP_COMFY_RENDER"
+                        .into(),
+                )
+            })?;
+        Self::with_render_script(endpoint, staging_root, render_script, DEFAULT_CHUNK_SECONDS)
+    }
+
+    pub fn with_render_script(
+        endpoint: &str,
+        staging_root: impl Into<PathBuf>,
+        render_script: impl Into<PathBuf>,
+        chunk_seconds: u32,
+    ) -> Result<Self, AsrError> {
+        let chunk_timeout = env::var("NIP_ASR_CHUNK_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|value| *value >= 30)
+            .map(Duration::from_secs)
+            .unwrap_or(DEFAULT_CHUNK_TIMEOUT);
         Ok(Self {
             endpoint: LoopbackUrl::parse(endpoint)?,
             staging_root: staging_root.into(),
-            agent: Agent::config_builder()
-                .http_status_as_error(false)
-                .timeout_global(Some(DEFAULT_TIMEOUT))
-                .build()
-                .into(),
+            render_script: render_script.into(),
+            python: env::var("NIP_PYTHON_BIN")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "python3".to_owned()),
+            chunk_seconds: chunk_seconds.clamp(10, 600),
+            chunk_timeout,
+            cancel: None,
         })
+    }
+
+    /// Stop the pack CLI when the operator cancels the job. The process owns
+    /// the GPU work, so cancellation must terminate it rather than wait.
+    pub fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
     }
 
     pub fn endpoint(&self) -> &str {
         self.endpoint.as_str()
+    }
+
+    pub fn render_script(&self) -> &Path {
+        &self.render_script
+    }
+
+    pub fn chunk_seconds(&self) -> u32 {
+        self.chunk_seconds
     }
 
     fn job_dir(&self, job_id: &str) -> Result<PathBuf, AsrError> {
@@ -208,227 +353,331 @@ impl ComfyUiAsrProvider {
         Ok(self.staging_root.join(job_id))
     }
 
-    fn upload_audio(&self, path: &Path, file_name: &str, mime_type: &str) -> Result<(), AsrError> {
-        let bytes = fs::read(path).map_err(|_| AsrError::Unavailable)?;
-        let boundary = "nip-comfy-boundary";
-        let mut body = Vec::with_capacity(bytes.len() + 512);
-        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        body.extend_from_slice(
-            format!(
-                "Content-Disposition: form-data; name=\"image\"; filename=\"{}\"\r\nContent-Type: {}\r\n\r\n",
-                safe_file_name(file_name),
-                mime_type
-            )
-            .as_bytes(),
-        );
-        body.extend_from_slice(&bytes);
-        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-        let url = format!("{}/upload/image", self.endpoint.as_str());
-        let response = self
-            .agent
-            .post(&url)
-            .header(
-                "Content-Type",
-                &format!("multipart/form-data; boundary={boundary}"),
-            )
-            .send(body)
-            .map_err(|_| AsrError::Unavailable)?;
-        if response.status().as_u16() >= 300 {
-            return Err(AsrError::Unavailable);
+    /// Persist the downloaded audio so the CLI (and the operator) can review
+    /// exactly what was transcribed. The desktop job store normally sets
+    /// `audio_path`; this covers direct MCP/skill invocations.
+    fn stage_audio(&self, directory: &Path, request: &AsrRequest) -> Result<PathBuf, AsrError> {
+        if let Some(path) = request.audio_path.as_ref().filter(|path| path.is_file()) {
+            return Ok(path.clone());
         }
-        Ok(())
+        let input = directory.join(safe_file_name(&request.file_name));
+        fs::write(&input, &request.audio).map_err(|_| AsrError::Unavailable)?;
+        Ok(input)
     }
 
-    fn submit_workflow(&self, file_name: &str, request: &AsrRequest) -> Result<String, AsrError> {
-        let mut workflow: Value =
-            serde_json::from_str(WORKFLOW_JSON).map_err(|_| AsrError::Unavailable)?;
-        let nodes = workflow.as_object_mut().ok_or(AsrError::Unavailable)?;
-        let audio = nodes
-            .get_mut("1")
-            .and_then(Value::as_object_mut)
-            .and_then(|node| node.get_mut("inputs"))
-            .and_then(Value::as_object_mut)
-            .ok_or(AsrError::Unavailable)?;
-        audio.insert("audio".into(), Value::String(file_name.to_owned()));
-        if let Some(language) = request.language.as_deref() {
-            if let Some(inputs) = nodes
-                .get_mut("3")
-                .and_then(Value::as_object_mut)
-                .and_then(|node| node.get_mut("inputs"))
-                .and_then(Value::as_object_mut)
-            {
-                inputs.insert("language".into(), Value::String(language.to_owned()));
-            }
+    fn run_cli(
+        &self,
+        audio: &Path,
+        output: &Path,
+        request: &AsrRequest,
+        progress: &dyn Fn(AsrProgress),
+    ) -> Result<(), AsrError> {
+        if self.cancelled() {
+            return Err(AsrError::Cancelled);
         }
-        if let Some(inputs) = nodes
-            .get_mut("3")
-            .and_then(Value::as_object_mut)
-            .and_then(|node| node.get_mut("inputs"))
-            .and_then(Value::as_object_mut)
+        let log = output.with_extension("log");
+        let stderr = fs::File::create(&log).map_err(|_| AsrError::Unavailable)?;
+        let mut command = Command::new(&self.python);
+        command
+            .arg(&self.render_script)
+            .arg("asr-long")
+            .arg("--server")
+            .arg(self.endpoint.as_str())
+            .arg("--audio")
+            .arg(audio)
+            .arg("--output")
+            .arg(output)
+            .arg("--chunk-seconds")
+            .arg(self.chunk_seconds.to_string())
+            .arg("--work-dir")
+            .arg(output.parent().unwrap_or(Path::new(".")))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(stderr);
+        if let Some(language) = request
+            .language
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
         {
-            inputs.insert(
-                "return_timestamps".into(),
-                Value::Bool(request.return_timestamps),
-            );
+            command.arg("--language").arg(language);
         }
-        let payload = json!({"prompt": workflow, "client_id": request.job_id});
-        let mut response = self
-            .agent
-            .post(&format!("{}/prompt", self.endpoint.as_str()))
-            .header("Content-Type", "application/json")
-            .send(payload.to_string())
-            .map_err(|_| AsrError::Unavailable)?;
-        if response.status().as_u16() >= 300 {
-            return Err(AsrError::Unavailable);
-        }
-        let body = response
-            .body_mut()
-            .read_to_string()
-            .map_err(|_| AsrError::MalformedOutput)?;
-        let value: Value = serde_json::from_str(&body).map_err(|_| AsrError::MalformedOutput)?;
-        value
-            .get("prompt_id")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .ok_or(AsrError::MalformedOutput)
-    }
-
-    fn read_history(&self, prompt_id: &str) -> Result<AsrResult, AsrError> {
-        for _ in 0..MAX_HISTORY_POLLS {
-            let mut response = self
-                .agent
-                .get(&format!("{}/history/{}", self.endpoint.as_str(), prompt_id))
-                .call()
-                .map_err(|_| AsrError::Unavailable)?;
-            if response.status().as_u16() >= 300 {
-                return Err(AsrError::Unavailable);
+        let mut child = command.spawn().map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                AsrError::ProviderError(format!(
+                    "the ASR CLI could not start: {} {} (set NIP_PYTHON_BIN)",
+                    self.python,
+                    self.render_script.display()
+                ))
+            } else {
+                AsrError::Unavailable
             }
-            let body = response
-                .body_mut()
-                .read_to_string()
-                .map_err(|_| AsrError::MalformedOutput)?;
-            let value: Value =
-                serde_json::from_str(&body).map_err(|_| AsrError::MalformedOutput)?;
-            if let Some(result) = parse_history_result(&value)? {
-                return Ok(result);
+        })?;
+        let started = Instant::now();
+        let mut offset = 0_u64;
+        loop {
+            offset = drain_progress(&log, offset, progress);
+            if self.cancelled() {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(AsrError::Cancelled);
             }
-            thread::sleep(HISTORY_POLL_INTERVAL);
+            if let Some(status) = child.try_wait().map_err(|_| AsrError::Unavailable)? {
+                // Flush whatever the CLI wrote just before exiting.
+                drain_progress(&log, offset, progress);
+                let detail = read_tail(&log, 4_000);
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err(classify_failure(status.code(), &detail))
+                };
+            }
+            if started.elapsed() > self.chunk_timeout {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(AsrError::Timeout);
+            }
+            thread::sleep(Duration::from_millis(400));
         }
-        Err(AsrError::Timeout)
     }
 }
 
 impl AsrProvider for ComfyUiAsrProvider {
     fn transcribe(&self, request: &AsrRequest) -> Result<AsrResult, AsrError> {
+        self.transcribe_with_progress(request, &|_| {})
+    }
+
+    fn transcribe_with_progress(
+        &self,
+        request: &AsrRequest,
+        progress: &dyn Fn(AsrProgress),
+    ) -> Result<AsrResult, AsrError> {
         validate_request(request)?;
         if request.audio.len() > MAX_AUDIO_BYTES {
             return Err(AsrError::InvalidInput);
         }
         let directory = self.job_dir(&request.job_id)?;
         fs::create_dir_all(&directory).map_err(|_| AsrError::Unavailable)?;
-        let result = (|| {
-            let chunks = self.prepare_chunks(&directory, request)?;
-            let mut texts = Vec::new();
-            let mut language = None;
-            for chunk in &chunks {
-                let file_name = chunk
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(safe_file_name)
-                    .ok_or(AsrError::AudioPreparation)?;
-                self.upload_audio(chunk, &file_name, "audio/wav")?;
-                let prompt_id = self.submit_workflow(&file_name, request)?;
-                let result = self.read_history(&prompt_id)?;
-                if !result.text.trim().is_empty() {
-                    texts.push(result.text.trim().to_owned());
-                }
-                if language.is_none() {
-                    language = result.language;
-                }
-            }
-            if texts.is_empty() {
-                return Err(AsrError::MalformedOutput);
-            }
-            Ok(AsrResult {
-                text: texts.join("\n\n"),
-                language,
-                timings: Vec::new(),
-                provenance: AsrProvenance {
-                    workflow_version: WORKFLOW_VERSION.into(),
-                    workflow_hash: stable_hash(WORKFLOW_JSON.as_bytes()),
-                    device: None,
-                    precision: None,
-                    model: "Qwen/Qwen3-ASR-0.6B".into(),
-                    node: "DarioFT/ComfyUI-Qwen3-ASR".into(),
-                },
-            })
-        })();
-        let _ = fs::remove_dir_all(&directory);
-        result
+        let audio = self.stage_audio(&directory, request)?;
+        let output = directory.join("transcript.txt");
+        self.run_cli(&audio, &output, request, progress)?;
+        let text = fs::read_to_string(&output)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .ok_or(AsrError::MalformedOutput)?;
+        if text.len() > MAX_TRANSCRIPT_BYTES {
+            return Err(AsrError::MalformedOutput);
+        }
+        let report = read_report(&output);
+        for warning in &report.warnings {
+            progress(AsrProgress::Warning {
+                message: warning.clone(),
+            });
+        }
+        let script_hash = fs::read(&self.render_script)
+            .map(|bytes| stable_hash(&bytes))
+            .unwrap_or_else(|_| "unavailable".into());
+        Ok(AsrResult {
+            text,
+            language: None,
+            timings: Vec::new(),
+            provenance: AsrProvenance {
+                workflow_version: "comfy-cli-asr-long-v1".into(),
+                workflow_hash: script_hash,
+                device: report.device,
+                precision: None,
+                model: report
+                    .model
+                    .unwrap_or_else(|| "Qwen/Qwen3-ASR-0.6B".into()),
+                node: "modules/comfy/scripts/render.py asr-long".into(),
+            },
+        })
     }
 }
 
-impl ComfyUiAsrProvider {
-    fn prepare_chunks(
-        &self,
-        directory: &Path,
-        request: &AsrRequest,
-    ) -> Result<Vec<PathBuf>, AsrError> {
-        let input = directory.join(safe_file_name(&request.file_name));
-        fs::write(&input, &request.audio).map_err(|_| AsrError::Unavailable)?;
-        let pattern = directory.join("chunk-%03d.wav");
-        let ffmpeg = env::var("NIP_FFMPEG_BIN")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "ffmpeg".to_owned());
-        let output = Command::new(ffmpeg)
-            .arg("-hide_banner")
-            .arg("-loglevel")
-            .arg("error")
-            .arg("-y")
-            .arg("-i")
-            .arg(&input)
-            .arg("-ac")
-            .arg("1")
-            .arg("-ar")
-            .arg("16000")
-            .arg("-f")
-            .arg("segment")
-            .arg("-segment_time")
-            .arg(ASR_CHUNK_SECONDS.to_string())
-            .arg("-reset_timestamps")
-            .arg("1")
-            .arg(&pattern)
-            .output()
-            .map_err(|_| AsrError::AudioPreparation)?;
-        if !output.status.success() {
-            eprintln!(
-                "NIP ASR: ffmpeg could not prepare audio: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-            return Err(AsrError::AudioPreparation);
-        }
-        let mut chunks = fs::read_dir(directory)
-            .map_err(|_| AsrError::Unavailable)?
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with("chunk-") && name.ends_with(".wav"))
-            })
-            .collect::<Vec<_>>();
-        chunks.sort();
-        if chunks.is_empty() {
-            return Err(AsrError::AudioPreparation);
-        }
-        Ok(chunks)
+fn read_report(output: &Path) -> AsrLongReport {
+    let sidecar = output.with_extension("json");
+    fs::read_to_string(sidecar)
+        .ok()
+        .and_then(|body| serde_json::from_str(&body).ok())
+        .unwrap_or_default()
+}
+
+/// Parse the pack's `[asr-long]` progress lines from the growing stderr log.
+/// Returns the new offset so the next poll only reads fresh bytes.
+fn drain_progress(log: &Path, offset: u64, progress: &dyn Fn(AsrProgress)) -> u64 {
+    let Ok(mut file) = fs::File::open(log) else {
+        return offset;
+    };
+    if file.seek(SeekFrom::Start(offset)).is_err() {
+        return offset;
     }
+    let mut fresh = String::new();
+    if file.read_to_string(&mut fresh).is_err() {
+        return offset;
+    }
+    let mut consumed = offset + fresh.len() as u64;
+    // Keep a trailing partial line for the next poll.
+    if !fresh.ends_with('\n') {
+        if let Some(last_newline) = fresh.rfind('\n') {
+            consumed = offset + (last_newline as u64) + 1;
+            fresh.truncate(last_newline + 1);
+        } else {
+            return offset;
+        }
+    }
+    for line in fresh.lines() {
+        if let Some(event) = parse_progress_line(line) {
+            progress(event);
+        }
+    }
+    consumed
+}
+
+fn parse_progress_line(line: &str) -> Option<AsrProgress> {
+    let body = line.trim().strip_prefix(PROGRESS_PREFIX)?.trim();
+    let body = body.strip_prefix("event=").unwrap_or(body);
+    let mut parts = body.split_whitespace();
+    match parts.next()? {
+        "free" => Some(AsrProgress::FreedMemory),
+        "prepared" => {
+            let mut chunks = 0;
+            let mut chunk_seconds = DEFAULT_CHUNK_SECONDS;
+            for part in parts {
+                if let Some(value) = part.strip_prefix("chunks=") {
+                    chunks = value.parse().unwrap_or(0);
+                } else if let Some(value) = part.strip_prefix("chunk_seconds=") {
+                    chunk_seconds = value.parse().unwrap_or(DEFAULT_CHUNK_SECONDS);
+                }
+            }
+            Some(AsrProgress::Prepared {
+                chunks,
+                chunk_seconds,
+            })
+        }
+        "chunk_start" | "chunk" => {
+            let (index, total) = parse_chunk_pair(parts.next().unwrap_or("0/0"))?;
+            Some(AsrProgress::ChunkStarted { index, total })
+        }
+        "chunk_done" => {
+            let pair = parts.next().unwrap_or("0/0");
+            let (index, total) = parse_chunk_pair(pair)?;
+            let characters = body
+                .split_whitespace()
+                .find_map(|part| part.strip_prefix("chars="))
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0);
+            Some(AsrProgress::ChunkFinished {
+                index,
+                total,
+                characters,
+            })
+        }
+        "retry" | "oom" => {
+            let reason = body
+                .split_once("reason=")
+                .map(|(_, value)| value.trim().to_owned())
+                .unwrap_or_else(|| "the pack retried the chunk".into());
+            Some(AsrProgress::Retrying {
+                index: 0,
+                total: 0,
+                reason,
+            })
+        }
+        "warning" => Some(AsrProgress::Warning {
+            message: body
+                .strip_prefix("warning")
+                .unwrap_or(body)
+                .trim()
+                .to_owned(),
+        }),
+        _ => None,
+    }
+}
+
+fn parse_chunk_pair(value: &str) -> Option<(usize, usize)> {
+    let (index, total) = value.split_once('/')?;
+    let index = index.parse::<usize>().ok()?;
+    let total = total.parse::<usize>().ok()?;
+    Some((index.saturating_sub(1), total))
+}
+
+fn read_tail(path: &Path, limit: usize) -> String {
+    let text = fs::read_to_string(path).unwrap_or_default();
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= limit {
+        return trimmed.to_owned();
+    }
+    trimmed
+        .chars()
+        .rev()
+        .take(limit)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect()
+}
+
+/// Turn the CLI's stderr into an actionable typed error. The pack prints the
+/// ComfyUI execution error (including `torch.OutOfMemoryError`), so the UI can
+/// show the real cause instead of "transcription failed".
+fn classify_failure(code: Option<i32>, detail: &str) -> AsrError {
+    let lower = detail.to_lowercase();
+    if lower.contains("out of memory") || lower.contains("outofmemory") {
+        return AsrError::OutOfMemory;
+    }
+    if lower.contains("timed out") || lower.contains("timeout") {
+        return AsrError::Timeout;
+    }
+    if lower.contains("cannot reach comfyui") || lower.contains("connection refused") {
+        return AsrError::Unavailable;
+    }
+    let summary = first_error_line(detail);
+    if summary.is_empty() {
+        AsrError::ProviderError(format!(
+            "the local ASR CLI exited with status {}",
+            code.map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".into())
+        ))
+    } else {
+        AsrError::ProviderError(format!("local ASR failed: {summary}"))
+    }
+}
+
+fn first_error_line(value: &str) -> String {
+    let lines: Vec<&str> = value
+        .lines()
+        .map(str::trim)
+        // Progress lines are not errors; keep the first real diagnostic.
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with(PROGRESS_PREFIX)
+                && !line.starts_with("note:")
+        })
+        .collect();
+    let preferred = lines.iter().find(|line| {
+        let lower = line.to_lowercase();
+        lower.contains("error")
+            || lower.contains("failed")
+            || lower.contains("timed out")
+            || lower.contains("out of memory")
+            || lower.contains("cannot reach")
+            || lower.starts_with("comfyui finished")
+    });
+    preferred
+        .or_else(|| lines.first())
+        .map(|line| line.chars().take(400).collect())
+        .unwrap_or_default()
 }
 
 fn validate_request(request: &AsrRequest) -> Result<(), AsrError> {
+    let has_audio = !request.audio.is_empty()
+        || request
+            .audio_path
+            .as_ref()
+            .is_some_and(|path| path.is_file());
     if request.job_id.trim().is_empty()
-        || request.audio.is_empty()
+        || !has_audio
         || request.audio.len() > MAX_AUDIO_BYTES
         || request.file_name.trim().is_empty()
         || request.mime_type.trim().is_empty()
@@ -454,71 +703,6 @@ fn safe_file_name(value: &str) -> String {
         .collect()
 }
 
-fn parse_history_result(value: &Value) -> Result<Option<AsrResult>, AsrError> {
-    let entry = value
-        .as_object()
-        .and_then(|object| object.values().next())
-        .and_then(Value::as_object);
-    let Some(entry) = entry else {
-        return Ok(None);
-    };
-    if entry
-        .get("status")
-        .and_then(|status| status.get("completed"))
-        == Some(&Value::Bool(false))
-    {
-        return Ok(None);
-    }
-    // `outputs` is the only place a workflow result belongs. Searching the whole
-    // history first found node IDs in `meta` (for example "4") instead of text.
-    let outputs = entry.get("outputs");
-    let text = outputs
-        .and_then(find_text)
-        .or_else(|| find_text(value))
-        .ok_or(AsrError::MalformedOutput)?;
-    if text.len() > MAX_TRANSCRIPT_BYTES || text.trim().is_empty() {
-        return Err(AsrError::MalformedOutput);
-    }
-    Ok(Some(AsrResult {
-        text,
-        language: outputs
-            .and_then(|outputs| find_string(outputs, &["language", "detected_language"]))
-            .or_else(|| find_string(value, &["language", "detected_language"])),
-        timings: Vec::new(),
-        provenance: AsrProvenance {
-            workflow_version: WORKFLOW_VERSION.into(),
-            workflow_hash: stable_hash(WORKFLOW_JSON.as_bytes()),
-            device: find_string(value, &["device", "backend"]),
-            precision: find_string(value, &["precision", "dtype"]),
-            model: "Qwen/Qwen3-ASR-0.6B".into(),
-            node: "DarioFT/ComfyUI-Qwen3-ASR".into(),
-        },
-    }))
-}
-
-fn find_text(value: &Value) -> Option<String> {
-    if let Some(text) = value.as_str() {
-        return (!text.trim().is_empty()).then(|| text.to_owned());
-    }
-    if let Some(items) = value.as_array() {
-        return items.iter().find_map(find_text);
-    }
-    value.as_object().and_then(|object| {
-        ["text", "transcript", "output", "string"]
-            .iter()
-            .find_map(|key| object.get(*key).and_then(find_text))
-            .or_else(|| object.values().find_map(find_text))
-    })
-}
-
-fn find_string(value: &Value, keys: &[&str]) -> Option<String> {
-    value.as_object().and_then(|object| {
-        keys.iter()
-            .find_map(|key| object.get(*key).and_then(Value::as_str).map(str::to_owned))
-            .or_else(|| object.values().find_map(|value| find_string(value, keys)))
-    })
-}
-
 fn stable_hash(bytes: &[u8]) -> String {
     let mut hash = 2166136261_u64;
     for byte in bytes {
@@ -537,6 +721,7 @@ mod tests {
         AsrRequest {
             job_id: "job-1".into(),
             audio: b"synthetic audio".to_vec(),
+            audio_path: None,
             file_name: "episode.mp3".into(),
             mime_type: "audio/mpeg".into(),
             language: None,
@@ -571,6 +756,60 @@ mod tests {
     }
 
     #[test]
+    fn failures_are_classified_for_the_ui() {
+        let oom = "ComfyUI execution failed:\n\"exception_type\": \"torch.OutOfMemoryError\"";
+        assert_eq!(classify_failure(Some(1), oom), AsrError::OutOfMemory);
+        assert_eq!(
+            classify_failure(Some(1), "cannot reach ComfyUI at http://127.0.0.1:8190"),
+            AsrError::Unavailable
+        );
+        assert_eq!(
+            classify_failure(Some(1), "ComfyUI execution failed: node type mismatch"),
+            AsrError::ProviderError(
+                "local ASR failed: ComfyUI execution failed: node type mismatch".into()
+            )
+        );
+        assert_eq!(
+            classify_failure(None, ""),
+            AsrError::ProviderError("the local ASR CLI exited with status unknown".into())
+        );
+    }
+
+    #[test]
+    fn progress_lines_are_parsed_without_inventing_a_schema() {
+        assert_eq!(
+            parse_progress_line("[asr-long] event=free"),
+            Some(AsrProgress::FreedMemory)
+        );
+        assert_eq!(
+            parse_progress_line("[asr-long] event=prepared chunks=7 chunk_seconds=60"),
+            Some(AsrProgress::Prepared {
+                chunks: 7,
+                chunk_seconds: 60
+            })
+        );
+        assert_eq!(
+            parse_progress_line("[asr-long] event=chunk_start 3/7"),
+            Some(AsrProgress::ChunkStarted { index: 2, total: 7 })
+        );
+        assert_eq!(
+            parse_progress_line("[asr-long] chunk_done 3/7 chars=1235"),
+            Some(AsrProgress::ChunkFinished {
+                index: 2,
+                total: 7,
+                characters: 1235
+            })
+        );
+        assert_eq!(
+            parse_progress_line("[asr-long] warning chunk 4/7 may be truncated"),
+            Some(AsrProgress::Warning {
+                message: "chunk 4/7 may be truncated".into()
+            })
+        );
+        assert_eq!(parse_progress_line("ordinary log line"), None);
+    }
+
+    #[test]
     fn adapter_rejects_unsafe_job_ids_without_creating_staging_files() {
         let temp = tempdir().unwrap();
         let provider = ComfyUiAsrProvider::new("http://127.0.0.1:8188", temp.path()).unwrap();
@@ -581,35 +820,48 @@ mod tests {
     }
 
     #[test]
-    fn history_parser_rejects_empty_and_accepts_nested_transcript_output() {
-        assert_eq!(parse_history_result(&json!({})), Ok(None));
-        assert_eq!(
-            parse_history_result(&json!({"job": {"outputs": {"text": ""}}})),
-            Err(AsrError::MalformedOutput)
+    fn adapter_runs_the_documented_cli_for_a_fixture_script() {
+        let temp = tempdir().unwrap();
+        let script = temp.path().join("render.py");
+        let fixture = format!(
+            "import pathlib,sys\nout=pathlib.Path(sys.argv[sys.argv.index('--output')+1])\nout.parent.mkdir(parents=True,exist_ok=True)\nout.write_text('fixture transcript')\nout.with_suffix('.json').write_text('{{\"chunks\":1,\"chunk_seconds\":60,\"warnings\":[\"fixture warning\"]}}')\nsys.stderr.write('[asr-long] event=prepared chunks=1 chunk_seconds=60\\n')\nsys.stderr.write('[asr-long] event=chunk_start 1/1\\n')\nsys.stderr.write('[asr-long] event=chunk_done 1/1 chars=18\\n')\n"
         );
-        let result = parse_history_result(&json!({
-            "job": {"outputs": {"node": {"transcript": "reviewed output"}}}
-        }))
-        .unwrap()
+        fs::write(&script, fixture).unwrap();
+        let provider = ComfyUiAsrProvider::with_render_script(
+            "http://127.0.0.1:8188",
+            temp.path(),
+            &script,
+            60,
+        )
         .unwrap();
-        assert_eq!(result.text, "reviewed output");
+        let seen = std::sync::Mutex::new(Vec::new());
+        let result = provider
+            .transcribe_with_progress(&request(), &|progress| {
+                seen.lock().unwrap().push(progress)
+            })
+            .unwrap();
+        let seen = seen.into_inner().unwrap();
+        assert_eq!(result.text, "fixture transcript");
+        assert_eq!(result.provenance.node, "modules/comfy/scripts/render.py asr-long");
+        assert_eq!(
+            seen.iter()
+                .filter(|progress| matches!(progress, AsrProgress::ChunkFinished { .. }))
+                .count(),
+            1
+        );
+        assert!(matches!(seen.last(), Some(AsrProgress::Warning { .. })));
+        assert!(temp.path().join("job-1/transcript.json").is_file());
     }
 
     #[test]
-    fn history_parser_prefers_outputs_over_node_ids_in_metadata() {
-        let result = parse_history_result(&json!({
-            "prompt-id": {
-                "prompt": [1, "prompt-id", {}, {"client_id": "fixture"}, ["4"]],
-                "outputs": {"4": {"text": ["The quick brown fox jumps over the lazy dog."]}},
-                "status": {"status_str": "success", "completed": true},
-                "meta": {"4": {"node_id": "4", "display_node": "4"}}
-            }
-        }))
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            result.text,
-            "The quick brown fox jumps over the lazy dog."
-        );
+    fn adapter_requires_the_documented_cli_instead_of_reimplementing_the_graph() {
+        let temp = tempdir().unwrap();
+        let provider = ComfyUiAsrProvider::new("http://127.0.0.1:8188", temp.path()).unwrap();
+        assert!(provider.render_script().is_file());
+        assert_eq!(provider.chunk_seconds(), DEFAULT_CHUNK_SECONDS);
+        assert!(provider
+            .render_script()
+            .to_string_lossy()
+            .ends_with("modules/comfy/scripts/render.py"));
     }
 }

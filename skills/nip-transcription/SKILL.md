@@ -5,9 +5,13 @@ description: Test NIP local transcription and its downstream events/signals thro
 
 # NIP transcription, API first
 
-`transcribe_podcast_episode` is an MCP tool. Exercise it directly — the same
-call the desktop uses — before changing the UI. This catches ASR availability,
-download, parsing, and commit problems in seconds.
+Transcription is a long-running local job. The desktop starts it with
+`start_podcast_transcription`, polls `podcast_transcription_status`, and shows
+every stage plus the cached audio. Use `nip_asr_status` first: it names the
+external `comfy` pack workspace/commit, Python, ffmpeg, the loopback ComfyUI
+server and the exact blockers. `transcribe_podcast_episode` remains the
+synchronous call for scripts and the chat, but it blocks until the episode is
+finished and reports less progress.
 
 ## Preconditions
 
@@ -32,26 +36,39 @@ Then call tools over `POST http://127.0.0.1:8794/mcp` (JSON-RPC; send
 `MCP-Protocol-Version: 2025-11-25`):
 
 1. `capabilities` — confirm `local_audio_transcription`.
-2. `list_episode_page {limit, offset, sort, title_contains, source_id}` — get a
+2. `nip_asr_status` — confirm `ready: true`. If not, fix the listed blocker;
+   `ensure_comfy_workspace` clones `NIP_COMFY_REPO` into `NIP_COMFY_DIR` when
+   the CLI is missing.
+3. `list_episode_page {limit, offset, sort, title_contains, source_id}` — get a
    page, not the whole ledger. Use the first episode's `source_id` and
    `source_native_id`.
-3. `transcribe_podcast_episode {source_id, source_native_id}` — this downloads
-   the enclosure and runs local ASR. Expect `transcription_unavailable`,
-   `audio_unavailable`, `unsupported_audio`, or `transcription_failed` with a
-   real message on failure; never a fake success.
-4. Re-read the page: the episode state becomes `transcribed`.
-5. `search_events {limit: 10}` — the transcript is now a retained event.
-6. `narrative_signal_snapshot` — the new dated event appears in Radar/Timeline.
-7. `rebuild_narrative_graph` — the graph is a derived projection; rebuild it
+4. `start_podcast_transcription {source_id, source_native_id}` — returns a job
+   immediately. Poll `podcast_transcription_status {job_id}`:
+   `download` → `downloaded` (size/duration) → `transcribe` (chunk n/N) →
+   `commit` → `transcribed`. A failure records the failing step, error code,
+   message, warnings and the cached audio. `cancel_podcast_transcription`
+   stops the pack CLI.
+5. Review artifacts: `list_podcast_transcription_jobs` (history),
+   `list_media_artifacts` (cached audio/video), `delete_media_artifact` /
+   `delete_podcast_transcription_job {delete_artifacts: true}` (explicit
+   cleanup). Audio is kept for replay until the user deletes it.
+6. Re-read the page: the episode state becomes `transcribed`.
+7. `search_events {limit: 10}` — the transcript is now a retained event.
+8. `narrative_signal_snapshot` — the new dated event appears in Radar/Timeline.
+9. `rebuild_narrative_graph` — the graph is a derived projection; rebuild it
    explicitly after the event exists.
-8. `extract_claims_from_event {event_id}` — claims require this separate step;
-   transcription alone does not create them.
+10. `extract_claims_from_event {event_id}` — claims require this separate step;
+    transcription alone does not create them.
 
 ## UI rules these calls enforce
 
 - Do not show **Transcribe locally** unless `capabilities` says ASR is available.
-- Do not show a spinner for a call that returns immediately with an error; show
-  the error text in red with the exact missing configuration.
+- Show the `nip_asr_status` blockers and next actions verbatim instead of a dead
+  button, and offer **Clone comfy pack** only when `repo_url` is configured.
+- A running job must show its current stage and chunk progress; a failed job
+  must name the failing step (`download`, `transcribe`, `commit`) and code.
+- Keep the downloaded audio and transcript reviewable, with an explicit delete
+  action. Never upload audio to a remote ASR service.
 - After a successful commit, refresh events and signal snapshots, and rebuild
   the graph projection if the UI claims it updated.
 - Never upload audio to a remote ASR service; NIP has no remote fallback.

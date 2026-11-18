@@ -1093,6 +1093,30 @@ impl Store {
             .map_err(StoreError::from)
     }
 
+    /// The canonical event committed for one podcast episode. Used by the UI
+    /// to open the retained transcript directly from the episode row.
+    pub fn event_for_source_native(
+        &self,
+        source_id: &SourceId,
+        source_native_id: &str,
+    ) -> Result<Option<EventRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT event_id, source_id, source_native_id, canonical_url, content_hash,
+                    content_text, published_at, source_updated_at, captured_at, ingested_at,
+                    revision_of FROM nip_events
+             WHERE source_id = ? AND source_native_id = ?
+             ORDER BY ingested_at DESC LIMIT 1",
+        )?;
+        let mut rows = statement.query_map(
+            params![source_id.as_str(), source_native_id],
+            raw_event_from_row,
+        )?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?.try_into()?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn search_events(&self, query: &EventSearchQuery) -> Result<EventSearchPage, StoreError> {
         let limit = query.limit.clamp(1, 200) as i64;
         let cursor = query.cursor.as_deref().unwrap_or("");
