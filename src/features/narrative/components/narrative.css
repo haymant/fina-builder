@@ -142,3 +142,10 @@ video.media-player { height:auto; max-height:180px; }
 .narrative-dialog-text { margin:0; flex:1; overflow:auto; padding:14px 16px; color:var(--theme-text); font-size:13px; line-height:1.7; white-space:pre-wrap; }
 .narrative-dialog-foot { display:flex; align-items:center; justify-content:space-between; gap:12px; border-top:1px solid var(--theme-border); padding:10px 16px; }
 .narrative-dialog-status { margin:0; border-top:1px solid var(--theme-border); padding:8px 16px; color:var(--theme-muted); font-size:10px; }
+
+.narrative-graph { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+.narrative-graph-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.narrative-graph-toggle { border:1px solid var(--theme-border); border-radius:999px; background:transparent; padding:3px 9px; font-size:10px; color:var(--theme-muted); cursor:pointer; }
+.narrative-graph-toggle.is-on { border-color:color-mix(in srgb,var(--theme-primary) 55%,var(--theme-border)); background:color-mix(in srgb,var(--theme-primary) 14%,transparent); color:var(--theme-text); }
+.narrative-graph-toggle:focus-visible { outline:2px solid var(--theme-primary); outline-offset:1px; }
+.narrative-graph-hint { font-size:9px; color:var(--theme-muted); }

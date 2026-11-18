@@ -341,12 +341,54 @@ fn stable_point_id(event_id: &str) -> u64 {
     )
 }
 
+/// A short human-readable label for a retained event. Retained events carry no
+/// title of their own, so use the opening words of the text and never fall back
+/// to an opaque id unless there is no text at all.
+pub fn event_label(event: &EventRecord) -> String {
+    let excerpt = event
+        .content_text
+        .as_deref()
+        .map(|text| excerpt_of(text, 72))
+        .filter(|text| !text.is_empty());
+    excerpt
+        .or_else(|| {
+            event
+                .source_native_id
+                .clone()
+                .filter(|id| !id.trim().is_empty())
+        })
+        .or_else(|| event.canonical_url.clone())
+        .unwrap_or_else(|| event.event_id.as_str().to_owned())
+}
+
+fn excerpt_of(text: &str, max_chars: usize) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return String::new();
+    }
+    let window = collapsed.chars().take(max_chars).collect::<String>();
+    // Prefer a complete sentence inside the window; a label that stops after
+    // the first clause reads better than one cut mid-word.
+    if let Some(index) = window.rfind(|character| matches!(character, '.' | '!' | '?')) {
+        if window[..index].chars().count() >= max_chars / 3 {
+            return window[..=index].to_string();
+        }
+    }
+    if collapsed.chars().count() <= max_chars {
+        return collapsed;
+    }
+    let cut = window.rfind(' ').unwrap_or(window.len());
+    format!("{}…", window[..cut].trim_end_matches([',', ';', ':']))
+}
+
 pub fn cluster_events(
     events: &[(EventRecord, Vec<f32>)],
     derivation_run_id: String,
+    labels: &HashMap<String, String>,
 ) -> Vec<NarrativeCluster> {
     let mut centroids: Vec<Vec<f32>> = Vec::new();
     let mut members: Vec<Vec<NarrativeClusterMember>> = Vec::new();
+    let mut cluster_labels: Vec<String> = Vec::new();
     for (event, vector) in events {
         let mut best = None;
         for (index, centroid) in centroids.iter().enumerate() {
@@ -362,6 +404,12 @@ pub fn cluster_events(
         let (cluster_index, similarity) = best.unwrap_or_else(|| {
             centroids.push(vector.clone());
             members.push(Vec::new());
+            cluster_labels.push(
+                labels
+                    .get(event.event_id.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| event_label(event)),
+            );
             (centroids.len() - 1, 1.0)
         });
         if cluster_index < centroids.len() && similarity < 1.0 {
@@ -384,9 +432,9 @@ pub fn cluster_events(
         .map(|(index, members)| NarrativeCluster {
             cluster_id: format!("cluster-{}", index + 1),
             derivation_run_id: derivation_run_id.clone(),
-            label: members
-                .first()
-                .map(|member| member.event_id.as_str().to_owned())
+            label: cluster_labels
+                .get(index)
+                .cloned()
                 .unwrap_or_else(|| "empty".into()),
             algorithm_version: CLUSTER_ALGORITHM_VERSION.into(),
             member_count: members.len() as u32,

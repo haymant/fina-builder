@@ -315,6 +315,23 @@ describe('GraphExplorer', () => {
     fireEvent.click(screen.getByRole('button', { name: /Open retained events/ }))
     expect(onBackToEvents).toHaveBeenCalled()
   })
+
+  it('renders an interactive map and keeps edge labels quiet until asked', () => {
+    render(<GraphExplorer graph={graph} events={[event]} onOpenEvent={vi.fn()} />)
+    expect(screen.getByTestId('narrative-graph')).toBeTruthy()
+    const nodeLabels = screen.getByRole('button', { name: 'Node labels' })
+    const edgeLabels = screen.getByRole('button', { name: 'Edge labels' })
+    const colourByCluster = screen.getByRole('button', { name: 'Colour by cluster' })
+    expect(nodeLabels.getAttribute('aria-pressed')).toBe('true')
+    expect(edgeLabels.getAttribute('aria-pressed')).toBe('false')
+    expect(colourByCluster.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(edgeLabels)
+    fireEvent.click(nodeLabels)
+    fireEvent.click(colourByCluster)
+    expect(edgeLabels.getAttribute('aria-pressed')).toBe('true')
+    expect(nodeLabels.getAttribute('aria-pressed')).toBe('false')
+    expect(colourByCluster.getAttribute('aria-pressed')).toBe('false')
+  })
 })
 
 describe('TranscriptDialog', () => {

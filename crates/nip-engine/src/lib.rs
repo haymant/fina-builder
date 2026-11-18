@@ -1151,6 +1151,7 @@ impl NipService {
         run_id: String,
     ) -> Result<Vec<NarrativeCluster>, NipError> {
         let events = self.store.all_events()?;
+        let labels = self.event_label_index(&events)?;
         let embedded = events
             .into_iter()
             .map(|event| {
@@ -1160,9 +1161,50 @@ impl NipService {
                 Ok((event, vector.dense))
             })
             .collect::<Result<Vec<_>, NipError>>()?;
-        let clusters = cluster_events(&embedded, run_id);
+        let clusters = cluster_events(&embedded, run_id, &labels);
         self.store.replace_clusters(&clusters)?;
         Ok(clusters)
+    }
+
+    /// Retained events carry no title, but the podcast episode row they came
+    /// from does. Resolve a label per event so clusters and graph nodes read
+    /// like an episode instead of a UUID, falling back to the opening text for
+    /// imported documents and other event kinds.
+    fn event_label_index(
+        &self,
+        events: &[EventRecord],
+    ) -> Result<HashMap<String, String>, NipError> {
+        let mut sources: Vec<SourceId> = Vec::new();
+        for event in events {
+            if !sources
+                .iter()
+                .any(|source| source.as_str() == event.source_id.as_str())
+            {
+                sources.push(event.source_id.clone());
+            }
+        }
+        let mut titles: HashMap<(String, String), String> = HashMap::new();
+        for source_id in sources {
+            for episode in self.store.discovered_episodes(&source_id)? {
+                if let (Some(native_id), Some(title)) = (episode.source_native_id, episode.title) {
+                    titles.insert((source_id.as_str().to_owned(), native_id), title);
+                }
+            }
+        }
+        Ok(events
+            .iter()
+            .map(|event| {
+                let title = event.source_native_id.as_ref().and_then(|native_id| {
+                    titles
+                        .get(&(event.source_id.as_str().to_owned(), native_id.clone()))
+                        .cloned()
+                });
+                (
+                    event.event_id.as_str().to_owned(),
+                    title.unwrap_or_else(|| semantic::event_label(event)),
+                )
+            })
+            .collect())
     }
 
     pub fn clusters(&self) -> Result<Vec<NarrativeCluster>, NipError> {
@@ -1173,6 +1215,7 @@ impl NipService {
         let clusters = self.store.clusters()?;
         let claims = self.store.claims()?;
         let events = self.store.all_events()?;
+        let labels = self.event_label_index(&events)?;
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
         let mut event_nodes = BTreeSet::new();
@@ -1187,11 +1230,10 @@ impl NipService {
             nodes.push(NarrativeGraphNode {
                 node_id: format!("event:{event_id}"),
                 node_type: "event".into(),
-                label: event
-                    .source_native_id
-                    .clone()
-                    .or_else(|| event.canonical_url.clone())
-                    .unwrap_or_else(|| event_id.clone()),
+                label: labels
+                    .get(&event_id)
+                    .cloned()
+                    .unwrap_or_else(|| semantic::event_label(event)),
                 evidence_event_ids: vec![event_id],
             });
         }
@@ -1213,7 +1255,7 @@ impl NipService {
                     nodes.push(NarrativeGraphNode {
                         node_id: format!("event:{event_id}"),
                         node_type: "event".into(),
-                        label: event_id.clone(),
+                        label: labels.get(event_id.as_str()).cloned().unwrap_or_else(|| event_id.clone()),
                         evidence_event_ids: vec![event_id.clone()],
                     });
                 }
@@ -1246,7 +1288,7 @@ impl NipService {
                     nodes.push(NarrativeGraphNode {
                         node_id: format!("event:{event_id}"),
                         node_type: "event".into(),
-                        label: event_id.clone(),
+                        label: labels.get(event_id.as_str()).cloned().unwrap_or_else(|| event_id.clone()),
                         evidence_event_ids: vec![event_id.clone()],
                     });
                 }
@@ -1745,6 +1787,7 @@ fn observed_persistence(events: &[(EventRecord, String)], current_start: DateTim
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::semantic::DeterministicEmbeddingProvider;
     use serde_json::{json, Value};
     use std::collections::BTreeMap;
     use std::thread;
@@ -2279,6 +2322,30 @@ mod tests {
             .unwrap();
         assert_eq!(transcript.transcript_text, PUBLISHED);
         assert!(transcript.provenance_json.contains("publisher_transcript"));
+
+        // The episode title, not the event or cluster id, names the derived
+        // projections: a graph of UUIDs is unreadable.
+        let clusters = service
+            .rebuild_clusters(
+                &DeterministicEmbeddingProvider::new(64),
+                "cluster-run-labels".into(),
+            )
+            .unwrap();
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].label, "First synthetic episode");
+        let graph = service.rebuild_graph("graph-run-labels".into()).unwrap();
+        let narrative = graph
+            .nodes
+            .iter()
+            .find(|node| node.node_type == "narrative")
+            .unwrap();
+        assert_eq!(narrative.label, "First synthetic episode");
+        let origin = graph
+            .nodes
+            .iter()
+            .find(|node| node.node_type == "event")
+            .unwrap();
+        assert_eq!(origin.label, "First synthetic episode");
     }
 
     #[test]
