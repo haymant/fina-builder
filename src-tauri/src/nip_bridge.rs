@@ -207,6 +207,11 @@ async fn extract_claims(
         .join("workspace")
         .to_string_lossy()
         .into_owned();
+    // The Responses adapter hangs on anything longer than a greeting (measured:
+    // a 2k-character prompt never returns), while the OpenCode CLI answers the
+    // same model in seconds. That CLI is also what the rehab-video-maker skills
+    // use, so route this provider type through the proven path.
+    let use_cli = provider_type_name(configured.provider_type) == "opencode_open_ai_compatible";
     let windows = split_windows(text);
     let total_windows = windows.len();
     let deadline = tokio::time::Instant::now() + RUN_TIMEOUT;
@@ -223,24 +228,6 @@ async fn extract_claims(
         }
         let left = (total_windows - index) as u32;
         let budget = (remaining / left).max(Duration::from_secs(30)).min(remaining);
-        // One session per window: a run keeps its session history, and feeding
-        // window N the previous windows would grow the prompt past the point
-        // the windowing exists to avoid.
-        let title = format!("NIP claim extraction {short} {}/{}", index + 1, total_windows);
-        let session = match state
-            .service
-            .create_session(CreateSessionRequest {
-                title: title.clone(),
-                workspace: workspace.clone(),
-            })
-            .await
-        {
-            Ok(session) => session,
-            Err(_) => {
-                last_error = "a temporary extraction session could not be created";
-                break;
-            }
-        };
         let prompt = extraction_prompt(
             &request.event_id,
             &request.prompt_version,
@@ -249,15 +236,39 @@ async fn extract_claims(
             total_windows,
             *offset,
         );
-        let result = run_extraction(
-            &state.service,
-            &format!("{run_id}-{}", index + 1),
-            &session.id,
-            prompt,
-            budget,
-        )
-        .await;
-        let _ = state.service.delete_session(&session.id, &title).await;
+        let title = format!("NIP claim extraction {short} {}/{}", index + 1, total_windows);
+        let result = if use_cli {
+            run_opencode_cli(&prompt, &configured.model, &title, budget).await
+        } else {
+            // One session per window: a run keeps its session history, and
+            // feeding window N the previous windows would grow the prompt past
+            // the point the windowing exists to avoid.
+            match state
+                .service
+                .create_session(CreateSessionRequest {
+                    title: title.clone(),
+                    workspace: workspace.clone(),
+                })
+                .await
+            {
+                Ok(session) => {
+                    let result = run_extraction(
+                        &state.service,
+                        &format!("{run_id}-{}", index + 1),
+                        &session.id,
+                        prompt,
+                        budget,
+                    )
+                    .await;
+                    let _ = state.service.delete_session(&session.id, &title).await;
+                    result
+                }
+                Err(_) => {
+                    last_error = "a temporary extraction session could not be created";
+                    break;
+                }
+            }
+        };
         match result {
             Ok(output) => match parse_claims_output(&output) {
                 Ok(claims) => {
@@ -423,6 +434,72 @@ fn normalize_claim(text: &str) -> String {
         .to_lowercase()
 }
 
+/// Extraction must not mutate anything: OpenCode's build agent otherwise asks
+/// for shell/edit permission, and no client is attached to answer that ask.
+const OPENCODE_EXTRACTION_CONFIG: &str = r#"{"permissions":[{"action":"shell","resource":"*","effect":"deny"},{"action":"edit","resource":"*","effect":"deny"}]}"#;
+
+/// Run one extraction window through the OpenCode CLI, the path the
+/// rehab-video-maker skills use. It answers in seconds where the Responses
+/// adapter stalls on nontrivial prompts. Denied shell/edit keeps the model
+/// read-only, and the run happens in an empty temporary directory.
+async fn run_opencode_cli(
+    prompt: &str,
+    model: &str,
+    title: &str,
+    budget: Duration,
+) -> Result<String, ()> {
+    let directory = std::env::temp_dir().join(format!("nip-extract-{}", Uuid::new_v4().simple()));
+    if std::fs::create_dir_all(&directory).is_err() {
+        return Err(());
+    }
+    let started = std::time::Instant::now();
+    let mut command = tokio::process::Command::new("opencode");
+    command
+        .arg("run")
+        .arg("--model")
+        .arg(model)
+        .arg("--title")
+        .arg(title)
+        .arg("--archived")
+        .arg(prompt)
+        .env("OPENCODE_CONFIG_CONTENT", OPENCODE_EXTRACTION_CONFIG)
+        .current_dir(&directory)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let result = tokio::time::timeout(budget, command.output()).await;
+    let _ = std::fs::remove_dir_all(&directory);
+    match result {
+        Ok(Ok(output)) if output.status.success() => {
+            let text = String::from_utf8_lossy(&output.stdout).into_owned();
+            eprintln!(
+                "NIP bridge: opencode CLI window finished in {}s ({} bytes of output)",
+                started.elapsed().as_secs(),
+                text.len()
+            );
+            Ok(text)
+        }
+        Ok(Ok(output)) => {
+            eprintln!(
+                "NIP bridge: opencode CLI window exited with {} after {}s",
+                output.status,
+                started.elapsed().as_secs()
+            );
+            Err(())
+        }
+        Ok(Err(error)) => {
+            eprintln!("NIP bridge: opencode CLI could not start: {error}");
+            Err(())
+        }
+        Err(_) => {
+            eprintln!(
+                "NIP bridge: opencode CLI window timed out after {}s",
+                started.elapsed().as_secs()
+            );
+            Err(())
+        }
+    }
+}
+
 async fn run_extraction(
     service: &IpcService,
     run_id: &str,
@@ -577,10 +654,33 @@ fn extraction_prompt(
     )
 }
 
+/// The CLI writes colour codes when it thinks it is on a terminal; strip them
+/// before looking for the JSON object.
+fn strip_ansi(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character != '\u{1b}' {
+            plain.push(character);
+            continue;
+        }
+        if characters.peek() == Some(&'[') {
+            characters.next();
+            for next in characters.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+        }
+    }
+    plain
+}
+
 /// Parse the provider's output as the strict claim JSON contract. Fenced output
 /// is tolerated, but the JSON object itself is still validated.
 fn parse_claims_output(output: &str) -> Result<Vec<Value>, ()> {
-    let trimmed = output.trim();
+    let plain = strip_ansi(output);
+    let trimmed = plain.trim();
     let start = trimmed.find('{').ok_or(())?;
     let end = trimmed.rfind('}').ok_or(())?;
     if end < start {
@@ -666,6 +766,14 @@ mod tests {
         );
     }
 
+
+    #[test]
+    fn ansi_codes_do_not_break_cli_json_parsing() {
+        let output = "\u{1b}[0m> build · gpt-5-nano\u{1b}[0m\n{\"claims\":[{\"text\":\"Rates stay high.\"}]}\n";
+        let claims = parse_claims_output(output).unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(strip_ansi("\u{1b}[31mred\u{1b}[0m"), "red");
+    }
 
     #[test]
     fn windows_cover_a_short_transcript_without_cutting_words() {
