@@ -10,3 +10,9 @@
 [submodule "modules/comfy"]
 	path = modules/comfy
 	url = https://github.com/haymant/comfyui-flows.git
+[submodule "modules/linkZagShow"]
+	path = modules/linkZagShow
+	url = https://github.com/haymant/linkZag.show.git
+[submodule "modules/rehab-video-maker"]
+	path = modules/rehab-video-maker
+	url = https://github.com/rehabvid/rehab-video-maker

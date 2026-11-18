@@ -259,10 +259,22 @@ npm run version:set -- 0.1.1   # stamp one version into src-tauri/Cargo.toml + t
 
 ## Repository map
 
+**`modules/rehab-video-maker` is legacy and is being abandoned.** It is checked
+out only because it builds a commentary video end to end (podcast transcript →
+commentary script → slides → narration → MP4) and is the reference to consult
+when fina-builder's own media workflow hits a problem. Do not add dependencies
+on it, do not route product features through it, and do not treat its scripts or
+skills as fina-builder's implementation. New work belongs in fina-builder (and,
+for claim/feature research, in the plan of
+[doc 65](./docs/65-entity-claims-features-signal-research.md)).
+
+
 ```text
 modules/riga-flow/     The pricing engine (`riga-mcp`). Submodule, standalone workspace.
 modules/tac-engine/    Market data (`tac-engine`: lake + Alpaca + FRED). Submodule.
 modules/riga/          The RIGA agent (`riga-kernel` / `riga-server` / `riga-shell`). Submodule.
+modules/linkZagShow/   LinkZag.Show studio + renderer (media render app). Submodule, reference.
+modules/rehab-video-maker/  LEGACY, reference only. Submodule; see the note below.
 src-tauri/             Desktop shell: MCP server registry + the RIGA agent host (IPC adapter only)
 src/                   React frontend
   api/                 riga / tac MCP transports (http + tauri)

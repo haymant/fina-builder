@@ -5,6 +5,11 @@ gated on the tradeac / tac-engine / lake migration into fina-builder
 ([TAC lake skill](../modules/tac-engine/skills/tradeac-lake/SKILL.md),
 [doc 58](./58-narrative-intelligence-phase-0-decisions.md)).
 
+**Reference module.** `modules/rehab-video-maker/` is a **legacy** checkout kept
+only as an end-to-end commentary-video reference (see the README note); it is not
+a dependency of this plan. Its transcript/commentary workflow informs the
+bounded-window extraction and the skill shape below.
+
 **Target.** Turn NIP from "extract sentences from transcripts" into a
 **temporal entity-and-claim graph** whose weekly features can be exported,
 joined to point-in-time market data, and tested as candidate trading signals
