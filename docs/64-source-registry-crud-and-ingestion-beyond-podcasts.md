@@ -141,7 +141,7 @@ New tools (all also usable from RIGA, since RIGA calls the same NIP service):
 | `delete_source` | Hard delete only when the source has no events; otherwise returns `source_has_events`. |
 
 Existing `subscribe_podcast_feed`, `list_podcast_subscriptions`,
-`refresh_due_podcast_feeds`, `list_podcast_episodes`,
+`refresh_podcast_feeds`, `list_podcast_episodes`,
 `set_podcast_subscription_state` and `transcribe_podcast_episode` stay for
 compatibility; `set_podcast_subscription_state` now delegates to the registry.
 

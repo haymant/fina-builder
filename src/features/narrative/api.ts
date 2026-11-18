@@ -19,7 +19,7 @@ export const narrativeApi = {
     }).then((value) => fromTransport<NipEventSearchPage>(value)),
   listClaims: () => nip.callTool('list_claims').then((value) => fromTransport<NipClaim[]>(value)),
   listPodcastSubscriptions: () => nip.callTool('list_podcast_subscriptions').then((value) => fromTransport<NipPodcastSubscription[]>(value)),
-  refreshDuePodcastFeeds: () => nip.callTool('refresh_due_podcast_feeds').then((value) => fromTransport<{ results: Array<Record<string, unknown>> }>(value)),
+  refreshDuePodcastFeeds: () => nip.callTool('refresh_podcast_feeds').then((value) => fromTransport<{ results: Array<Record<string, unknown>> }>(value)),
   listPodcastEpisodes: (sourceId: string) => nip.callTool('list_podcast_episodes', { source_id: sourceId }).then((value) => fromTransport<NipPodcastEpisode[]>(value)),
   listEpisodePage: (args: { sourceId?: string; titleContains?: string; sort?: string; limit?: number; offset?: number } = {}) =>
     nip.callTool('list_episode_page', {

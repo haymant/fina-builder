@@ -146,7 +146,7 @@ async function stubSetupJourney(page: Page) {
                                 ? { as_of: '2026-11-17T12:00:00Z', formula_version: 'nip-signals-v1', coverage: 'unknown', current_week_start: '2026-11-09T00:00:00Z', current_week_end: '2026-11-16T00:00:00Z', signals: [] }
                                 : name === 'list_narrative_graph'
                                   ? null
-                                  : name === 'refresh_due_podcast_feeds'
+                                  : name === 'refresh_podcast_feeds'
                                     ? { results: [] }
                                     : ['list_narrative_clusters', 'list_etf_mappings', 'list_editorial_candidates'].includes(name ?? '')
                                       ? []

@@ -30,8 +30,9 @@ back, never as a reason to fetch everything.
    otherwise take at most **5** by `per_scan_limit` × recency of last activity.
    State the set before fetching.
 3. **Fetch only that set.** Podcasts:
-   `refresh_due_podcast_feeds` (honours the six-hour due check; a paused or
-   removed source is skipped). Never loop `refresh` over the whole registry.
+   `refresh_podcast_feeds` (every active feed, ignoring the six-hour window; a
+   paused or removed source is skipped). Never loop `refresh` over the whole
+   registry.
    The episode ceiling per source is `per_scan_limit` (default 3, max 10).
 4. **Read candidates.** `list_podcast_episodes` for each chosen source. For
    non-podcast kinds there is no fetch adapter yet — say so and work from

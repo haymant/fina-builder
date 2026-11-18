@@ -262,6 +262,29 @@ impl NipService {
         client: &dyn FeedClient,
         now: DateTime<Utc>,
     ) -> Result<PodcastRefreshReport, NipError> {
+        self.refresh_podcast_feed_within(source_id, client, now, false)
+    }
+
+    /// Refresh a feed regardless of its six-hour window and regardless of the
+    /// stored ETag/Last-Modified. A manual refresh exists to re-read a body the
+    /// current parser had not understood yet, which a `304 Not Modified` would
+    /// otherwise hide forever.
+    pub fn refresh_podcast_feed_now(
+        &mut self,
+        source_id: &SourceId,
+        client: &dyn FeedClient,
+        now: DateTime<Utc>,
+    ) -> Result<PodcastRefreshReport, NipError> {
+        self.refresh_podcast_feed_within(source_id, client, now, true)
+    }
+
+    fn refresh_podcast_feed_within(
+        &mut self,
+        source_id: &SourceId,
+        client: &dyn FeedClient,
+        now: DateTime<Utc>,
+        force: bool,
+    ) -> Result<PodcastRefreshReport, NipError> {
         let subscription = self
             .store
             .subscription(source_id)?
@@ -269,14 +292,18 @@ impl NipService {
         if subscription.state != PodcastSubscriptionState::Active {
             return Err(NipError::SubscriptionInactive);
         }
-        if subscription.next_poll_at.is_some_and(|next| now < next) {
+        if !force && subscription.next_poll_at.is_some_and(|next| now < next) {
             return Err(NipError::RefreshNotDue);
         }
 
         let response = match client.fetch(&FeedRequest {
             url: subscription.feed_url.clone(),
-            etag: subscription.etag.clone(),
-            last_modified: subscription.last_modified.clone(),
+            etag: if force { None } else { subscription.etag.clone() },
+            last_modified: if force {
+                None
+            } else {
+                subscription.last_modified.clone()
+            },
         }) {
             Ok(response) => response,
             Err(error) => {
@@ -391,6 +418,27 @@ impl NipService {
         Ok(due_source_ids
             .iter()
             .map(|source_id| self.refresh_podcast_feed(source_id, client, now))
+            .collect())
+    }
+
+    /// Refresh every active subscription now. The operator clicks this to make
+    /// the stored ledger catch up with the current parser, so it ignores the
+    /// poll window and the stored validators.
+    pub fn refresh_active_podcast_feeds(
+        &mut self,
+        client: &dyn FeedClient,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<Result<PodcastRefreshReport, NipError>>, NipError> {
+        let active_source_ids = self
+            .store
+            .subscriptions()?
+            .into_iter()
+            .filter(|subscription| subscription.state == PodcastSubscriptionState::Active)
+            .map(|subscription| subscription.source_id)
+            .collect::<Vec<_>>();
+        Ok(active_source_ids
+            .iter()
+            .map(|source_id| self.refresh_podcast_feed_now(source_id, client, now))
             .collect())
     }
 
@@ -2110,6 +2158,63 @@ mod tests {
             )
             .unwrap();
         assert_eq!(transcript.transcript_text, "enclosure transcript");
+    }
+
+    #[test]
+    fn a_forced_refresh_ignores_the_poll_window_and_stored_validators() {
+        let temp = tempdir().unwrap();
+        let mut service = service_at(temp.path());
+        let now = "2026-11-16T09:00:00Z".parse().unwrap();
+        let mut first = feed_response(200, feed_body(), None);
+        first.etag = Some("\"v1\"".into());
+        let mut second = feed_response(
+            200,
+            feed_body()
+                .replace(
+                    "<rss version=\"2.0\">",
+                    "<rss version=\"2.0\" xmlns:podcast=\"https://podcastindex.org/namespace/1.0\">",
+                )
+                .replace(
+                    "<enclosure url=\"https://fixture.test/episode-1.mp3\" type=\"audio/mpeg\"/>",
+                    concat!(
+                        "<enclosure url=\"https://fixture.test/episode-1.mp3\" type=\"audio/mpeg\"/>",
+                        "<podcast:transcript url=\"https://fixture.test/episode-1.vtt\" type=\"text/vtt\"/>"
+                    ),
+                ),
+            None,
+        );
+        second.etag = Some("\"v2\"".into());
+        let client = FixtureFeedClient::with_responses(vec![first, second]);
+        service
+            .subscribe_podcast_feed(request(true), &client, now)
+            .unwrap();
+        // Inside the six-hour window the scheduled path must refuse, which is
+        // what left a newly advertised transcript unrecorded.
+        assert!(matches!(
+            service.refresh_podcast_feed(
+                &SourceId::new("fixture-show").unwrap(),
+                &client,
+                now + chrono::TimeDelta::minutes(5)
+            ),
+            Err(NipError::RefreshNotDue)
+        ));
+        let reports = service
+            .refresh_active_podcast_feeds(&client, now + chrono::TimeDelta::minutes(5))
+            .unwrap();
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].is_ok());
+        let requests = client.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].etag.is_none(), "a forced refresh must not revalidate");
+        assert!(requests[1].last_modified.is_none());
+        let episode = service
+            .podcast_episodes(&SourceId::new("fixture-show").unwrap())
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            episode.transcript_url.as_deref(),
+            Some("https://fixture.test/episode-1.vtt")
+        );
     }
 
     #[test]

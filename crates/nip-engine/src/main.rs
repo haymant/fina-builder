@@ -296,11 +296,13 @@ impl NipMcp {
         }
     }
 
-    #[tool(description = "Refresh all active podcast feeds whose six-hour poll is due.")]
-    fn refresh_due_podcast_feeds(&self) -> CallToolResult {
+    #[tool(
+        description = "Refresh every active podcast feed now, ignoring the six-hour poll window so newly parsed metadata is recorded."
+    )]
+    fn refresh_podcast_feeds(&self) -> CallToolResult {
         let client = HttpFeedClient::default();
         match self.service.lock() {
-            Ok(mut service) => match service.refresh_due_podcast_feeds(&client, Utc::now()) {
+            Ok(mut service) => match service.refresh_active_podcast_feeds(&client, Utc::now()) {
                 Ok(results) => structured_success(json!({
                     "results": results.into_iter().map(|result| match result {
                         Ok(report) => json!({"status": "ok", "report": report}),

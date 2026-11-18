@@ -21,7 +21,7 @@ path.
 | `update_source` | Correct display name, locator/feed URL, rights statement, topics and scan caps. |
 | `set_source_state` | `active` / `paused` / `removed`. |
 | `delete_source` | Hard delete only for a source with **zero** retained events. |
-| `list_podcast_episodes`, `refresh_due_podcast_feeds`, `transcribe_podcast_episode` | Podcast adapter read/fetch/transcribe. |
+| `list_podcast_episodes`, `refresh_podcast_feeds`, `transcribe_podcast_episode` | Podcast adapter read/fetch/transcribe. |
 
 Kinds: `podcast`, `company_meeting`, `filing`, `reddit`, `x`, `web`,
 `local_document`, `other`.
