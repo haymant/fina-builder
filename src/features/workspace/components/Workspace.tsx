@@ -1,5 +1,6 @@
 import { BookOpen, ChevronDown, ChevronRight, LayoutGrid, MessageSquare, Moon, Plus, RotateCcw, Sun } from 'lucide-react'
-import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { AppMenuBar } from './AppMenuBar'
 import { ConfirmDialog } from './ConfirmDialog'
 import { loadLocation, saveLocation, splitPrimary, TRADE_VIEWS, type Location, type TradeView } from '../navigation'
@@ -50,17 +51,25 @@ function SlowModuleNotice({ label }: { label: string }) {
   )
 }
 
-class ViewLoadBoundary extends Component<{ label: string; children: ReactNode }, { failed: boolean }> {
-  state = { failed: false }
-  static getDerivedStateFromError() {
-    return { failed: true }
+class ViewLoadBoundary extends Component<{ label: string; children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null }
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    const detail = `${error.name}: ${error.message}\n${error.stack ?? ''}\nComponent stack:${info.componentStack ?? ''}`
+    console.error(`[workspace:${this.props.label}] view failed`, error, info.componentStack)
+    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      void invoke('report_frontend_error', { context: `view-boundary:${this.props.label}`, message: detail }).catch(() => undefined)
+    }
   }
   render() {
-    if (!this.state.failed) return this.props.children
+    if (!this.state.error) return this.props.children
     return (
       <div className="narrative-empty" role="alert">
         <span>{this.props.label} could not be loaded.</span>
-        <span className="text-[11px]">Reload the window. If this is a development build, confirm the Vite server is running.</span>
+        <span className="text-[11px]">{this.state.error.message || 'The view module failed while loading or rendering.'}</span>
+        <span className="text-[11px]">Error details were written to the desktop log when available. Reload the window; in development, also confirm the Vite server is running.</span>
         <button type="button" className="ghost-button mt-2" onClick={() => window.location.reload()}>Reload window</button>
       </div>
     )

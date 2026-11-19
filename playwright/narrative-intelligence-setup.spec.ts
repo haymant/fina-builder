@@ -35,7 +35,7 @@ const claim = {
   evidence: [{ event_id: event.event_id, quote: 'policy to remain restrictive until inflation cools', start_offset: 34, end_offset: 84 }],
 }
 
-async function stubSetupJourney(page: Page, options: { directLocal?: boolean; retainedClaim?: boolean } = {}) {
+async function stubSetupJourney(page: Page, options: { directLocal?: boolean; retainedClaim?: boolean; legacyCapabilities?: boolean } = {}) {
   const state = {
     subscribed: false,
     transcribed: Boolean(options.retainedClaim),
@@ -170,7 +170,9 @@ async function stubSetupJourney(page: Page, options: { directLocal?: boolean; re
         episode_count: 1,
       }
       const structuredContent = name === 'capabilities'
-        ? { service: 'nip-engine', service_version: 'fixture', api_version: 1, schema_version: 9, features: { duckdb_store: true, podcast_rss_subscriptions: true, local_audio_transcription: true, claim_extraction: true, parquet_export: true, semantic_search: false } }
+        ? options.legacyCapabilities
+          ? { service: 'nip-engine', service_version: 'older-sidecar', api_version: 1, schema_version: 8 }
+          : { service: 'nip-engine', service_version: 'fixture', api_version: 1, schema_version: 9, features: { duckdb_store: true, podcast_rss_subscriptions: true, local_audio_transcription: true, claim_extraction: true, parquet_export: true, semantic_search: false } }
         : name === 'health'
           ? { service: 'nip-engine', api_version: 1, readiness: 'ready', schema_version: 9 }
         : name === 'list_podcast_subscriptions'
@@ -295,6 +297,19 @@ test.describe('Narrative Intelligence first-run setup', () => {
     await expect(page.getByText(/NIP calls this model directly/)).toBeVisible()
     await expect(page.getByText(/Transcript text stays on the machine/)).toBeVisible()
     await expect(page.getByText(/no RIGA or remote fallback/)).toBeVisible()
+  })
+
+  test('keeps Narrative usable when an older NIP sidecar omits optional capabilities', {
+    tag: [TAG.journey.narrativeSetup, TAG.feature.narrativeSetup, TAG.priority.p1],
+  }, async ({ page }) => {
+    await stubSetupJourney(page, { legacyCapabilities: true })
+    const workspace = new WorkspacePage(page)
+    await workspace.open()
+    await page.getByTestId('menu-narrative').click()
+    await page.getByTestId('menuitem-narrative-overview').click()
+
+    await expect(page.getByTestId('nip-setup-checklist')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Discovered episodes' })).toBeVisible()
   })
 
   test('shows the setup checklist and the exact next action', {

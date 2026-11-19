@@ -10,7 +10,8 @@ export interface NipCapabilities {
   service_version: string
   api_version: number
   schema_version: number
-  features: {
+  /** Older bundled NIP sidecars may omit this; optional features then stay disabled. */
+  features?: {
     duckdb_store: boolean
     podcast_rss_subscriptions: boolean
     local_audio_transcription: boolean
