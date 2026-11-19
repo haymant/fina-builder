@@ -42,8 +42,12 @@ pub fn render(
     workspace: &Path,
     media_root: &Path,
     run_id: &str,
+    capture_mode: &str,
     cancel: &AtomicBool,
 ) -> Result<LinkZagOutcome, String> {
+    if !matches!(capture_mode, "flash" | "full") {
+        return Err(format!("unsupported LinkZag capture mode: {capture_mode}"));
+    }
     let raw_scene_id = spec
         .get("scene_id")
         .and_then(Value::as_str)
@@ -111,7 +115,7 @@ pub fn render(
         .current_dir(&linkzag_root)
         .args(["run", "segment", "--", "--scene"])
         .arg(&scene_path)
-        .args(["--format", "mp4", "--out"])
+        .args(["--format", "mp4", "--capture-mode", capture_mode, "--out"])
         .arg(&output_dir)
         .arg("--quiet")
         .spawn()
@@ -164,6 +168,36 @@ pub fn render(
             "LinkZag scene checksum mismatch: expected {checksum}, got {resolved_checksum}"
         ));
     }
+    let recorded_mode = manifest
+        .pointer("/options/captureMode")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "LinkZag segment manifest omitted capture mode".to_owned())?;
+    if recorded_mode != capture_mode {
+        return Err(format!(
+            "LinkZag capture mode mismatch: requested {capture_mode}, got {recorded_mode}"
+        ));
+    }
+    let expected_renderer = if capture_mode == "flash" {
+        "canvas"
+    } else {
+        "svg"
+    };
+    let recorded_renderer = manifest
+        .pointer("/options/chartRenderer")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "LinkZag segment manifest omitted chart renderer".to_owned())?;
+    if recorded_renderer != expected_renderer {
+        return Err(format!(
+            "LinkZag chart renderer mismatch: {capture_mode} requires {expected_renderer}, got {recorded_renderer}"
+        ));
+    }
+    let recorded_determinism = manifest
+        .pointer("/options/deterministic")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| "LinkZag segment manifest omitted determinism metadata".to_owned())?;
+    if recorded_determinism != (capture_mode == "full") {
+        return Err("LinkZag segment determinism metadata does not match capture mode".into());
+    }
     let media_file = mp4_manifest_entry(&manifest)?.clone();
     let media_path = resolve_output_file(&media_file, &linkzag_root, &output_dir)?;
     fs::write(&managed_scene_path, &scene_source)
@@ -187,7 +221,11 @@ pub fn render(
         manifest: Some(manifest),
         media_path: Some(media_path),
         renderer_revision: revision,
-        message: "Deterministic LinkZag MP4 segment verified".into(),
+        message: if capture_mode == "full" {
+            "Full deterministic LinkZag MP4 segment verified".into()
+        } else {
+            "Flash recordVideo LinkZag MP4 segment verified".into()
+        },
     })
 }
 
@@ -199,6 +237,30 @@ pub fn assemble(
     if segments.is_empty() {
         return Err("storyboard assembly requires at least one rendered slide".into());
     }
+    let capture_mode = segments
+        .first()
+        .and_then(|segment| segment.manifest.as_ref())
+        .and_then(|manifest| manifest.pointer("/options/captureMode"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "storyboard segment omitted capture mode".to_owned())?;
+    if !matches!(capture_mode, "flash" | "full")
+        || segments.iter().any(|segment| {
+            segment
+                .manifest
+                .as_ref()
+                .and_then(|manifest| manifest.pointer("/options/captureMode"))
+                .and_then(Value::as_str)
+                != Some(capture_mode)
+        })
+    {
+        return Err("storyboard segments use inconsistent capture modes".into());
+    }
+    let chart_renderer = if capture_mode == "flash" {
+        "canvas"
+    } else {
+        "svg"
+    };
+    let deterministic = capture_mode == "full";
     let output_dir = media_root
         .join("video")
         .join("linkzag")
@@ -338,6 +400,9 @@ pub fn assemble(
         "width": width,
         "height": height,
         "duration": duration,
+        "capture_mode": capture_mode,
+        "chart_renderer": chart_renderer,
+        "deterministic": deterministic,
         "segments": segments.iter().map(|segment| segment.manifest.clone()).collect::<Vec<_>>()
     });
     Ok(LinkZagAssembly {
@@ -679,7 +744,7 @@ mod tests {
                 "kind":"quote_card",
                 "speaker":"Reviewer",
                 "source_label":"Long source label",
-                "quote":"A long quote intended to exercise the responsive content region. ".repeat(5)
+                "quote":"A long quote intended to exercise the responsive content region. ".repeat(6)
             }
         });
         for (width, height) in [(1280, 720), (1920, 1080)] {

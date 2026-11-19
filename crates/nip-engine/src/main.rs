@@ -404,6 +404,30 @@ struct LinkZagRenderParams {
     visual_spec_id: Option<String>,
     visual_spec_revision: Option<u32>,
     visual_specs: Option<Vec<VideoVisualSpecRefParams>>,
+    #[serde(default)]
+    capture_mode: LinkZagCaptureMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum LinkZagCaptureMode {
+    Flash,
+    Full,
+}
+
+impl Default for LinkZagCaptureMode {
+    fn default() -> Self {
+        Self::Flash
+    }
+}
+
+impl LinkZagCaptureMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Flash => "flash",
+            Self::Full => "full",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1083,12 +1107,13 @@ impl NipMcp {
     }
 
     #[tool(
-        description = "Queue a bounded LinkZag MP4 for an ordered set of exact saved VideoVisualSpec revisions (or one legacy spec). All slides must belong to one project and episode; produced assets inherit validated lineage. Poll video_job_status."
+        description = "Queue a bounded LinkZag MP4 for an ordered set of exact saved VideoVisualSpec revisions (or one legacy spec). All slides must belong to one project and episode; produced assets inherit validated lineage. capture_mode defaults to flash (real-time recordVideo, may drop frames); choose full for deterministic timestamped screenshots. Poll video_job_status."
     )]
     fn render_video_linkzag(
         &self,
         Parameters(params): Parameters<LinkZagRenderParams>,
     ) -> CallToolResult {
+        let capture_mode = params.capture_mode;
         let references = if let Some(references) = params.visual_specs {
             if params.visual_spec_id.is_some() || params.visual_spec_revision.is_some() {
                 return structured_error(
@@ -1194,7 +1219,10 @@ impl NipMcp {
             Err(error) => return structured_error("internal", error.to_string()),
         };
         let mut job = job;
-        job.resource_estimate = Some(json!({ "visual_specs": visual_specs }));
+        job.resource_estimate = Some(json!({
+            "visual_specs": visual_specs,
+            "capture_mode": capture_mode.as_str()
+        }));
         if let Err(error) = service.save_video_job(&job) {
             return structured_error("video_job_rejected", error.to_string());
         }
@@ -3213,7 +3241,7 @@ fn spawn_video_linkzag_job(
     service: Arc<Mutex<NipService>>,
     cancel_map: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     job_id: String,
-    visual_spec: Value,
+    render_request: Value,
     cancel: Arc<AtomicBool>,
 ) {
     let _ = thread::Builder::new().name(format!("video-{job_id}")).spawn(move || {
@@ -3236,7 +3264,17 @@ fn spawn_video_linkzag_job(
         let cleanup_cancel = || {
             cancel_map.lock().ok().map(|mut flags| flags.remove(&job_id));
         };
-        let specs = video_visual_spec_values(&visual_spec);
+        let capture_mode = render_request
+            .get("capture_mode")
+            .and_then(Value::as_str)
+            .unwrap_or("flash")
+            .to_owned();
+        if !matches!(capture_mode.as_str(), "flash" | "full") {
+            update(&|job| { job.status = "failed".into(); job.safe_error_message = Some("persisted LinkZag capture mode is invalid".into()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+            cleanup_cancel();
+            return;
+        }
+        let specs = video_visual_spec_values(&render_request);
         if specs.is_empty() || specs.len() > 24 {
             update(&|job| { job.status = "failed".into(); job.safe_error_message = Some("persisted storyboard must contain between 1 and 24 slide specs".into()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
             cleanup_cancel();
@@ -3246,7 +3284,7 @@ fn spawn_video_linkzag_job(
         for (index, spec) in specs.iter().enumerate() {
             update(&|job| job.progress_millis = 5_000 + ((index as u32 * 70_000) / specs.len() as u32));
             let render_id = format!("{job_id}-slide-{:02}", index + 1);
-            match linkzag::render(spec, &workspace, &media_root, &render_id, &cancel) {
+            match linkzag::render(spec, &workspace, &media_root, &render_id, &capture_mode, &cancel) {
                 Ok(outcome) if outcome.state == "ready" => segments.push(outcome),
                 Ok(outcome) if outcome.state == "cancelled" => {
                     update(&|job| { job.status = "cancelled".into(); job.cancellation_requested = true; job.safe_error_message = Some(outcome.message.clone()); job.finished_at = Some(Utc::now()); });
@@ -3303,14 +3341,18 @@ fn spawn_video_linkzag_job(
             provider: "linkzag".into(),
             workflow_id: Some("linkzag.commentary.v1".into()),
             model: None,
-            reproducibility: "deterministic".into(),
+            reproducibility: if capture_mode == "full" {
+                "deterministic".into()
+            } else {
+                "nondeterministic".into()
+            },
             capability_state: "ready".into(),
             license_state: "internal_review_only".into(),
             job_id: Some(job_id.clone()),
             created_at: Utc::now(),
         };
         if let Ok(mut service) = service.lock() {
-            let source_specs = video_visual_spec_values(&visual_spec)
+            let source_specs = video_visual_spec_values(&render_request)
                 .into_iter()
                 .map(|value| {
                     video_visual_spec_ref(&value).and_then(|(spec_id, revision)| {
@@ -3321,9 +3363,14 @@ fn spawn_video_linkzag_job(
             let lineage = source_specs
                 .as_ref()
                 .map(|specs| linkzag_asset_lineage(&asset, specs));
-            let registration = lineage.as_ref().ok_or(()).and_then(|lineage| {
-                service.save_video_asset_with_lineage(&asset, lineage).map_err(|_| ())
-            });
+            let registration = lineage
+                .as_ref()
+                .ok_or_else(|| "rendered visual-spec lineage is unavailable".to_owned())
+                .and_then(|lineage| {
+                    service
+                        .save_video_asset_with_lineage(&asset, lineage)
+                        .map_err(|error| error.to_string())
+                });
             if let Ok(Some(mut job)) = service.video_job(&job_id) {
                 match registration {
                     Ok(()) => {
@@ -3333,6 +3380,9 @@ fn spawn_video_linkzag_job(
                             "asset": asset,
                             "lineage": lineage.unwrap_or_default(),
                             "renderer": "linkzag",
+                            "capture_mode": capture_mode,
+                            "chart_renderer": if capture_mode == "flash" { "canvas" } else { "svg" },
+                            "deterministic": capture_mode == "full",
                             "renderer_revision": segments.first().map(|segment| segment.renderer_revision.clone()),
                             "scene_checksums": segments.iter().map(|segment| segment.scene_checksum.clone()).collect::<Vec<_>>(),
                             "segment_manifests": segments.iter().map(|segment| segment.manifest.clone()).collect::<Vec<_>>(),
@@ -3340,7 +3390,8 @@ fn spawn_video_linkzag_job(
                         }));
                         job.finished_at = Some(Utc::now());
                     }
-                    Err(()) => {
+                    Err(error) => {
+                        eprintln!("LinkZag asset/lineage registration failed for job {job_id}: {error}");
                         job.status = "failed".into();
                         job.safe_error_message = Some(if source_specs.is_some() {
                             "render completed but atomic asset/lineage registration failed".into()
@@ -4177,6 +4228,34 @@ fn parse_byte_range(value: &str, total: usize) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linkzag_render_mode_defaults_to_flash_and_accepts_full() {
+        let defaulted: LinkZagRenderParams = serde_json::from_value(json!({
+            "visual_spec_id": "spec-1",
+            "visual_spec_revision": 1
+        }))
+        .unwrap();
+        assert_eq!(defaulted.capture_mode, LinkZagCaptureMode::Flash);
+
+        let full: LinkZagRenderParams = serde_json::from_value(json!({
+            "visual_spec_id": "spec-1",
+            "visual_spec_revision": 1,
+            "capture_mode": "full"
+        }))
+        .unwrap();
+        assert_eq!(full.capture_mode, LinkZagCaptureMode::Full);
+    }
+
+    #[test]
+    fn linkzag_render_mode_rejects_unknown_values() {
+        let result = serde_json::from_value::<LinkZagRenderParams>(json!({
+            "visual_spec_id": "spec-1",
+            "visual_spec_revision": 1,
+            "capture_mode": "turbo"
+        }));
+        assert!(result.is_err());
+    }
 
     #[test]
     fn byte_ranges_support_browser_seeking() {

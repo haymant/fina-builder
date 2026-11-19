@@ -6,7 +6,7 @@ const event = { event_id: 'event-video-demo-1', title: 'Policy outlook fixture',
 const claim = { claim_id: 'claim-video-demo-1', claim_text: 'Policy is expected to remain restrictive until inflation cools.', evidence: [{ event_id: event.event_id, quote: 'policy to remain restrictive until inflation cools' }] }
 
 async function stubVideoJourney(page: Page) {
-  const state = { project: null as Record<string, unknown> | null, episode: null as Record<string, unknown> | null, jobPolls: 0 }
+  const state = { project: null as Record<string, unknown> | null, episode: null as Record<string, unknown> | null, jobPolls: 0, captureModes: [] as string[] }
   await page.route('**/nip/mcp', async (route) => {
     const body = route.request().postDataJSON() as { id?: number; method?: string; params?: { name?: string; arguments?: Record<string, unknown> } }
     if (body.method === 'notifications/initialized') return route.fulfill({ status: 202, body: '' })
@@ -25,7 +25,7 @@ async function stubVideoJourney(page: Page) {
       else if (name === 'list_video_episodes') value = state.episode ? [state.episode] : []
       else if (name === 'list_video_evidence') value = [{ evidence_kind: 'event', evidence_id: event.event_id, start_offset: null, end_offset: null, quote: event.content_text }]
       else if (name === 'link_video_evidence' || name?.startsWith('save_video_')) value = args
-      else if (name === 'render_video_linkzag') value = { job_id: 'video-demo-job-1', operation: 'linkzag.segment', status: 'queued', input_revision: args.visual_spec_revision, progress_millis: 0, cancellation_requested: false, resource_estimate: args, output_manifest: null, safe_error_message: null, started_at: null, finished_at: null, created_at: '2026-11-18T09:00:00Z' }
+      else if (name === 'render_video_linkzag') { state.captureModes.push(String(args.capture_mode ?? 'flash')); value = { job_id: 'video-demo-job-1', operation: 'linkzag.segment', status: 'queued', input_revision: args.visual_spec_revision, progress_millis: 0, cancellation_requested: false, resource_estimate: args, output_manifest: null, safe_error_message: null, started_at: null, finished_at: null, created_at: '2026-11-18T09:00:00Z' } }
       else if (name === 'video_job_status') { state.jobPolls += 1; value = state.jobPolls < 2 ? { job_id: 'video-demo-job-1', operation: 'linkzag.segment', status: 'running', input_revision: 1, progress_millis: 42000, cancellation_requested: false, resource_estimate: {}, output_manifest: null, safe_error_message: null, started_at: '2026-11-18T09:00:00Z', finished_at: null, created_at: '2026-11-18T09:00:00Z' } : { job_id: 'video-demo-job-1', operation: 'linkzag.segment', status: 'succeeded', input_revision: 1, progress_millis: 100000, cancellation_requested: false, resource_estimate: {}, output_manifest: { asset: { asset_id: 'linkzag-commentary-demo', revision: 1, asset_kind: 'linkzag_segment', relative_path: 'video/linkzag/video-demo-job-1/output/commentary.mp4', mime_type: 'video/mp4', content_hash: 'demo-checksum', width: 1280, height: 720, duration_ms: 12000, provider: 'linkzag', workflow_id: 'linkzag.commentary.v1', model: null, reproducibility: 'deterministic', capability_state: 'ready', license_state: 'fixture_only', job_id: 'video-demo-job-1', created_at: '2026-11-18T09:00:00Z' } }, safe_error_message: null, started_at: '2026-11-18T09:00:00Z', finished_at: '2026-11-18T09:00:10Z', created_at: '2026-11-18T09:00:00Z' } }
       else if (name === 'list_podcast_episodes') value = [{ title: event.title, state: 'transcribed', source_id: 'podcast-demo' }]
       else if (name === 'search_events') value = { events: [event], next_cursor: null }
@@ -45,9 +45,9 @@ async function callFixtureTool(page: Page, name: string, args: Record<string, un
   }, { name, args })
 }
 
-test('takes retained podcast evidence through a deterministic Video render', { tag: [TAG.demo.any, TAG.demo.videoWorkspace, TAG.journey.videoProduction, TAG.feature.videoWorkspace, TAG.feature.narrativeEvents, TAG.feature.narrativeClaims] }, async ({ page, demo }) => {
+test('takes retained podcast evidence through configurable Video capture', { tag: [TAG.demo.any, TAG.demo.videoWorkspace, TAG.journey.videoProduction, TAG.feature.videoWorkspace, TAG.feature.narrativeEvents, TAG.feature.narrativeClaims] }, async ({ page, demo }) => {
   test.setTimeout(120_000)
-  await stubVideoJourney(page)
+  const state = await stubVideoJourney(page)
   const workspace = new WorkspacePage(page)
   await workspace.open()
   await demo.cue('Open the evidence-first production workspace')
@@ -87,9 +87,15 @@ test('takes retained podcast evidence through a deterministic Video render', { t
     await demo.pause(4_000)
   })
 
-  await test.step('Queue and complete the final deterministic video', async () => {
+  await test.step('Switch from default Flash to Full and complete the video job', async () => {
+    const captureMode = page.getByLabel('Capture mode')
+    await expect(captureMode).toHaveValue('flash')
+    await captureMode.selectOption('full')
+    await expect(captureMode).toHaveValue('full')
     await page.getByRole('button', { name: 'Render slides · silent MP4' }).click()
+    await expect.poll(() => state.captureModes).toEqual(['full'])
     await expect(page.locator('.video-job-banner').getByText(/Silent commentary MP4 ready ·/)).toBeVisible({ timeout: 30_000 })
+    await expect(page.locator('.video-job-banner')).toContainText('Full deterministic')
     await expect(page.locator('.video-asset-list').getByText('linkzag-commentary-demo', { exact: true })).toBeVisible()
     await demo.cue('LinkZag verifies the segment manifest and registers the final video asset')
     await demo.pause(2_500)

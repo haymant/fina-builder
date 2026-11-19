@@ -37,7 +37,7 @@ export const videoApi = {
   saveTimeline: (timeline: VideoTimeline) => nip.callTool('save_video_timeline', { timeline }).then((value) => fromTransport<VideoTimeline>(value)),
   getTimeline: (timelineId: string, revision: number) => nip.callTool('get_video_timeline', { timeline_id: timelineId, revision }).then((value) => fromTransport<VideoTimeline>(value)),
   listTimelines: (projectId: string, limit = 50) => nip.callTool('list_video_timelines', { project_id: projectId, limit }).then((value) => fromTransport<VideoTimeline[]>(value)),
-  renderLinkZag: (visualSpecs: Array<{ spec_id: string; revision: number }>) => nip.callTool('render_video_linkzag', { visual_specs: visualSpecs }).then((value) => fromTransport<VideoJob>(value)),
+  renderLinkZag: (visualSpecs: Array<{ spec_id: string; revision: number }>, captureMode: 'flash' | 'full' = 'flash') => nip.callTool('render_video_linkzag', { visual_specs: visualSpecs, capture_mode: captureMode }).then((value) => fromTransport<VideoJob>(value)),
   getJob: (jobId: string) => nip.callTool('video_job_status', { job_id: jobId }).then((value) => fromTransport<VideoJob>(value)),
   listJobs: (limit = 50) => nip.callTool('list_video_jobs', { limit }).then((value) => fromTransport<VideoJob[]>(value)),
   cancelJob: (jobId: string) => nip.callTool('cancel_video_job', { job_id: jobId }).then((value) => fromTransport<VideoJob>(value)),

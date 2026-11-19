@@ -165,7 +165,6 @@ test.describe('External-agent commentary MCP journey (local fixtures)', () => {
     expect(primaryEpisode).toBeTruthy()
     const sourceNativeId = primaryEpisode!.sourceNativeId
     const eventId = primaryEpisode!.eventId
-    const transcript = primaryEpisode!.transcript
     const eventIds = transcribedEpisodes.map((episode) => episode.eventId)
     const eventIdSet = new Set(eventIds)
 
@@ -435,8 +434,19 @@ test.describe('External-agent commentary MCP journey (local fixtures)', () => {
     }
     expect(videoJob?.status, JSON.stringify(videoJob)).toBe('succeeded')
 
+    const renderEstimate = videoJob?.resource_estimate as Record<string, unknown> | undefined
+    expect(renderEstimate?.capture_mode).toBe('flash')
     const outputManifest = videoJob?.output_manifest as Record<string, unknown> | undefined
     const asset = outputManifest?.asset as Record<string, unknown> | undefined
+    expect(outputManifest?.capture_mode).toBe('flash')
+    expect(outputManifest?.chart_renderer).toBe('canvas')
+    expect(outputManifest?.deterministic).toBe(false)
+    expect(asset?.reproducibility).toBe('nondeterministic')
+    const segmentManifests = outputManifest?.segment_manifests as Array<Record<string, unknown>> | undefined
+    expect(segmentManifests).toHaveLength(pinnedSpecs.length)
+    for (const segmentManifest of segmentManifests ?? []) {
+      expect(segmentManifest.options).toMatchObject({ captureMode: 'flash', chartRenderer: 'canvas', deterministic: false })
+    }
     expect(asset?.asset_kind).toBe('commentary_video')
     expect(asset?.mime_type).toBe('video/mp4')
     expect(asset?.capability_state).toBe('ready')
@@ -850,6 +860,14 @@ test.describe('External-agent commentary MCP journey (local fixtures)', () => {
       storyboard_id: draft.storyboard.storyboard_id,
       visual_specs: pinnedSpecs,
       render_job_id: render.job_id,
+      capture_mode: outputManifest?.capture_mode ?? null,
+      chart_renderer: outputManifest?.chart_renderer ?? null,
+      render_deterministic: outputManifest?.deterministic ?? null,
+      asset_reproducibility: asset?.reproducibility ?? null,
+      capture_mode_verification: {
+        status: 'passed',
+        segment_count: segmentManifests?.length ?? 0,
+      },
       asset_id: asset?.asset_id,
       asset_revision: asset?.revision,
       timeline_id: timelineRef.id,
@@ -886,6 +904,11 @@ test.describe('External-agent commentary MCP journey (local fixtures)', () => {
         : 'installed_preview_profile; deterministic preflight blocked by persisted QA findings; no export job or manifest',
       external_auth_bridge: 'not_under_test',
     }
+    expect(receipt.capture_mode).toBe('flash')
+    expect(receipt.chart_renderer).toBe('canvas')
+    expect(receipt.render_deterministic).toBe(false)
+    expect(receipt.asset_reproducibility).toBe('nondeterministic')
+    expect(receipt.capture_mode_verification).toMatchObject({ status: 'passed', segment_count: pinnedSpecs.length })
     mkdirSync(runRoot, { recursive: true })
     writeFileSync(path.join(runRoot, 'external-agent-commentary-result.json'), `${JSON.stringify(receipt, null, 2)}\n`)
     test.info().annotations.push({

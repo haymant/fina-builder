@@ -4,7 +4,7 @@
 
 ## 1. Decision
 
-Treat the edit decision list (EDL) as Fina's canonical, immutable, revision-pinned **VideoTimeline**, not as an arbitrary FFmpeg command or a renderer-specific scene file. `LinkZag` remains a deterministic shot/segment renderer. The EDL selects and places rendered assets, narration/music/effects and captions; the export worker assembles those selections into an output profile. A separate QA evaluator inspects the exact EDL inputs and the rendered media. Export is permitted only when a current QA report authorizes the same input fingerprint under the selected policy.
+Treat the edit decision list (EDL) as Fina's canonical, immutable, revision-pinned **VideoTimeline**, not as an arbitrary FFmpeg command or a renderer-specific scene file. `LinkZag` supports Flash real-time preview capture and Full deterministic shot/segment capture; mode, chart backend and determinism are explicit manifest metadata. The EDL selects and places rendered assets, narration/music/effects and captions; the export worker assembles those selections into an output profile. A separate QA evaluator inspects the exact EDL inputs and the rendered media. Export is permitted only when a current QA report authorizes the same input fingerprint under the selected policy.
 
 The production chain is:
 

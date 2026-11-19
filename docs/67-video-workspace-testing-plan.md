@@ -23,7 +23,7 @@
 | Reproducibility | Manifest includes prompt, model, parameters, workflow/version, pack commit, upstream IDs, content hashes, timestamps and provider limitations. |
 | Async generation | Start returns a job ID; progress, retry, cancel, failure and restart recovery are observable; no request blocks the NIP service. |
 | QA | Invalid dependency, duration, missing media, bad stream and evidence coverage are reported with severity and block export when required. |
-| Assembly | Timeline JSON, LinkZag scene/segment manifest, EDL and FFmpeg plan are deterministic for the same inputs; fixture export produces valid PNG/MP4/WebM/MOV or a clear unsupported-format error. |
+| Assembly | Timeline JSON, Full-mode LinkZag capture, EDL and FFmpeg plan are deterministic for the same inputs; Flash validates recordVideo output and reports nondeterministic provenance instead of byte-identical repeatability; fixture export produces valid PNG/MP4/WebM/MOV or a clear unsupported-format error. |
 | Local Comfy support | Optional live smoke proves one small image/video/TTS/ASR path only on a pre-provisioned loopback ComfyUI; no default CI dependency. |
 | License/policy | H3 attribution/model license state is retained; publishing/export is blocked when required policy metadata is absent. |
 
@@ -156,14 +156,14 @@ All journeys use deterministic fixtures and disposable directories.
 6. Fix the dependency and rebuild the deterministic timeline/EDL/FFmpeg plan.
 7. Export a fixture MP4 and verify it is playable and linked to the project revision.
 
-### Journey V2a — deterministic LinkZag segment
+### Journey V2a — LinkZag Flash-default and Full capture modes
 
 1. Turn an NIP signal/chart specification into a local LinkZag scene.
-2. Preview the scene through the bounded renderer adapter.
-3. Capture a still and a short segment with a fixed time/FPS/format.
+2. Omit `capture_mode` and verify Flash is selected, Playwright `recordVideo` is used, ECharts uses Canvas, and the manifest reports nondeterministic output.
+3. Select Full and capture a still/short segment with fixed time/FPS/format, deterministic screenshots, and SVG ECharts.
 4. Verify the command-appropriate manifest (`segment.json` for a package, frame manifest for capture, or still/ffprobe metadata for render/video), scene checksum, media metadata and evidence links.
-5. Repeat the capture and verify deterministic output or a documented OS-font tolerance.
-6. Select a transparent overlay and verify WebM/MOV output or explicit MP4 matte guidance.
+5. Repeat Full capture and verify deterministic output or a documented OS-font tolerance; for Flash, verify valid playback/provenance rather than byte-identical frames.
+6. Select a transparent overlay in Full mode and verify WebM/MOV output or explicit MP4 matte guidance.
 
 ### Journey V3 — unavailable and recovery states
 
@@ -234,9 +234,9 @@ All Rust domain/store/transport tests, frontend tests, existing NIP journeys and
 
 ### V1 planning gate
 
-Asset lineage, workflow registry, job state, QA report, deterministic LinkZag scene/segment exports and timeline exports pass with mock providers. Restart and path-safety tests pass.
+Asset lineage, workflow registry, job state, QA report, Flash/Full LinkZag mode contracts, Full-mode repeatability, Flash nondeterministic provenance and timeline exports pass with mock providers. Restart and path-safety tests pass.
 
-### V2 deterministic media and local generation gate
+### V2 Full deterministic media and local generation gate
 
 The LinkZag submodule smoke and adapter contract pass. If local Comfy is enabled, its opt-in smoke passes on the target platform; missing prerequisites remain visibly unavailable; cleanup and license metadata pass. No cloud provider is implied.
 

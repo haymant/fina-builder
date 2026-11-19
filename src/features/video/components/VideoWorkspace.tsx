@@ -59,7 +59,7 @@ function ProjectList({ projects, loading, message, onRefresh, onOpen, onCreated 
     try { onCreated(await videoApi.createProject({ ...draft, title: draft.title.trim(), audience: draft.audience?.trim() || null })) } catch { /* surfaced by the next refresh */ } finally { setCreating(false) }
   }
   return <div className="video-page" data-testid="video-workspace">
-    <header className="video-hero"><div><p className="eyebrow">Bounded production domain</p><h1>Video Workspace</h1><p>Turn a retained event transcript into an evidence-linked slides storyboard and deterministic visual preview.</p></div><button type="button" className="ghost-button" onClick={onRefresh} disabled={loading}><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh</button></header>
+    <header className="video-hero"><div><p className="eyebrow">Bounded production domain</p><h1>Video Workspace</h1><p>Turn a retained event transcript into an evidence-linked slides storyboard and a Flash preview, with Full deterministic capture when needed.</p></div><button type="button" className="ghost-button" onClick={onRefresh} disabled={loading}><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh</button></header>
     <section className="video-capability-strip"><ShieldCheck size={16} /><span>Planning and source lookup are local and deterministic. TTS is shown only when configured.</span><span className="video-state">{projects.length} project{projects.length === 1 ? '' : 's'}</span></section>
     {message ? <p className="video-alert" role="alert">{message}</p> : null}
     <div className="video-columns">
@@ -81,6 +81,7 @@ function EpisodeWorkspace({ project, capabilities, onBack, onMessage }: { projec
   const [assets, setAssets] = useState<VideoAsset[]>([])
   const [workflows, setWorkflows] = useState<VideoWorkflow[]>([])
   const [rendering, setRendering] = useState(false)
+  const [captureMode, setCaptureMode] = useState<'flash' | 'full'>('flash')
   const [activeJob, setActiveJob] = useState<VideoJob | null>(null)
   const [jobNotice, setJobNotice] = useState<string | null>(null)
 
@@ -146,9 +147,11 @@ function EpisodeWorkspace({ project, capabilities, onBack, onMessage }: { projec
     }
     if (current.status === 'succeeded' && current.output_manifest?.asset) {
       const asset = current.output_manifest.asset
+      const completedMode = current.output_manifest.capture_mode ?? current.resource_estimate?.capture_mode ?? captureMode
+      const modeLabel = completedMode === 'full' ? 'Full deterministic' : 'Flash real-time preview'
       setAssets((items) => [asset, ...items.filter((item) => item.asset_id !== asset.asset_id)])
-      setJobNotice(`Silent commentary MP4 ready · ${asset.asset_id}`)
-      onMessage(`Silent commentary MP4 ready · ${asset.asset_id}`)
+      setJobNotice(`Silent commentary MP4 ready · ${asset.asset_id} · ${modeLabel}`)
+      onMessage(`Silent commentary MP4 ready · ${asset.asset_id} · ${modeLabel}`)
     } else if (current.status === 'cancelled') {
       setJobNotice(`Video job ${current.job_id} was cancelled. The attempt remains inspectable.`)
     } else if (current.status === 'failed') {
@@ -164,8 +167,8 @@ function EpisodeWorkspace({ project, capabilities, onBack, onMessage }: { projec
     setRendering(true)
     setJobNotice(null)
     try {
-      const result = await videoApi.renderLinkZag(visualSpecs)
-      onMessage(`Video job ${result.job_id} queued for all ${visualSpecs.length} saved slides.`)
+      const result = await videoApi.renderLinkZag(visualSpecs, captureMode)
+      onMessage(`Video job ${result.job_id} queued for all ${visualSpecs.length} saved slides in ${captureMode} mode.`)
       await pollJob(result)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'LinkZag render failed.'
@@ -201,7 +204,7 @@ function EpisodeWorkspace({ project, capabilities, onBack, onMessage }: { projec
 
   return <div className="video-page" data-testid="video-episode-workspace">
     <header className="video-hero"><div><button type="button" className="video-back" onClick={onBack}>← Projects</button><p className="eyebrow">Project v{project.revision} · {project.status}</p><h1>{project.title}</h1><p>Episode → narrative → slides → scenes, shots, and audio cues. Source text remains in NIP.</p></div><span className="video-chip video-chip-strong">{capabilities?.planning ?? 'planning'}</span></header>
-    <section className="video-capability-grid"><Capability label="Planning" state={capabilities?.planning} /><Capability label="Evidence linkage" state={capabilities?.evidence_linkage} /><Capability label="Deterministic renderer" state={capabilities?.deterministic_renderer} /><Capability label="TTS / narration audio" state={capabilities?.tts} /></section>
+    <section className="video-capability-grid"><Capability label="Planning" state={capabilities?.planning} /><Capability label="Evidence linkage" state={capabilities?.evidence_linkage} /><Capability label="Capture modes" state="Flash default · Full available" /><Capability label="TTS / narration audio" state={capabilities?.tts} /></section>
     {jobNotice ? <section className={`video-job-banner ${activeJob?.status === 'succeeded' ? 'is-success' : activeJob?.status === 'failed' || activeJob?.status === 'cancelled' ? 'is-error' : 'is-info'}`} role={activeJob?.status === 'failed' ? 'alert' : 'status'}><div><strong>Video job {activeJob?.status ?? 'notice'}</strong><p>{jobNotice}</p>{activeJob ? <small>{activeJob.job_id} · {Math.round(activeJob.progress_millis / 1000)}% · {activeJob.cancellation_requested ? 'cancellation requested' : 'durable state persisted'}</small> : null}</div><div className="video-job-actions">{activeJob && !['succeeded', 'failed', 'cancelled'].includes(activeJob.status) ? <button type="button" className="video-secondary-button" onClick={() => void cancelActiveJob()}>Cancel</button> : null}{activeJob && ['failed', 'cancelled'].includes(activeJob.status) ? <button type="button" className="video-primary-button" onClick={() => void retryActiveJob()} disabled={rendering}>Retry job</button> : null}<button type="button" className="video-secondary-button" onClick={() => setJobNotice(null)}>Dismiss</button></div></section> : null}
     {activeJob?.status === 'succeeded' && jobLineage.length ? <p className="video-footnote" data-testid="video-job-lineage">Final asset retains {jobLineage.length} upstream links: {jobLineage.filter((item) => item.upstream_kind === 'visual_spec').length} saved slide specs and {jobLineage.filter((item) => item.upstream_kind === 'event' || item.upstream_kind === 'claim').length} canonical event/claim sources.</p> : null}
     {episode ? <section className="video-card">
@@ -213,10 +216,11 @@ function EpisodeWorkspace({ project, capabilities, onBack, onMessage }: { projec
       <div className="video-card-head video-storyboard-head"><div><p className="eyebrow">Storyboard</p><h2>Transcript-driven slides.json</h2></div><div className="video-inline-actions"><button className="video-primary-button" type="button" onClick={() => void saveStoryboard()} disabled={saving || !sourceEvent}><Sparkles size={14} /> {saving ? 'Saving…' : storyboard ? 'Rebuild slides.json' : 'Build slides.json'}</button>{storyboard && downloadHref ? <a className="video-secondary-button" href={downloadHref} download={`${storyboard.storyboard_id}.slides.json`}>Download slides.json</a> : null}</div></div>
       {storyboard ? <><div className="video-scene-grid">{storyboard.slides.map((slide, index) => <article className="video-scene-card" key={slide.slide_id} data-testid={`storyboard-slide-${index + 1}`}><span>0{index + 1}</span><strong>{slide.purpose}</strong><p>{slide.scene.narration_text}</p><small>{Math.round((slide.scene.duration_ms ?? 0) / 1000)}s · {slide.shots.length} shot · audio cue {slide.audio_cue.status}</small></article>)}</div><details className="video-storyboard-json"><summary>Inspect slides.json · scenes, shots, audio cues, and evidence</summary><pre data-testid="storyboard-json">{storyboardJson}</pre></details></> : <p className="video-footnote">Load an event transcript to build three reviewable slides with a short cited excerpt and a neutral evidence caveat.</p>}
       <p className="video-footnote">Audio cue scripts are in the storyboard, but TTS is {capabilities?.tts?.replaceAll('_', ' ') ?? 'not configured'}; the current LinkZag MP4 is silent.</p>
-      <div className="video-card-head video-storyboard-head"><div><p className="eyebrow">LinkZag renderer</p><h2>Deterministic commentary video</h2></div><button className="video-secondary-button" type="button" onClick={() => void renderLinkZag()} disabled={rendering || !storyboard}><Clapperboard size={14} /> {rendering ? 'Rendering…' : 'Render slides · silent MP4'}</button></div>
-      <div className="video-asset-summary"><span>{assets.length} reusable asset{assets.length === 1 ? '' : 's'}</span><span>{workflows.length} workflow{workflows.length === 1 ? '' : 's'} registered</span><span>Deterministic template · source lineage retained</span></div>
+      <div className="video-card-head video-storyboard-head"><div><p className="eyebrow">LinkZag renderer</p><h2>Commentary video capture</h2></div><div className="video-render-controls"><label className="video-render-mode">Capture mode<select aria-label="Capture mode" data-testid="video-capture-mode" value={captureMode} onChange={(event) => setCaptureMode(event.target.value as 'flash' | 'full')} disabled={rendering}><option value="flash">Flash · real-time preview (Canvas)</option><option value="full">Full · deterministic screenshots (SVG)</option></select></label><button className="video-secondary-button" type="button" onClick={() => void renderLinkZag()} disabled={rendering || !storyboard}><Clapperboard size={14} /> {rendering ? 'Rendering…' : 'Render slides · silent MP4'}</button></div></div>
+      <p className="video-footnote">Flash is the speed-first default and may drop frames on a slow CPU. Choose Full when you need deterministic frame-by-frame capture or Flash motion/text quality is not acceptable.</p>
+      <div className="video-asset-summary"><span>{assets.length} reusable asset{assets.length === 1 ? '' : 's'}</span><span>{workflows.length} workflow{workflows.length === 1 ? '' : 's'} registered</span><span>Flash default · Full quality fallback · source lineage retained</span></div>
       {assets.length ? <div className="video-asset-list">{assets.slice(0, 5).map((asset) => <div className="video-asset-row" data-testid="video-asset-row" data-asset-hash={asset.content_hash ?? ''} data-asset-path={asset.relative_path ?? ''} key={`${asset.asset_id}-${asset.revision}`}><Film size={14} /><span className="min-w-0 flex-1"><strong>{asset.asset_id}</strong><small>{asset.asset_kind} · {asset.provider} · {asset.mime_type ?? 'unknown format'} · {asset.content_hash?.slice(0, 12) ?? 'no hash'}</small></span><span className="video-chip">{asset.capability_state}</span></div>)}</div> : null}
-      <p className="video-footnote">All saved slides render in order and assemble into one MP4. Output is deterministic and silent because TTS is not configured; it is not a publish-ready narrated episode.</p>
+      <p className="video-footnote">All saved slides render in order and assemble into one silent MP4. TTS is not configured, so this is not a publish-ready narrated episode; the output manifest records capture mode and determinism.</p>
     </section> : <section className="video-card video-empty"><Clapperboard size={24} /><h2>Create the first episode revision</h2><p>This creates production metadata only. Then link a retained event transcript before drafting candidate narration.</p><button className="video-primary-button" type="button" onClick={() => void createEpisode()} disabled={saving}>{saving ? 'Creating…' : 'Create episode'}</button></section>}
     <p className="video-status" role="status">{project.title} · source truth stays in NIP</p>
   </div>
