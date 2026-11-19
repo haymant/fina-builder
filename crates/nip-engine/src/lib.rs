@@ -7,9 +7,15 @@ pub mod media;
 pub mod podcast;
 pub mod provider;
 pub mod semantic;
+pub mod video_edl;
+pub mod video_export;
+pub mod video_export_producer;
+pub mod video_qa;
+pub mod video_qa_adapter;
 
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use nip_domain::{
+    AgentClaimAnnotation, AgentEntityCandidate, AgentNarrativeAnalysis, AgentNarrativeGraphDraft,
     CapabilitiesResponse, ClaimEvidence, ClaimRecord, EditorialCandidate, EditorialReviewAudit,
     EmbeddingIndexManifest, EtfMapping, EventRecord, EventSearchPage, EventSearchQuery,
     ExtractionStatus, FeatureCapabilities, HealthResponse, LocalEventImport, NarrativeCluster,
@@ -18,8 +24,9 @@ use nip_domain::{
     PodcastEpisodeState, PodcastRefreshReport, PodcastSubscription, PodcastSubscriptionState,
     PodcastTranscript, ProviderConsent, ProviderStatus, Readiness, ResourceStatus,
     SemanticSearchResult, SourceId, SourceKind, SourceState, SourceUpdate, VideoAsset,
-    VideoEpisode, VideoEvidenceRef, VideoExportManifest, VideoJob, VideoProject, VideoScene,
-    VideoShot, VideoStoryboard, VideoVisualSpec, VideoWorkflow, API_VERSION, DOMAIN_SCHEMA_VERSION,
+    VideoAssetLineage, VideoAudioCue, VideoEpisode, VideoEvidenceRef, VideoExportManifest,
+    VideoJob, VideoNarrative, VideoProject, VideoQaReport, VideoScene, VideoShot, VideoStoryboard,
+    VideoTimeline, VideoVisualSpec, VideoWorkflow, API_VERSION, DOMAIN_SCHEMA_VERSION,
     SERVICE_NAME,
 };
 use nip_store::{SnapshotManifest, Store, StoreError, SubscriptionFetchStateUpdate};
@@ -168,6 +175,10 @@ pub enum NipError {
     ProviderUnavailable,
     #[error("claim extraction failed: {0}")]
     ExtractionRejected(String),
+    #[error("external-agent narrative graph payload was rejected: {0}")]
+    AgentAnalysisRejected(String),
+    #[error("Video EDL build request was rejected: {0}")]
+    VideoEdlBuildRejected(String),
     #[error("remote transcript extraction requires NIP-specific consent for the selected provider/model")]
     RemoteConsentRequired,
     #[error("no remote provider is configured; remote consent does not apply")]
@@ -257,6 +268,22 @@ impl NipService {
         Ok(self.store.save_video_episode(episode)?)
     }
 
+    pub fn video_narrative(&self, narrative_id: &str) -> Result<Option<VideoNarrative>, NipError> {
+        Ok(self.store.video_narrative(narrative_id)?)
+    }
+
+    pub fn video_narratives(
+        &self,
+        episode_id: &str,
+        limit: u32,
+    ) -> Result<Vec<VideoNarrative>, NipError> {
+        Ok(self.store.video_narratives(episode_id, limit)?)
+    }
+
+    pub fn save_video_narrative(&mut self, narrative: &VideoNarrative) -> Result<(), NipError> {
+        Ok(self.store.save_video_narrative(narrative)?)
+    }
+
     pub fn link_video_evidence(
         &mut self,
         episode_id: &str,
@@ -290,12 +317,56 @@ impl NipService {
         Ok(self.store.save_video_shot(shot)?)
     }
 
+    pub fn video_audio_cue(
+        &self,
+        cue_id: &str,
+        revision: u32,
+    ) -> Result<Option<VideoAudioCue>, NipError> {
+        Ok(self.store.video_audio_cue(cue_id, revision)?)
+    }
+    pub fn video_audio_cues(
+        &self,
+        storyboard_id: &str,
+        storyboard_revision: u32,
+        limit: u32,
+    ) -> Result<Vec<VideoAudioCue>, NipError> {
+        Ok(self
+            .store
+            .video_audio_cues(storyboard_id, storyboard_revision, limit)?)
+    }
+    pub fn save_video_audio_cue(&mut self, cue: &VideoAudioCue) -> Result<(), NipError> {
+        Ok(self.store.save_video_audio_cue(cue)?)
+    }
+
     pub fn video_assets(&self, limit: u32) -> Result<Vec<VideoAsset>, NipError> {
         Ok(self.store.video_assets(limit)?)
     }
 
     pub fn save_video_asset(&mut self, asset: &VideoAsset) -> Result<(), NipError> {
         Ok(self.store.save_video_asset(asset)?)
+    }
+
+    pub fn save_video_asset_with_lineage(
+        &mut self,
+        asset: &VideoAsset,
+        lineage: &[VideoAssetLineage],
+    ) -> Result<(), NipError> {
+        Ok(self.store.save_video_asset_with_lineage(asset, lineage)?)
+    }
+
+    pub fn save_video_asset_lineage(
+        &mut self,
+        lineage: &VideoAssetLineage,
+    ) -> Result<(), NipError> {
+        Ok(self.store.save_video_asset_lineage(lineage)?)
+    }
+
+    pub fn video_asset_lineage(
+        &self,
+        asset_id: &str,
+        asset_revision: u32,
+    ) -> Result<Vec<VideoAssetLineage>, NipError> {
+        Ok(self.store.video_asset_lineage(asset_id, asset_revision)?)
     }
 
     pub fn video_workflows(&self) -> Result<Vec<VideoWorkflow>, NipError> {
@@ -338,6 +409,168 @@ impl NipService {
         manifest: &VideoExportManifest,
     ) -> Result<(), NipError> {
         Ok(self.store.save_video_export_manifest(manifest)?)
+    }
+
+    pub fn video_qa_report(&self, report_id: &str) -> Result<Option<VideoQaReport>, NipError> {
+        Ok(self.store.video_qa_report(report_id)?)
+    }
+
+    pub fn run_video_qa(
+        &mut self,
+        media_root: &std::path::Path,
+        request: &video_qa_adapter::VideoQaRunRequest,
+    ) -> Result<serde_json::Value, NipError> {
+        video_qa_adapter::run(&mut self.store, media_root, request)
+            .map_err(NipError::VideoEdlBuildRejected)
+    }
+
+    pub fn video_qa_stored_report(
+        &self,
+        report_id: &str,
+    ) -> Result<Option<nip_store::VideoQaStoredReport>, NipError> {
+        Ok(self.store.video_qa_stored_report(report_id)?)
+    }
+
+    pub fn video_qa_reports(
+        &self,
+        project_id: &str,
+        limit: u32,
+    ) -> Result<Vec<VideoQaReport>, NipError> {
+        Ok(self.store.video_qa_reports(project_id, limit)?)
+    }
+
+    pub fn save_video_qa_report(&mut self, report: &VideoQaReport) -> Result<(), NipError> {
+        Ok(self.store.save_video_qa_report(report)?)
+    }
+
+    pub fn video_timeline(
+        &self,
+        timeline_id: &str,
+        revision: u32,
+    ) -> Result<Option<VideoTimeline>, NipError> {
+        Ok(self.store.video_timeline(timeline_id, revision)?)
+    }
+
+    pub fn video_timelines(
+        &self,
+        project_id: &str,
+        limit: u32,
+    ) -> Result<Vec<VideoTimeline>, NipError> {
+        Ok(self.store.video_timelines(project_id, limit)?)
+    }
+
+    pub fn save_video_timeline(&mut self, timeline: &VideoTimeline) -> Result<(), NipError> {
+        Ok(self.store.save_video_timeline(timeline)?)
+    }
+
+    pub fn build_video_timeline_edl(
+        &mut self,
+        request: &video_edl::VideoTimelineBuildRequest,
+    ) -> Result<video_edl::VideoTimelineBuildResult, NipError> {
+        video_edl::build_video_timeline(&mut self.store, request)
+            .map_err(NipError::VideoEdlBuildRejected)
+    }
+
+    pub fn video_edl_timeline(
+        &self,
+        timeline_id: &str,
+        revision: u32,
+    ) -> Result<Option<nip_store::VideoEdlRevision>, NipError> {
+        Ok(self.store.video_edl_timeline(timeline_id, revision)?)
+    }
+
+    pub fn video_edl_timelines(
+        &self,
+        project_id: &str,
+        project_revision: u32,
+        limit: u32,
+    ) -> Result<Vec<nip_store::VideoEdlRevision>, NipError> {
+        Ok(self
+            .store
+            .video_edl_timelines(project_id, project_revision, limit)?)
+    }
+
+    pub fn video_export_profiles(&self) -> serde_json::Value {
+        video_export_producer::installed_profiles()
+    }
+
+    pub fn video_export_preflight(
+        &self,
+        media_root: &std::path::Path,
+        request: &video_export_producer::ExportRequest,
+    ) -> Result<serde_json::Value, String> {
+        video_export_producer::preflight(&self.store, media_root, request)
+    }
+
+    pub fn start_video_export(
+        &mut self,
+        media_root: &std::path::Path,
+        request: &video_export_producer::ExportStartRequest,
+    ) -> Result<(serde_json::Value, bool), String> {
+        video_export_producer::start(&mut self.store, media_root, request)
+    }
+
+    pub fn prepare_video_export_worker(
+        &self,
+        media_root: &std::path::Path,
+        request: &video_export_producer::ExportStartRequest,
+        job_id: &str,
+    ) -> Result<video_export_producer::ExportPlan, String> {
+        video_export_producer::prepare_worker(&self.store, media_root, request, job_id)
+    }
+
+    pub fn complete_video_export(
+        &mut self,
+        result: &video_export_producer::ExportResult,
+        job_id: &str,
+    ) -> Result<(), String> {
+        let mut job = self
+            .store
+            .video_job(job_id)
+            .map_err(|error| error.to_string())?
+            .ok_or("not_found: export job disappeared")?;
+        if job.cancellation_requested {
+            return Err(
+                "job_cancelled: cancellation requested before manifest registration".into(),
+            );
+        }
+        job.status = "succeeded".into();
+        job.progress_millis = 100_000;
+        job.finished_at = Some(Utc::now());
+        video_export_producer::finalize(&mut self.store, result, &job)
+    }
+
+    pub fn fail_video_export(
+        &mut self,
+        job_id: &str,
+        error: &str,
+        cancelled: bool,
+    ) -> Result<(), String> {
+        video_export_producer::fail_job(&mut self.store, job_id, error, cancelled)
+    }
+
+    pub fn update_video_export_job(&mut self, job: &VideoJob) -> Result<bool, String> {
+        self.store
+            .update_video_export_job_active(job)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn video_export_manifest_v1(
+        &self,
+        manifest_id: &str,
+    ) -> Result<Option<nip_domain::VideoExportManifestV1>, NipError> {
+        Ok(self.store.video_export_manifest_v1(manifest_id)?)
+    }
+
+    pub fn video_export_manifests_v1(
+        &self,
+        project_id: &str,
+        project_revision: u32,
+        limit: u32,
+    ) -> Result<Vec<nip_domain::VideoExportManifestV1>, NipError> {
+        Ok(self
+            .store
+            .video_export_manifests_v1(project_id, project_revision, limit)?)
     }
 
     pub fn video_job(&self, job_id: &str) -> Result<Option<VideoJob>, NipError> {
@@ -913,6 +1146,10 @@ impl NipService {
         Ok(self.store.search_events(query)?)
     }
 
+    pub fn event(&self, event_id: &str) -> Result<Option<EventRecord>, NipError> {
+        Ok(self.store.event(event_id)?)
+    }
+
     pub fn extract_claims(
         &mut self,
         event: &EventRecord,
@@ -1384,9 +1621,216 @@ impl NipService {
         Ok(self.store.clusters()?)
     }
 
+    /// Validate and commit structured output from an already-run external
+    /// agent. This method does not invoke an LLM or attest caller-supplied model
+    /// metadata. All claims and entity candidates must point to unique exact
+    /// quotes in the retained event transcript.
+    pub fn build_agent_narrative_graph(
+        &mut self,
+        draft: AgentNarrativeGraphDraft,
+    ) -> Result<(AgentNarrativeAnalysis, Vec<ClaimRecord>, NarrativeGraph), NipError> {
+        if draft.event_id.trim().is_empty()
+            || draft.producer.trim().is_empty()
+            || draft.model.trim().is_empty()
+            || draft.prompt_version.trim().is_empty()
+            || draft.narrative_title.trim().is_empty()
+            || draft.narrative_title.chars().count() > 160
+            || draft.narrative_thesis.trim().is_empty()
+            || draft.narrative_thesis.chars().count() > 600
+            || draft.narrative_summary.chars().count() > 1600
+            || draft.claims.is_empty()
+            || draft.claims.len() > 30
+            || draft.entities.is_empty()
+            || draft.entities.len() > 40
+        {
+            return Err(NipError::AgentAnalysisRejected(
+                "required metadata is missing or the analysis exceeds size limits".into(),
+            ));
+        }
+        let event = self
+            .store
+            .event(&draft.event_id)?
+            .ok_or(NipError::EventNotFound)?;
+        let transcript = event
+            .content_text
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+            .ok_or_else(|| {
+                NipError::AgentAnalysisRejected("the retained event has no transcript text".into())
+            })?;
+
+        let draft_json = serde_json::to_vec(&draft).map_err(|_| {
+            NipError::AgentAnalysisRejected("the request could not be fingerprinted".into())
+        })?;
+        let draft_hash = transcript_hash(std::str::from_utf8(&draft_json).map_err(|_| {
+            NipError::AgentAnalysisRejected("the request fingerprint is not valid UTF-8".into())
+        })?);
+        let analysis_id = format!("agent-analysis-{}", &draft_hash[..24]);
+        let extraction_run_id = format!("agent-run-{}", &draft_hash[..24]);
+
+        let mut entity_by_key = BTreeMap::new();
+        let mut entities = Vec::with_capacity(draft.entities.len());
+        for entity in &draft.entities {
+            let name_key = normalize_agent_entity_name(&entity.canonical_name);
+            if name_key.is_empty()
+                || entity.canonical_name.chars().count() > 200
+                || entity.surface_form.trim().is_empty()
+                || entity.surface_form.chars().count() > 160
+                || !matches!(
+                    entity.entity_type.as_str(),
+                    "person"
+                        | "organization"
+                        | "company"
+                        | "product"
+                        | "place"
+                        | "country"
+                        | "government_body"
+                        | "concept"
+                        | "other"
+                )
+                || entity_by_key.contains_key(&name_key)
+            {
+                return Err(NipError::AgentAnalysisRejected(
+                    "entity candidates must have unique names, supported types and bounded labels"
+                        .into(),
+                ));
+            }
+            let (start, end) = unique_transcript_span(transcript, &entity.evidence_quote)?;
+            if !entity.evidence_quote.contains(&entity.surface_form) {
+                return Err(NipError::AgentAnalysisRejected(format!(
+                    "entity evidence does not contain its cited surface form: {}",
+                    entity.canonical_name
+                )));
+            }
+            let entity_id = format!(
+                "candidate-{}",
+                &transcript_hash(&format!("{analysis_id}:{}", name_key))[..24]
+            );
+            entity_by_key.insert(name_key, entity_id.clone());
+            entities.push(AgentEntityCandidate {
+                entity_id,
+                canonical_name: entity.canonical_name.trim().to_owned(),
+                entity_type: entity.entity_type.clone(),
+                surface_form: entity.surface_form.trim().to_owned(),
+                resolution_status: "unresolved_candidate".into(),
+                evidence: ClaimEvidence {
+                    event_id: event.event_id.clone(),
+                    quote: Some(entity.evidence_quote.clone()),
+                    start_offset: Some(start),
+                    end_offset: Some(end),
+                },
+            });
+        }
+
+        let mut claims = Vec::with_capacity(draft.claims.len());
+        let mut claim_annotations = Vec::with_capacity(draft.claims.len());
+        for (index, claim) in draft.claims.iter().enumerate() {
+            if claim.claim_text.trim().is_empty()
+                || claim.claim_text.chars().count() > 1000
+                || claim.confidence_millis > 1000
+                || !matches!(
+                    claim.claim_type.as_str(),
+                    "fact"
+                        | "measurement"
+                        | "causal"
+                        | "forecast"
+                        | "guidance"
+                        | "risk"
+                        | "opinion"
+                        | "other"
+                )
+                || claim.entity_names.is_empty()
+                || claim.entity_names.len() > 12
+                || claim.polarity.as_deref().is_some_and(|value| {
+                    !matches!(
+                        value,
+                        "positive" | "negative" | "neutral" | "mixed" | "unknown"
+                    )
+                })
+                || claim
+                    .horizon
+                    .as_deref()
+                    .is_some_and(|value| value.chars().count() > 120)
+            {
+                return Err(NipError::AgentAnalysisRejected(format!(
+                    "claim {} has invalid or incomplete fields",
+                    index + 1
+                )));
+            }
+            let (start, end) = unique_transcript_span(transcript, &claim.evidence_quote)?;
+            let mut linked_entity_ids = Vec::new();
+            let mut seen_links = BTreeSet::new();
+            for entity_name in &claim.entity_names {
+                let key = normalize_agent_entity_name(entity_name);
+                let entity_id = entity_by_key.get(&key).ok_or_else(|| {
+                    NipError::AgentAnalysisRejected(format!(
+                        "claim {} refers to an entity candidate not declared in entities",
+                        index + 1
+                    ))
+                })?;
+                if seen_links.insert(entity_id.clone()) {
+                    linked_entity_ids.push(entity_id.clone());
+                }
+            }
+            let claim_id = format!(
+                "claim-{}",
+                &transcript_hash(&format!("{analysis_id}:{index}:{}", claim.claim_text))[..24]
+            );
+            claims.push(ClaimRecord {
+                claim_id: claim_id.clone(),
+                claim_text: claim.claim_text.trim().to_owned(),
+                speaker_or_author: claim.speaker_or_author.clone(),
+                confidence_millis: claim.confidence_millis,
+                extraction_run_id: extraction_run_id.clone(),
+                provider: "external_agent_payload".into(),
+                model: draft.model.trim().to_owned(),
+                prompt_version: draft.prompt_version.trim().to_owned(),
+                provider_kind: Some("external_agent".into()),
+                provider_profile_id: None,
+                reasoning_effort: None,
+                extracted_at: Utc::now(),
+                evidence: vec![ClaimEvidence {
+                    event_id: event.event_id.clone(),
+                    quote: Some(claim.evidence_quote.clone()),
+                    start_offset: Some(start),
+                    end_offset: Some(end),
+                }],
+            });
+            claim_annotations.push(AgentClaimAnnotation {
+                claim_id,
+                claim_type: claim.claim_type.clone(),
+                entity_ids: linked_entity_ids,
+                polarity: claim.polarity.clone(),
+                horizon: claim.horizon.clone(),
+            });
+        }
+
+        let analysis = AgentNarrativeAnalysis {
+            analysis_id,
+            event_id: event.event_id.as_str().to_owned(),
+            source_content_hash: event.content_hash.clone(),
+            narrative_title: draft.narrative_title.trim().to_owned(),
+            narrative_thesis: draft.narrative_thesis.trim().to_owned(),
+            narrative_summary: draft.narrative_summary.trim().to_owned(),
+            extraction_run_id: extraction_run_id.clone(),
+            producer: draft.producer.trim().to_owned(),
+            model: draft.model.trim().to_owned(),
+            prompt_version: draft.prompt_version.trim().to_owned(),
+            provenance_status: "caller_declared_external_agent_unattested".into(),
+            created_at: Utc::now(),
+            entities,
+            claim_annotations,
+        };
+        self.store
+            .save_agent_narrative_analysis(&analysis, &claims)?;
+        let graph = self.rebuild_graph(extraction_run_id)?;
+        Ok((analysis, claims, graph))
+    }
+
     pub fn rebuild_graph(&mut self, run_id: String) -> Result<NarrativeGraph, NipError> {
         let clusters = self.store.clusters()?;
         let claims = self.store.claims()?;
+        let agent_analyses = self.store.agent_narrative_analyses()?;
         let events = self.store.all_events()?;
         let labels = self.event_label_index(&events)?;
         let mut nodes = Vec::new();
@@ -1446,7 +1890,11 @@ impl NipService {
                 });
             }
         }
-        for claim in claims {
+        let claim_confidence: HashMap<String, u16> = claims
+            .iter()
+            .map(|claim| (claim.claim_id.clone(), claim.confidence_millis))
+            .collect();
+        for claim in &claims {
             let claim_node = format!("claim:{}", claim.claim_id);
             let evidence: Vec<String> = claim
                 .evidence
@@ -1456,7 +1904,7 @@ impl NipService {
             nodes.push(NarrativeGraphNode {
                 node_id: claim_node.clone(),
                 node_type: "claim".into(),
-                label: claim.claim_text,
+                label: claim.claim_text.clone(),
                 evidence_event_ids: evidence.clone(),
             });
             for (index, event_id) in evidence.iter().enumerate() {
@@ -1482,10 +1930,83 @@ impl NipService {
                 });
             }
         }
+        let mut entity_nodes = BTreeSet::new();
+        for analysis in &agent_analyses {
+            let event_id = analysis.event_id.clone();
+            let narrative_node = format!("agent_narrative:{}", analysis.analysis_id);
+            nodes.push(NarrativeGraphNode {
+                node_id: narrative_node.clone(),
+                node_type: "agent_narrative".into(),
+                label: format!(
+                    "{} — {}",
+                    analysis.narrative_title, analysis.narrative_thesis
+                ),
+                evidence_event_ids: vec![event_id.clone()],
+            });
+            edges.push(NarrativeGraphEdge {
+                edge_id: format!("edge:agent-narrative:{}:event", analysis.analysis_id),
+                from_node_id: narrative_node.clone(),
+                to_node_id: format!("event:{event_id}"),
+                edge_type: "narrative_evidence".into(),
+                evidence_event_ids: vec![event_id.clone()],
+                confidence_millis: 1000,
+                derivation_run_id: analysis.extraction_run_id.clone(),
+            });
+            for entity in &analysis.entities {
+                if entity_nodes.insert(entity.entity_id.clone()) {
+                    nodes.push(NarrativeGraphNode {
+                        node_id: format!("entity_candidate:{}", entity.entity_id),
+                        node_type: "entity_candidate".into(),
+                        label: format!(
+                            "{} ({}, unresolved candidate)",
+                            entity.canonical_name, entity.entity_type
+                        ),
+                        evidence_event_ids: vec![event_id.clone()],
+                    });
+                }
+                edges.push(NarrativeGraphEdge {
+                    edge_id: format!("edge:entity-candidate:{}:event", entity.entity_id),
+                    from_node_id: format!("entity_candidate:{}", entity.entity_id),
+                    to_node_id: format!("event:{event_id}"),
+                    edge_type: "entity_mention_evidence".into(),
+                    evidence_event_ids: vec![event_id.clone()],
+                    confidence_millis: 1000,
+                    derivation_run_id: analysis.extraction_run_id.clone(),
+                });
+            }
+            for annotation in &analysis.claim_annotations {
+                let claim_node = format!("claim:{}", annotation.claim_id);
+                edges.push(NarrativeGraphEdge {
+                    edge_id: format!(
+                        "edge:agent-narrative:{}:claim:{}",
+                        analysis.analysis_id, annotation.claim_id
+                    ),
+                    from_node_id: narrative_node.clone(),
+                    to_node_id: claim_node.clone(),
+                    edge_type: "narrative_claim".into(),
+                    evidence_event_ids: vec![event_id.clone()],
+                    confidence_millis: *claim_confidence.get(&annotation.claim_id).unwrap_or(&0),
+                    derivation_run_id: analysis.extraction_run_id.clone(),
+                });
+                for entity_id in &annotation.entity_ids {
+                    edges.push(NarrativeGraphEdge {
+                        edge_id: format!("edge:claim:{}:entity:{}", annotation.claim_id, entity_id),
+                        from_node_id: claim_node.clone(),
+                        to_node_id: format!("entity_candidate:{entity_id}"),
+                        edge_type: "claim_about_entity_candidate".into(),
+                        evidence_event_ids: vec![event_id.clone()],
+                        confidence_millis: *claim_confidence
+                            .get(&annotation.claim_id)
+                            .unwrap_or(&0),
+                        derivation_run_id: analysis.extraction_run_id.clone(),
+                    });
+                }
+            }
+        }
         let graph = NarrativeGraph {
             graph_id: format!("graph-{run_id}"),
             derivation_run_id: run_id,
-            algorithm_version: "nip-graph-v1".into(),
+            algorithm_version: "nip-graph-v2-agent-analysis".into(),
             created_at: Utc::now(),
             nodes,
             edges,
@@ -1510,6 +2031,10 @@ impl NipService {
 
     pub fn graph(&self) -> Result<Option<NarrativeGraph>, NipError> {
         Ok(self.store.latest_graph()?)
+    }
+
+    pub fn agent_narrative_analyses(&self) -> Result<Vec<AgentNarrativeAnalysis>, NipError> {
+        Ok(self.store.agent_narrative_analyses()?)
     }
 
     pub fn extraction_status(&self) -> Result<ExtractionStatus, NipError> {
@@ -1903,6 +2428,41 @@ pub fn podcast_asr_request(
     })
 }
 
+fn normalize_agent_entity_name(name: &str) -> String {
+    name.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn unique_transcript_span(text: &str, quote: &str) -> Result<(u32, u32), NipError> {
+    if quote.trim().is_empty() || quote.chars().count() > 4000 {
+        return Err(NipError::AgentAnalysisRejected(
+            "evidence quote is empty or exceeds the maximum length".into(),
+        ));
+    }
+    let text_chars: Vec<char> = text.chars().collect();
+    let quote_chars: Vec<char> = quote.chars().collect();
+    let matches: Vec<usize> = text_chars
+        .windows(quote_chars.len())
+        .enumerate()
+        .filter_map(|(index, window)| (window == quote_chars.as_slice()).then_some(index))
+        .collect();
+    if matches.len() != 1 {
+        return Err(NipError::AgentAnalysisRejected(format!(
+            "each evidence quote must occur exactly once in the retained transcript; found {} matches",
+            matches.len()
+        )));
+    }
+    let start = u32::try_from(matches[0]).map_err(|_| {
+        NipError::AgentAnalysisRejected("transcript evidence offset is out of range".into())
+    })?;
+    let end = u32::try_from(matches[0] + quote_chars.len()).map_err(|_| {
+        NipError::AgentAnalysisRejected("transcript evidence offset is out of range".into())
+    })?;
+    Ok((start, end))
+}
+
 fn transcript_hash(text: &str) -> String {
     let digest = Sha256::digest(text.as_bytes());
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -1991,7 +2551,7 @@ mod tests {
         let health = service.health();
         assert_eq!(health.service, "nip-engine");
         assert_eq!(health.readiness, Readiness::Ready);
-        assert_eq!(health.schema_version, 12);
+        assert_eq!(health.schema_version, 17);
 
         let capabilities = service.capabilities();
         assert!(capabilities.features.duckdb_store);
@@ -2576,10 +3136,16 @@ mod tests {
         let temp = tempdir().unwrap();
         let mut service = service_at(temp.path());
         let source = SourceId::new("signal-fixture").unwrap();
+        let as_of = Utc::now() + Duration::days(1);
+        let week_floor = as_of.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc()
+            - Duration::days(i64::from(as_of.weekday().num_days_from_monday()));
+        let current_week_start = week_floor - Duration::days(7);
+        let current_published_at = current_week_start + Duration::days(3) + Duration::hours(12);
+        let prior_published_at = current_week_start - Duration::days(4) + Duration::hours(12);
         for (native_id, published_at, text) in [
-            ("prior", "2026-11-08T12:00:00Z", "prior mention"),
-            ("current", "2026-11-12T12:00:00Z", "current mention"),
-            ("undated", "", "undated observation"),
+            ("prior", Some(prior_published_at), "prior mention"),
+            ("current", Some(current_published_at), "current mention"),
+            ("undated", None, "undated observation"),
         ] {
             service
                 .import_local_event(
@@ -2590,8 +3156,7 @@ mod tests {
                         canonical_url: None,
                         title: None,
                         content_text: text.into(),
-                        published_at: (!published_at.is_empty())
-                            .then(|| published_at.parse().unwrap()),
+                        published_at,
                         source_updated_at: None,
                         rights_statement: "synthetic fixture".into(),
                         user_confirmed_rights: true,
@@ -2602,14 +3167,9 @@ mod tests {
         }
         // The point-in-time cutoff must follow the event's real ingestion time
         // (`Utc::now()`), otherwise this test becomes time-of-day dependent.
-        let snapshot = service
-            .signal_snapshot("2026-11-18T23:59:59Z".parse().unwrap())
-            .unwrap();
+        let snapshot = service.signal_snapshot(as_of).unwrap();
         assert_eq!(snapshot.coverage, "unknown");
-        assert_eq!(
-            snapshot.current_week_start.to_rfc3339(),
-            "2026-11-09T00:00:00+00:00"
-        );
+        assert_eq!(snapshot.current_week_start, current_week_start);
         assert!(snapshot
             .signals
             .iter()

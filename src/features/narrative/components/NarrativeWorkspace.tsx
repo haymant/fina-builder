@@ -230,7 +230,7 @@ export function TranscriptDialog({ event, busy, status, statusIsError = false, e
         </header>
         <p className="narrative-dialog-text">{event.content_text || 'No retained content text.'}</p>
         <footer className="narrative-dialog-foot">
-          <code className="text-[10px] text-muted">content hash {event.content_hash.slice(0, 18)}…</code>
+          <div className="flex flex-col items-start gap-1"><code className="text-[10px] text-muted" data-testid="retained-event-id">{event.event_id}</code><code className="text-[10px] text-muted">content hash {event.content_hash.slice(0, 18)}…</code></div>
           <div className="flex flex-wrap justify-end gap-2">
             <Button variant="outline" size="sm" onClick={onOpenInList}>Show in event list</Button>
             {extractionAvailable ? <Button size="sm" disabled={busy} onClick={onExtract}>{busy ? 'Extracting…' : 'Extract claims'}</Button> : null}

@@ -28,12 +28,34 @@ export interface VideoEpisode {
   updated_at: string
 }
 
+export interface VideoSourceEvent {
+  event_id: string
+  source_id: string
+  source_native_id: string | null
+  canonical_url: string | null
+  content_hash: string
+  content_text: string | null
+}
+
 export interface VideoEvidenceRef {
   evidence_kind: 'event' | 'claim' | string
   evidence_id: string
   start_offset: number | null
   end_offset: number | null
   quote: string | null
+}
+
+export interface VideoNarrative {
+  narrative_id: string
+  episode_id: string
+  revision: number
+  summary: string | null
+  thesis: string | null
+  analysis_mode: 'human_authored' | 'deterministic_candidate' | 'model_assisted' | 'mixed'
+  review_status: 'draft' | 'candidate' | 'in_review' | 'approved' | 'rejected'
+  derivation_run_id: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface VideoStoryboard {
@@ -73,6 +95,35 @@ export interface VideoShot {
   updated_at: string
 }
 
+export interface VideoAudioCue {
+  cue_id: string
+  narration_text: string
+  start_ms: number
+  duration_ms: number
+  status: 'not_configured' | 'ready' | 'failed'
+  asset_id: string | null
+}
+
+export interface VideoStoryboardSlide {
+  slide_id: string
+  ordinal: number
+  purpose: string
+  scene: VideoScene
+  shots: VideoShot[]
+  audio_cue: VideoAudioCue
+  visual_spec: VideoVisualSpec
+  evidence: VideoEvidenceRef[]
+}
+
+export interface VideoStoryboardDocument {
+  schema_version: 'fina-slides-v1'
+  storyboard_id: string
+  narrative_id: string
+  source_event_id: string
+  audio_provider_state: 'not_configured' | 'ready'
+  slides: VideoStoryboardSlide[]
+}
+
 export interface VideoCapabilities {
   planning: string
   evidence_linkage: string
@@ -101,6 +152,19 @@ export interface VideoAsset {
   capability_state: string
   license_state: string
   job_id: string | null
+  created_at: string
+}
+
+export type VideoAssetUpstreamKind = 'event' | 'claim' | 'visual_spec' | 'asset' | 'scene' | 'shot'
+
+export interface VideoAssetLineage {
+  asset_id: string
+  asset_revision: number
+  upstream_kind: VideoAssetUpstreamKind
+  upstream_id: string
+  upstream_revision: number | null
+  relationship: string
+  input_hash: string | null
   created_at: string
 }
 
@@ -189,6 +253,48 @@ export interface VideoExportManifest {
   created_at: string
 }
 
+export type VideoQaStatus = 'passed' | 'warning' | 'blocked'
+export type VideoQaSeverity = 'advisory' | 'blocker'
+
+export interface VideoQaFinding {
+  code: string
+  severity: VideoQaSeverity
+  message: string
+  subject_id: string | null
+  evidence: VideoEvidenceRef[]
+}
+
+export interface VideoQaReport {
+  report_id: string
+  project_id: string
+  input_revision: number
+  status: VideoQaStatus
+  findings: VideoQaFinding[]
+  created_at: string
+}
+
+export interface VideoTimelineClip {
+  shot_id: string
+  shot_revision: number
+  asset_id: string | null
+  asset_revision: number | null
+  start_ms: number
+  duration_ms: number
+  evidence: VideoEvidenceRef[]
+}
+
+export interface VideoTimeline {
+  timeline_id: string
+  project_id: string
+  revision: number
+  input_revision: number
+  export_revision: number
+  clips: VideoTimelineClip[]
+  total_duration_ms: number
+  deterministic: boolean
+  created_at: string
+}
+
 export interface LinkZagRenderResult {
   run_id: string
   asset: VideoAsset
@@ -209,7 +315,7 @@ export interface VideoJob {
   progress_millis: number
   cancellation_requested: boolean
   resource_estimate: Record<string, unknown> | null
-  output_manifest: { asset?: VideoAsset; [key: string]: unknown } | null
+  output_manifest: { asset?: VideoAsset; lineage?: VideoAssetLineage[]; [key: string]: unknown } | null
   safe_error_message: string | null
   started_at: string | null
   finished_at: string | null

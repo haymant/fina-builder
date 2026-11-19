@@ -127,7 +127,7 @@ The current foundation has project/episode/storyboard/scene/shot records, asset/
 ## Suggested next sequence
 
 1. Preserve the completed job/recovery, typed VisualSpec, and export-manifest contracts.
-2. Add store and MCP methods for QA reports, timeline/EDL plans, and artifact lineage queries.
+2. [x] Add store and MCP methods for QA reports, timeline/EDL plans, and artifact lineage queries; rendered assets now receive lineage automatically.
 3. Expand the Video UI into editor, QA, assembly, and export panels with explicit capability states.
 4. Add the LinkZag output-matrix smoke and repeatability test.
 5. Add opt-in Comfy tests only on a provisioned target and retain the deterministic mock path.
@@ -143,3 +143,53 @@ The current foundation has project/episode/storyboard/scene/shot records, asset/
 - Do not make a live Comfy installation or model download a default dependency.
 - Do not turn the Video Workspace into a generic node/canvas editor.
 - Do not commit ignored recordings, narration clips, test-results, `.venv-tts`, or private media artifacts.
+
+## Follow-on implementation status (2026-11-19)
+
+### Completed in this slice
+
+- Added typed `VideoQaReport` / finding contracts with explicit `passed`, `warning`, and `blocked` status plus `advisory` and `blocker` severities.
+- Added typed deterministic timeline/EDL records. Clips retain shot and optional asset revisions, timing, and canonical evidence references.
+- Added DuckDB save/get/list methods using the existing `video_qa_reports` and `video_timelines` tables; validation covers project input revisions, status/finding consistency, shot/asset existence, clip overlap/overflow, total duration, and canonical evidence references.
+- Added bounded MCP save/get/list tools and typed frontend API contracts for both record families. These are persistence surfaces only; they do not yet evaluate QA or compile timelines from storyboard/shot data.
+- Added typed asset-lineage links and exact-asset-revision queries through DuckDB, MCP, and the frontend API; upstream canonical evidence and versioned Video records are validated, duplicate links are idempotent, and asset ancestry cycles are rejected.
+- LinkZag render requests accept an ordered list of exact saved VisualSpec revisions (with backwards-compatible single-spec input). Durable jobs pin their canonical specs; on success, the worker atomically registers the MP4 with `rendered_from` links to every slide spec and deduplicated direct links to retained event/claim sources. Unsupported source kinds remain reachable through each VisualSpec; a missing spec or invalid lineage leaves no partial asset record.
+- Added versioned VideoNarrative save/get/list persistence through its owning episode. Episode project ownership and narrative/storyboard/scene/shot parent IDs are immutable across sequential revisions; timeline save now traverses shot → scene → storyboard → narrative → episode → project and rejects cross-project shots.
+- No schema migration was needed; the QA, timeline, and asset-lineage tables already exist in migration 0011.
+
+### Verification measured
+
+- `cargo fmt -p nip-domain -p nip-store -p nip-engine -- --check` — passed.
+- `cargo test -p nip-domain -p nip-store -p nip-engine` — passed (3 domain, 63 engine library + 4 binary, 23 store tests), including narrative round-trip/parent validation and rejection of a shot owned by another project.
+- `cargo test -p nip-store video_asset_lineage_round_trips_idempotently_and_rejects_cycles` — passed after adding canonical retained-event source validation.
+- `npm run build` — passed.
+- `npm run test:run -- src/features/video src/features/workspace` — passed (11 tests; existing discovered suites are in `src/features/workspace`).
+- `npx playwright test playwright/video-workspace-demo.spec.ts --project=chromium --reporter=list` — passed (1 journey) with the revision-pinned render request.
+- Playwright logged a Vite dependency-scan warning for missing `three` / `@pixiv/three-vrm` imports from the legacy-only rehab submodule and RIGA proxy connection refusals on port 8788. The fixture-backed Video journey still passed; these are not Video runtime dependencies.
+- `cargo clippy -p nip-domain -p nip-store --all-targets -- -D warnings` — passed.
+- `cargo clippy -p nip-engine --bin nip-engine -- -D warnings -A clippy::needless_option_as_deref -A clippy::unnecessary_sort_by -A clippy::manual_pattern_char_comparison` — passed with only previously documented unrelated engine-library lint rules allowed.
+- `cargo clippy -p nip-domain -p nip-store -p nip-engine --all-targets -- -D warnings` — blocked by existing warnings in untouched `nip-engine` files (`config.rs`, `jobs.rs`, `media.rs`, `semantic.rs`, `asr.rs`, `comfy_discovery.rs`).
+
+### Still outstanding
+
+- Implement QA evaluation (not just report persistence), timeline/EDL generation from persisted production records, export producers, and lineage/QA/timeline UI panels.
+- Complete QA evaluation, timeline/EDL generation, export producers, and lineage/QA/timeline UI panels; the narrative-to-project ownership chain is now persisted and enforced for timeline shots.
+- Continue the remaining V1 planning/export, V2 renderer/Comfy, and V3 QA/assembly/export gates above.
+
+## Transcript-to-commentary vertical slice (2026-11-19)
+
+- The retained-transcript dialog exposes its exact canonical event ID so it can be linked to an episode without re-searching or copying transcript text.
+- The Video Workspace loads that event through NIP and produces a downloadable `slides.json` whose ordered slides coordinate persisted narrative, storyboard, scene, shot, visual-spec, evidence, narration, and audio-cue records. Evidence offsets slice the exact canonical transcript, including leading whitespace.
+- `render_video_linkzag` accepts 1–24 exact VisualSpec revisions, validates that they share a project, episode, frame size, and rate, renders each slide through the isolated LinkZag CLI, then assembles the ordered segments into one silent MP4 with FFmpeg. The worker validates the assembled file with `ffprobe`, hashes the actual bytes, and atomically registers the managed asset plus all slide/source lineage.
+- The UI explicitly reports TTS as not configured and labels this output silent and not publish-ready; no remote speech fallback is used. The integration fixture is synthetic and rights-cleared.
+- Added `playwright/video-commentary-e2e.spec.ts`, an opt-in real journey that starts the fixture feed and test-mode NIP engine, creates a transcript, downloads and inspects `slides.json`, renders with the real LinkZag CLI, and verifies the final MP4 path, SHA-256, H.264 dimensions, silent stream set, multi-slide duration, and lineage counts.
+- The companion demo journey remains fixture-backed. `modules/rehab-video-maker` was used only as a read-only process reference; it is not part of fina-builder's runtime.
+
+### LinkZag capture strategy and measured verification
+
+- LinkZag is already Vite + headless Chromium + Playwright, but it does not use Playwright `recordVideo`. The deterministic CLI opens the scene, seeks `window.__LINKZAG__.setTime(t)` for each timestamp, waits for browser frames, captures and canonicalizes each PNG, then encodes the frame sequence with FFmpeg. ECharts uses SVG and scene-time animation; xyflow node and edge motion is also derived from the seekable scene clock.
+- The Rust adapter compiles each saved VisualSpec to a schema-checked LinkZag scene, invokes the `segment` CLI, validates each segment manifest/checksum, concatenates segments with FFmpeg, validates the result with `ffprobe`, and records its hash and full evidence lineage.
+- Fixed the strict-schema mismatch for quote slides (`text`, not `quote`) and a LinkZag readiness bug where a quote without an avatar never reported ready. Added a no-avatar renderer E2E regression test. The Video UI now polls durable jobs for up to ten minutes instead of abandoning slow renders after two minutes; the real E2E disables its unrelated failure-video recording to reduce CPU contention.
+- Verification: `cargo fmt -p nip-engine -- --check` and `cargo test -p nip-engine typed_quote_card_compiles_from_persisted_payload` passed; the focused LinkZag quote-readiness Playwright test passed (1 test, 6.7s); the opt-in real journey `PLAYWRIGHT_NIP=on ... npx playwright test playwright/video-commentary-e2e.spec.ts --project=chromium --reporter=list` passed (1 test, 5.9m).
+- The generated sample is a 23.70-second, 1280×720, H.264/30fps MP4 with no audio stream, as expected while TTS is unconfigured. SHA-256: `101d0b54281b3d6e3f87acf63e75b9d1954754b83df7b31f10ba693314486987`. Test-run path: `playwright/.data/nip/video-commentary-e2e-final5/media/video/linkzag/video-linkzag-1795037709524718887/assembled/storyboard.mp4`.
+- Runtime note: deterministic frame-by-frame capture is CPU-intensive (the full transcript-to-video E2E took about six minutes on this sandbox). A continuous Playwright `recordVideo` mode is not implemented. If added, it should be an explicit opt-in fast/preview mode; it records in wall-clock time and can drop frames on a slow CPU, so deterministic frame capture should remain the reviewable default. Vite's `ECONNREFUSED 127.0.0.1:8788` messages are from the unrelated RIGA proxy.

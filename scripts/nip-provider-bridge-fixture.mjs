@@ -42,16 +42,46 @@ function readBody(request) {
   })
 }
 
-function claimFor(eventId, contentText) {
+function claimsFor(contentText) {
+  const definitions = [
+    {
+      text: 'Maya Chen expects policy to remain restrictive until inflation cools.',
+      speaker_or_author: 'Host Maya Chen',
+      confidence_millis: 910,
+      quote: 'The fixture research team expects policy to remain restrictive until inflation cools.',
+    },
+    {
+      text: 'Arun Patel says the Federal Reserve outlook remains unconfirmed while Acme Energy expects lower refinancing costs.',
+      speaker_or_author: 'Guest Arun Patel',
+      confidence_millis: 880,
+      quote: 'The Federal Reserve has not independently confirmed the outlook, while Acme Energy expects refinancing costs to ease next quarter.',
+    },
+    {
+      text: "Maya Chen says Treasury's supply plan is conditional and Acme Energy's forecast is not official guidance.",
+      speaker_or_author: 'Host Maya Chen',
+      confidence_millis: 900,
+      quote: "Treasury officials say the supply plan is conditional, and Acme Energy's forecast remains a company view, not official guidance.",
+    },
+  ]
+  const matchingClaims = definitions.flatMap((definition) => {
+    const start = contentText.indexOf(definition.quote)
+    return start < 0 ? [] : [{
+      ...definition,
+      start_offset: start,
+      end_offset: start + definition.quote.length,
+    }]
+  })
+  if (matchingClaims.length) return matchingClaims
+
   const quote = 'policy to remain restrictive until inflation cools'
   const start = contentText.indexOf(quote)
-  return {
+  return [{
     text: 'Policy is expected to remain restrictive until inflation cools.',
     speaker_or_author: 'Fixture research team',
     confidence_millis: 910,
     quote: start >= 0 ? quote : contentText.slice(0, Math.min(80, contentText.length)),
     ...(start >= 0 ? { start_offset: start, end_offset: start + quote.length } : {}),
-  }
+  }]
 }
 
 const server = http.createServer(async (request, response) => {
@@ -90,6 +120,7 @@ const server = http.createServer(async (request, response) => {
       json(response, 400, { error: 'invalid_request' })
       return
     }
+    const claims = claimsFor(contentText)
     json(response, 200, {
       extraction_run_id: `run-bridge-${stableSuffix(`${eventId}\0${contentText}`)}`,
       provider_kind: 'remote',
@@ -97,7 +128,7 @@ const server = http.createServer(async (request, response) => {
       model,
       reasoning_effort: 'low',
       prompt_version: promptVersion,
-      claims: [claimFor(eventId, contentText)],
+      claims,
     })
     return
   }

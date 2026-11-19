@@ -388,6 +388,37 @@ pub struct VideoStoryboard {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Persisted narration/audio production cue pinned to the exact production graph
+/// and registered source asset. `scene_id` is absent for a whole-storyboard cue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoAudioCue {
+    pub cue_id: String,
+    pub revision: u32,
+    pub project_id: String,
+    pub project_revision: u32,
+    pub episode_id: String,
+    pub episode_revision: u32,
+    pub storyboard_id: String,
+    pub storyboard_revision: u32,
+    pub scene_id: Option<String>,
+    pub scene_revision: Option<u32>,
+    pub asset_id: String,
+    pub asset_revision: u32,
+    /// Exact narration script represented by this audio. Never treat its hash as
+    /// provider attestation; it binds the retained script to this cue record.
+    pub source_text: String,
+    pub source_text_hash: String,
+    pub voice_id: String,
+    pub provider: String,
+    pub production_metadata: serde_json::Value,
+    pub duration_ms: u64,
+    pub sample_count: u64,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub evidence: Vec<VideoEvidenceRef>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VideoScene {
     pub scene_id: String,
@@ -435,6 +466,54 @@ pub struct VideoAsset {
     pub capability_state: String,
     pub license_state: String,
     pub job_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoAssetUpstreamKind {
+    Event,
+    Claim,
+    VisualSpec,
+    Asset,
+    Scene,
+    Shot,
+}
+
+impl VideoAssetUpstreamKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Event => "event",
+            Self::Claim => "claim",
+            Self::VisualSpec => "visual_spec",
+            Self::Asset => "asset",
+            Self::Scene => "scene",
+            Self::Shot => "shot",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "event" => Self::Event,
+            "claim" => Self::Claim,
+            "visual_spec" => Self::VisualSpec,
+            "asset" => Self::Asset,
+            "scene" => Self::Scene,
+            "shot" => Self::Shot,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoAssetLineage {
+    pub asset_id: String,
+    pub asset_revision: u32,
+    pub upstream_kind: VideoAssetUpstreamKind,
+    pub upstream_id: String,
+    pub upstream_revision: Option<u32>,
+    pub relationship: String,
+    pub input_hash: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -680,6 +759,129 @@ pub struct VideoExportManifest {
     pub files: Vec<VideoExportFile>,
     pub evidence: Vec<VideoEvidenceRef>,
     pub content_hash: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Verified manifest emitted only by the managed EDL export producer. This is
+/// separate from the legacy caller-persisted VideoExportManifest so old v1
+/// records and readers remain compatible.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoExportManifestV1 {
+    pub manifest_ref: VideoExportRef,
+    pub state: String,
+    pub project_ref: VideoExportRef,
+    pub episode_ref: VideoExportRef,
+    pub timeline_ref: VideoExportRef,
+    pub timeline_hash: String,
+    pub qa_report_ref: VideoExportRef,
+    pub qa_input_fingerprint: String,
+    pub export_profile_ref: VideoExportRef,
+    pub input_fingerprint: String,
+    pub output_asset_ref: VideoExportRef,
+    pub output_sha256: String,
+    pub probe: VideoExportProbeV1,
+    pub files: Vec<VideoExportManifestFileV1>,
+    pub toolchain: VideoExportToolchainV1,
+    pub deterministic: bool,
+    pub preview_only: bool,
+    pub lineage_refs: Vec<VideoExportLineageRefV1>,
+    pub created_at: DateTime<Utc>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoExportRef {
+    pub id: String,
+    pub revision: u32,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoExportProbeV1 {
+    pub container: String,
+    pub video_codec: String,
+    pub audio_codec: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    pub frame_rate_num: u32,
+    pub frame_rate_den: u32,
+    pub duration_ms: u64,
+    pub byte_size: u64,
+    pub has_audio: bool,
+    pub has_captions: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoExportManifestFileV1 {
+    pub kind: String,
+    pub asset_ref: VideoExportRef,
+    pub sha256: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoExportToolchainV1 {
+    pub ffmpeg_version: String,
+    pub ffprobe_version: String,
+    pub compiler_version: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoExportLineageRefV1 {
+    pub kind: String,
+    pub id: String,
+    pub revision: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoQaStatus {
+    Passed,
+    Warning,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoQaSeverity {
+    Advisory,
+    Blocker,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoQaFinding {
+    pub code: String,
+    pub severity: VideoQaSeverity,
+    pub message: String,
+    pub subject_id: Option<String>,
+    pub evidence: Vec<VideoEvidenceRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoQaReport {
+    pub report_id: String,
+    pub project_id: String,
+    pub input_revision: u32,
+    pub status: VideoQaStatus,
+    pub findings: Vec<VideoQaFinding>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One EDL row in a deterministic project timeline. Times are milliseconds on
+/// a single zero-based track; asset and source IDs retain production lineage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoTimelineClip {
+    pub shot_id: String,
+    pub shot_revision: u32,
+    pub asset_id: Option<String>,
+    pub asset_revision: Option<u32>,
+    pub start_ms: u64,
+    pub duration_ms: u64,
+    pub evidence: Vec<VideoEvidenceRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoTimeline {
+    pub timeline_id: String,
+    pub project_id: String,
+    pub revision: u32,
+    pub input_revision: u32,
+    pub export_revision: u32,
+    pub clips: Vec<VideoTimelineClip>,
+    pub total_duration_ms: u64,
+    pub deterministic: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -956,6 +1158,81 @@ pub struct NarrativeGraph {
     pub created_at: DateTime<Utc>,
     pub nodes: Vec<NarrativeGraphNode>,
     pub edges: Vec<NarrativeGraphEdge>,
+}
+
+/// An event-scoped entity candidate surfaced by an external agent. This is not
+/// a globally resolved canonical entity; exact transcript evidence is retained
+/// until a resolver or human review confirms identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentEntityCandidate {
+    pub entity_id: String,
+    pub canonical_name: String,
+    pub entity_type: String,
+    pub surface_form: String,
+    pub resolution_status: String,
+    pub evidence: ClaimEvidence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentClaimAnnotation {
+    pub claim_id: String,
+    pub claim_type: String,
+    pub entity_ids: Vec<String>,
+    pub polarity: Option<String>,
+    pub horizon: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentEntityDraft {
+    pub canonical_name: String,
+    pub entity_type: String,
+    pub surface_form: String,
+    pub evidence_quote: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentClaimDraft {
+    pub claim_text: String,
+    pub claim_type: String,
+    pub speaker_or_author: Option<String>,
+    pub confidence_millis: u16,
+    pub evidence_quote: String,
+    pub entity_names: Vec<String>,
+    pub polarity: Option<String>,
+    pub horizon: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentNarrativeGraphDraft {
+    pub event_id: String,
+    pub producer: String,
+    pub model: String,
+    pub prompt_version: String,
+    pub narrative_title: String,
+    pub narrative_thesis: String,
+    pub narrative_summary: String,
+    pub entities: Vec<AgentEntityDraft>,
+    pub claims: Vec<AgentClaimDraft>,
+}
+
+/// A persisted external-agent narrative synthesis. `producer` and `model` are
+/// caller-declared metadata, not cryptographic provider attestation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentNarrativeAnalysis {
+    pub analysis_id: String,
+    pub event_id: String,
+    pub source_content_hash: String,
+    pub narrative_title: String,
+    pub narrative_thesis: String,
+    pub narrative_summary: String,
+    pub extraction_run_id: String,
+    pub producer: String,
+    pub model: String,
+    pub prompt_version: String,
+    pub provenance_status: String,
+    pub created_at: DateTime<Utc>,
+    pub entities: Vec<AgentEntityCandidate>,
+    pub claim_annotations: Vec<AgentClaimAnnotation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

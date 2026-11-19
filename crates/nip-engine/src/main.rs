@@ -14,9 +14,10 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use nip_domain::{
-    EtfMapping, EventRecord, EventSearchQuery, LocalEventImport, PodcastEpisode,
-    PodcastSubscriptionState, SourceId, SourceKind, SourceState, SourceUpdate, VideoAsset,
-    VideoExportManifest, VideoJob, VideoVisualSpec, VideoWorkflow,
+    AgentClaimDraft, AgentEntityDraft, AgentNarrativeGraphDraft, EtfMapping, EventSearchQuery,
+    LocalEventImport, PodcastEpisode, PodcastSubscriptionState, SourceId, SourceKind, SourceState,
+    SourceUpdate, VideoAsset, VideoAssetLineage, VideoAssetUpstreamKind, VideoAudioCue, VideoJob,
+    VideoNarrative, VideoTimeline, VideoVisualSourceKind, VideoVisualSpec, VideoWorkflow,
 };
 use nip_engine::{
     asr::{AsrError, AsrProvider, ComfyUiAsrProvider, DeterministicFakeAsrProvider},
@@ -29,8 +30,7 @@ use nip_engine::{
         DeterministicEmbeddingProvider, HttpEmbeddingProvider, QdrantIndex, DEFAULT_DIMENSIONS,
         DEFAULT_MODEL_ID, DEFAULT_MODEL_REVISION,
     },
-    DeterministicFakeClaimProvider, NipConfig, NipError, NipService, PodcastSubscriptionRequest,
-    SourceDraft,
+    NipConfig, NipError, NipService, PodcastSubscriptionRequest, SourceDraft,
 };
 use nip_store::Store;
 use rmcp::{
@@ -48,6 +48,15 @@ mod linkzag;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8794";
 const IN_PROCESS_REFRESH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+const DEFAULT_TEST_ASR_TRANSCRIPT: &str =
+    "The fixture research team expects policy to remain restrictive until inflation cools.";
+
+fn test_asr_transcript() -> String {
+    env::var("NIP_TEST_TRANSCRIPT")
+        .ok()
+        .filter(|transcript| !transcript.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_TEST_ASR_TRANSCRIPT.to_owned())
+}
 
 #[derive(Clone)]
 struct NipMcp {
@@ -157,6 +166,26 @@ struct VideoEvidenceListParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct VideoNarrativeParams {
+    narrative: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoNarrativeIdParams {
+    narrative_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoNarrativeListParams {
+    episode_id: String,
+    #[serde(default = "default_page_limit")]
+    limit: u32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct VideoStoryboardParams {
     storyboard: Value,
 }
@@ -175,8 +204,39 @@ struct VideoShotParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct VideoAudioCueParams {
+    cue: Value,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoAudioCueRefParams {
+    cue_ref: VideoEdlRefParams,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoAudioCueListParams {
+    storyboard_ref: VideoEdlRefParams,
+    #[serde(default = "default_page_limit")]
+    limit: u32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct VideoAssetParams {
     asset: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoAssetLineageParams {
+    lineage: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoAssetLineageListParams {
+    asset_id: String,
+    asset_revision: u32,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -212,6 +272,127 @@ struct VideoExportManifestIdParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct VideoQaReportParams {
+    report: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoQaReportIdParams {
+    report_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoProjectLimitParams {
+    project_id: String,
+    #[serde(default = "default_page_limit")]
+    limit: u32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoTimelineParams {
+    timeline: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoTimelineBuildParams {
+    project_ref: Value,
+    episode_ref: Value,
+    storyboard_ref: Value,
+    output_profile_id: String,
+    video_tracks: Vec<Value>,
+    #[serde(default)]
+    audio_tracks: Vec<Value>,
+    #[serde(default)]
+    caption_tracks: Vec<Value>,
+    gap_policy: String,
+    request_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoEdlRefParams {
+    id: String,
+    revision: u32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoEdlGetParams {
+    timeline_ref: VideoEdlRefParams,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoEdlListParams {
+    project_ref: VideoEdlRefParams,
+    #[serde(default = "default_page_limit")]
+    limit: u32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoQaRunParams {
+    timeline_ref: VideoEdlRefParams,
+    qa_profile_id: String,
+    request_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoQaGetParams {
+    report_ref: VideoEdlRefParams,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoExportProfilesParams {
+    purpose: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoExportPreflightParams {
+    timeline_ref: VideoEdlRefParams,
+    qa_report_ref: VideoEdlRefParams,
+    export_profile_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoExportStartParams {
+    timeline_ref: VideoEdlRefParams,
+    qa_report_ref: VideoEdlRefParams,
+    export_profile_id: String,
+    request_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoExportManifestGetParams {
+    manifest_ref: VideoEdlRefParams,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoExportManifestListParams {
+    project_ref: VideoEdlRefParams,
+    #[serde(default = "default_page_limit")]
+    limit: u32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoTimelineIdParams {
+    timeline_id: String,
+    revision: u32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct VideoLimitParams {
     #[serde(default = "default_page_limit")]
     limit: u32,
@@ -220,7 +401,16 @@ struct VideoLimitParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct LinkZagRenderParams {
-    visual_spec: Value,
+    visual_spec_id: Option<String>,
+    visual_spec_revision: Option<u32>,
+    visual_specs: Option<Vec<VideoVisualSpecRefParams>>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoVisualSpecRefParams {
+    spec_id: String,
+    revision: u32,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -283,6 +473,97 @@ impl NipMcp {
                 Ok(()) => structured_success(serde_json::to_value(asset).unwrap()),
                 Err(error) => structured_error("video_asset_rejected", error.to_string()),
             },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Register an immutable revisioned VideoAudioCue bound to exact project/episode/storyboard, optional scene, and registered audio asset revisions. This tool cannot approve rights; actual byte/probe verification remains a QA gate."
+    )]
+    fn register_video_audio_cue(
+        &self,
+        Parameters(params): Parameters<VideoAudioCueParams>,
+    ) -> CallToolResult {
+        let cue = match parse_video_value::<VideoAudioCue>(params.cue) {
+            Ok(v) => v,
+            Err(e) => return structured_error("invalid_request", e),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_video_audio_cue(&cue) {
+                Ok(()) => structured_success(serde_json::to_value(cue).unwrap()),
+                Err(e) => structured_error("video_audio_cue_rejected", e.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+    #[tool(description = "Read one exact immutable VideoAudioCue revision.")]
+    fn get_video_audio_cue(
+        &self,
+        Parameters(params): Parameters<VideoAudioCueRefParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => {
+                match service.video_audio_cue(&params.cue_ref.id, params.cue_ref.revision) {
+                    Ok(Some(cue)) => structured_success(serde_json::to_value(cue).unwrap()),
+                    Ok(None) => structured_error("not_found", "VideoAudioCue was not found"),
+                    Err(e) => structured_error("storage_unavailable", e.to_string()),
+                }
+            }
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+    #[tool(
+        description = "List immutable VideoAudioCue revisions for one exact storyboard revision."
+    )]
+    fn list_video_audio_cues(
+        &self,
+        Parameters(params): Parameters<VideoAudioCueListParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_audio_cues(
+                &params.storyboard_ref.id,
+                params.storyboard_ref.revision,
+                params.limit,
+            ) {
+                Ok(cues) => structured_success(serde_json::to_value(cues).unwrap()),
+                Err(e) => structured_error("storage_unavailable", e.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Link a registered Video asset revision to a validated event, claim, visual spec, asset, scene, or shot source."
+    )]
+    fn link_video_asset_lineage(
+        &self,
+        Parameters(params): Parameters<VideoAssetLineageParams>,
+    ) -> CallToolResult {
+        let lineage = match parse_video_value::<VideoAssetLineage>(params.lineage) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_video_asset_lineage(&lineage) {
+                Ok(()) => structured_success(serde_json::to_value(lineage).unwrap()),
+                Err(error) => structured_error("video_asset_lineage_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "List the validated upstream lineage for one exact Video asset revision.")]
+    fn list_video_asset_lineage(
+        &self,
+        Parameters(params): Parameters<VideoAssetLineageListParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => {
+                match service.video_asset_lineage(&params.asset_id, params.asset_revision) {
+                    Ok(lineage) => structured_success(serde_json::to_value(lineage).unwrap()),
+                    Err(error) => structured_error("storage_unavailable", error.to_string()),
+                }
+            }
             Err(_) => structured_error("internal", "NIP service lock failed"),
         }
     }
@@ -366,23 +647,16 @@ impl NipMcp {
     }
 
     #[tool(
-        description = "Save a typed Video export manifest for a project revision, including files and canonical evidence lineage."
+        description = "Disabled: export success manifests can only be created by the verified export producer. Legacy manifests remain readable."
     )]
     fn save_video_export_manifest(
         &self,
-        Parameters(params): Parameters<VideoExportManifestParams>,
+        Parameters(_params): Parameters<VideoExportManifestParams>,
     ) -> CallToolResult {
-        let manifest = match parse_video_value::<VideoExportManifest>(params.manifest) {
-            Ok(value) => value,
-            Err(error) => return structured_error("invalid_request", error),
-        };
-        match self.service.lock() {
-            Ok(mut service) => match service.save_video_export_manifest(&manifest) {
-                Ok(()) => structured_success(serde_json::to_value(manifest).unwrap()),
-                Err(error) => structured_error("video_export_manifest_rejected", error.to_string()),
-            },
-            Err(_) => structured_error("internal", "NIP service lock failed"),
-        }
+        structured_error(
+            "unsupported_operation",
+            "only a validated producer run can create an export success manifest",
+        )
     }
 
     #[tool(
@@ -417,12 +691,444 @@ impl NipMcp {
     }
 
     #[tool(
-        description = "Queue a bounded evidence/quote/chart visual spec for asynchronous LinkZag rendering. Poll video_job_status."
+        description = "Disabled: caller-authored QA decisions are not accepted; use fina_video_qa_run. Legacy reports remain readable."
+    )]
+    fn save_video_qa_report(
+        &self,
+        Parameters(_params): Parameters<VideoQaReportParams>,
+    ) -> CallToolResult {
+        structured_error(
+            "unsupported_operation",
+            "QA reports can only be produced by the deterministic evaluator",
+        )
+    }
+
+    #[tool(description = "Read a persisted Video QA report by ID.")]
+    fn get_video_qa_report(
+        &self,
+        Parameters(params): Parameters<VideoQaReportIdParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_qa_report(&params.report_id) {
+                Ok(Some(report)) => structured_success(serde_json::to_value(report).unwrap()),
+                Ok(None) => structured_error("not_found", "Video QA report was not found"),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "List persisted legacy Video QA reports for a project.")]
+    fn list_video_qa_reports(
+        &self,
+        Parameters(params): Parameters<VideoProjectLimitParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_qa_reports(&params.project_id, params.limit) {
+                Ok(reports) => structured_success(serde_json::to_value(reports).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Run deterministic QA against one exact ready EDL revision using its installed profile; poll video_job_status for the durable result."
+    )]
+    fn fina_video_qa_run(
+        &self,
+        Parameters(params): Parameters<VideoQaRunParams>,
+    ) -> CallToolResult {
+        if params.timeline_ref.id.trim().is_empty()
+            || params.timeline_ref.revision == 0
+            || params.request_id.trim().is_empty()
+        {
+            return structured_error(
+                "invalid_argument",
+                "timeline_ref must be exact and request_id non-empty",
+            );
+        }
+        let mut service = match self.service.lock() {
+            Ok(s) => s,
+            Err(_) => return structured_error("internal", "NIP service lock failed"),
+        };
+        let root = env::var_os("NIP_MEDIA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| service.config().data_dir().join("media"));
+        let request = nip_engine::video_qa_adapter::VideoQaRunRequest {
+            timeline_ref: nip_engine::video_edl::Ref {
+                id: params.timeline_ref.id,
+                revision: params.timeline_ref.revision,
+            },
+            qa_profile_id: params.qa_profile_id,
+            request_id: params.request_id,
+        };
+        match service.run_video_qa(&root, &request) {
+            Ok(v) => structured_success(v),
+            Err(e) => structured_error("video_qa_run_failed", e.to_string()),
+        }
+    }
+
+    #[tool(
+        description = "Read one immutable evaluator-produced QA report by exact report reference."
+    )]
+    fn fina_video_qa_get(
+        &self,
+        Parameters(params): Parameters<VideoQaGetParams>,
+    ) -> CallToolResult {
+        if params.report_ref.revision != 1 {
+            return structured_error("not_found", "QA report revision was not found");
+        }
+        match self.service.lock() {
+            Ok(service) => match service.video_qa_stored_report(&params.report_ref.id) {
+                Ok(Some(stored)) => match serde_json::from_str::<Value>(&stored.report_json) {
+                    Ok(v) => structured_success(v),
+                    Err(_) => {
+                        structured_error("storage_unavailable", "stored QA report is invalid")
+                    }
+                },
+                Ok(None) => structured_error("not_found", "QA report was not found"),
+                Err(e) => structured_error("storage_unavailable", e.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Build a deterministic, revision-pinned fina.edl.v1 timeline from exact project/episode/storyboard, shot, asset and evidence refs using an installed output profile. Caller paths, dimensions and FFmpeg options are not accepted; blocked builds return stable findings and are never persisted as ready."
+    )]
+    fn fina_video_export_profiles_list(
+        &self,
+        Parameters(params): Parameters<VideoExportProfilesParams>,
+    ) -> CallToolResult {
+        if params
+            .purpose
+            .as_deref()
+            .is_some_and(|purpose| purpose != "preview")
+        {
+            return structured_success(json!({"profiles": []}));
+        }
+        match self.service.lock() {
+            Ok(service) => structured_success(json!({"profiles": service.video_export_profiles()})),
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Read-only preflight for one exact EDL revision, evaluator-produced QA report and installed export profile. No job or output is created."
+    )]
+    fn fina_video_export_preflight(
+        &self,
+        Parameters(params): Parameters<VideoExportPreflightParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => {
+                let root = env::var_os("NIP_MEDIA_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| service.config().data_dir().join("media"));
+                let request = nip_engine::video_export_producer::ExportRequest {
+                    timeline_ref: nip_engine::video_edl::Ref {
+                        id: params.timeline_ref.id,
+                        revision: params.timeline_ref.revision,
+                    },
+                    qa_report_ref: nip_engine::video_edl::Ref {
+                        id: params.qa_report_ref.id,
+                        revision: params.qa_report_ref.revision,
+                    },
+                    export_profile_id: params.export_profile_id,
+                };
+                match service.video_export_preflight(&root, &request) {
+                    Ok(value) => structured_success(value),
+                    Err(error) => structured_error(export_error_code(&error), error),
+                }
+            }
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Start a profile-gated local FFmpeg export as a durable video job. Caller paths and FFmpeg options are not accepted; poll video_job_status for completion."
+    )]
+    fn fina_video_export_start(
+        &self,
+        Parameters(params): Parameters<VideoExportStartParams>,
+    ) -> CallToolResult {
+        if params.timeline_ref.id.trim().is_empty()
+            || params.timeline_ref.revision == 0
+            || params.qa_report_ref.id.trim().is_empty()
+            || params.qa_report_ref.revision != 1
+            || params.request_id.trim().is_empty()
+        {
+            return structured_error(
+                "invalid_argument",
+                "exact timeline/QA refs and request_id are required",
+            );
+        }
+        let mut service = match self.service.lock() {
+            Ok(service) => service,
+            Err(_) => return structured_error("internal", "NIP service lock failed"),
+        };
+        let root = env::var_os("NIP_MEDIA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| service.config().data_dir().join("media"));
+        let request = nip_engine::video_export_producer::ExportStartRequest {
+            timeline_ref: nip_engine::video_edl::Ref {
+                id: params.timeline_ref.id,
+                revision: params.timeline_ref.revision,
+            },
+            qa_report_ref: nip_engine::video_edl::Ref {
+                id: params.qa_report_ref.id,
+                revision: params.qa_report_ref.revision,
+            },
+            export_profile_id: params.export_profile_id,
+            request_id: params.request_id,
+        };
+        let (result, created) = match service.start_video_export(&root, &request) {
+            Ok(result) => result,
+            Err(error) => return structured_error(export_error_code(&error), error),
+        };
+        let Some(job_id) = result["job"]["job_id"].as_str().map(str::to_owned) else {
+            return structured_error("internal", "durable export job handle was not returned");
+        };
+        if !created {
+            return structured_success(result);
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        if let Ok(mut flags) = self.video_cancel.lock() {
+            flags.insert(job_id.clone(), cancel.clone());
+        }
+        drop(service);
+        spawn_video_export_job(
+            self.service.clone(),
+            self.video_cancel.clone(),
+            root,
+            request,
+            job_id,
+            cancel,
+        );
+        structured_success(result)
+    }
+
+    #[tool(
+        description = "Read one exact immutable export manifest produced by the verified export worker."
+    )]
+    fn fina_video_export_get(
+        &self,
+        Parameters(params): Parameters<VideoExportManifestGetParams>,
+    ) -> CallToolResult {
+        if params.manifest_ref.revision != 1 {
+            return structured_error("not_found", "export manifest revision was not found");
+        }
+        match self.service.lock() {
+            Ok(service) => match service.video_export_manifest_v1(&params.manifest_ref.id) {
+                Ok(Some(manifest)) => structured_success(serde_json::to_value(manifest).unwrap()),
+                Ok(None) => structured_error("not_found", "producer export manifest was not found"),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "List producer-created immutable export manifests for one exact project revision."
+    )]
+    fn fina_video_export_list(
+        &self,
+        Parameters(params): Parameters<VideoExportManifestListParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_export_manifests_v1(
+                &params.project_ref.id,
+                params.project_ref.revision,
+                params.limit,
+            ) {
+                Ok(manifests) => structured_success(json!({"manifests": manifests})),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Build a deterministic, revision-pinned fina.edl.v1 timeline from exact project/episode/storyboard, shot, asset and evidence refs using an installed output profile. Caller paths, dimensions and FFmpeg options are not accepted; blocked builds return stable findings and are never persisted as ready."
+    )]
+    fn fina_video_timeline_build(
+        &self,
+        Parameters(params): Parameters<VideoTimelineBuildParams>,
+    ) -> CallToolResult {
+        let value = json!({"project_ref":params.project_ref,"episode_ref":params.episode_ref,"storyboard_ref":params.storyboard_ref,"output_profile_id":params.output_profile_id,"video_tracks":params.video_tracks,"audio_tracks":params.audio_tracks,"caption_tracks":params.caption_tracks,"gap_policy":params.gap_policy,"request_id":params.request_id});
+        let request =
+            match parse_video_value::<nip_engine::video_edl::VideoTimelineBuildRequest>(value) {
+                Ok(v) => v,
+                Err(e) => return structured_error("invalid_request", e),
+            };
+        match self.service.lock() {
+            Ok(mut service) => match service.build_video_timeline_edl(&request) {
+                Ok(result) => structured_success(serde_json::to_value(result).unwrap()),
+                Err(error) => {
+                    let text = error.to_string();
+                    let code = if text.contains("ownership")
+                        || text.contains("idempotency")
+                        || text.contains("profile")
+                        || text.contains("gap_policy")
+                        || text.contains("request_id")
+                    {
+                        "invalid_request"
+                    } else {
+                        "video_edl_build_failed"
+                    };
+                    structured_error(code, text)
+                }
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "Read back one exact immutable ready native EDL revision.")]
+    fn fina_video_timeline_get(
+        &self,
+        Parameters(params): Parameters<VideoEdlGetParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service
+                .video_edl_timeline(&params.timeline_ref.id, params.timeline_ref.revision)
+            {
+                Ok(Some(record)) => {
+                    let manifest: Value =
+                        serde_json::from_str(&record.manifest_json).unwrap_or(Value::Null);
+                    let findings: Value =
+                        serde_json::from_str(&record.findings_json).unwrap_or(json!([]));
+                    structured_success(
+                        json!({"timeline_id":record.timeline_id,"revision":record.revision,"created_at":record.created_at,"build_version":record.build_version,"build_status":record.build_status,"build_findings":findings,"timeline_hash":record.timeline_hash,"input_fingerprint":record.input_fingerprint,"edl":manifest}),
+                    )
+                }
+                Ok(None) => {
+                    structured_error("not_found", "Native EDL timeline revision was not found")
+                }
+                Err(e) => structured_error("storage_unavailable", e.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "List immutable native EDL revision summaries for one exact project revision."
+    )]
+    fn fina_video_timeline_list(
+        &self,
+        Parameters(params): Parameters<VideoEdlListParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_edl_timelines(
+                &params.project_ref.id,
+                params.project_ref.revision,
+                params.limit,
+            ) {
+                Ok(records) => structured_success(
+                    json!({"timelines":records.into_iter().map(|r|json!({"timeline_ref":{"id":r.timeline_id,"revision":r.revision},"project_ref":{"id":r.project_id,"revision":r.project_revision},"episode_ref":{"id":r.episode_id,"revision":r.episode_revision},"storyboard_ref":{"id":r.storyboard_id,"revision":r.storyboard_revision},"output_profile_ref":{"id":r.profile_id,"revision":r.profile_revision},"build_status":r.build_status,"timeline_hash":r.timeline_hash,"input_fingerprint":r.input_fingerprint,"created_at":r.created_at})).collect::<Vec<_>>()}),
+                ),
+                Err(e) => structured_error("storage_unavailable", e.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Persist a typed deterministic Video timeline/EDL plan. Clips must reference project shots and any selected asset revisions."
+    )]
+    fn save_video_timeline(
+        &self,
+        Parameters(params): Parameters<VideoTimelineParams>,
+    ) -> CallToolResult {
+        let timeline = match parse_video_value::<VideoTimeline>(params.timeline) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_video_timeline(&timeline) {
+                Ok(()) => structured_success(serde_json::to_value(timeline).unwrap()),
+                Err(error) => structured_error("video_timeline_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "Read one persisted Video timeline/EDL plan revision.")]
+    fn get_video_timeline(
+        &self,
+        Parameters(params): Parameters<VideoTimelineIdParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_timeline(&params.timeline_id, params.revision) {
+                Ok(Some(timeline)) => structured_success(serde_json::to_value(timeline).unwrap()),
+                Ok(None) => structured_error("not_found", "Video timeline was not found"),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "List persisted Video timeline/EDL plans for a project.")]
+    fn list_video_timelines(
+        &self,
+        Parameters(params): Parameters<VideoProjectLimitParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_timelines(&params.project_id, params.limit) {
+                Ok(timelines) => structured_success(serde_json::to_value(timelines).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Queue a bounded LinkZag MP4 for an ordered set of exact saved VideoVisualSpec revisions (or one legacy spec). All slides must belong to one project and episode; produced assets inherit validated lineage. Poll video_job_status."
     )]
     fn render_video_linkzag(
         &self,
         Parameters(params): Parameters<LinkZagRenderParams>,
     ) -> CallToolResult {
+        let references = if let Some(references) = params.visual_specs {
+            if params.visual_spec_id.is_some() || params.visual_spec_revision.is_some() {
+                return structured_error(
+                    "invalid_request",
+                    "provide visual_specs or one legacy visual_spec_id/revision pair, not both",
+                );
+            }
+            references
+        } else {
+            match (params.visual_spec_id, params.visual_spec_revision) {
+                (Some(spec_id), Some(revision)) => vec![VideoVisualSpecRefParams { spec_id, revision }],
+                _ => return structured_error("invalid_request", "provide an ordered visual_specs list or both visual_spec_id and visual_spec_revision"),
+            }
+        };
+        if references.is_empty() || references.len() > 24 {
+            return structured_error(
+                "invalid_request",
+                "a storyboard render requires between 1 and 24 VisualSpec revisions",
+            );
+        }
+        if references
+            .iter()
+            .any(|reference| reference.spec_id.trim().is_empty() || reference.revision == 0)
+        {
+            return structured_error(
+                "invalid_request",
+                "each VisualSpec reference requires a non-empty ID and positive revision",
+            );
+        }
+        if references.iter().enumerate().any(|(index, reference)| {
+            references[..index].iter().any(|prior| {
+                prior.spec_id.trim() == reference.spec_id.trim()
+                    && prior.revision == reference.revision
+            })
+        }) {
+            return structured_error(
+                "invalid_request",
+                "duplicate VisualSpec revisions are not allowed in a storyboard render",
+            );
+        }
         let job_id = format!(
             "video-linkzag-{}",
             Utc::now().timestamp_nanos_opt().unwrap_or_default()
@@ -430,25 +1136,69 @@ impl NipMcp {
         let now = Utc::now();
         let job = VideoJob {
             job_id: job_id.clone(),
-            operation: "linkzag.segment".into(),
+            operation: "linkzag.storyboard".into(),
             status: "queued".into(),
-            input_revision: Some(1),
+            input_revision: references.iter().map(|reference| reference.revision).max(),
             progress_millis: 0,
             cancellation_requested: false,
-            resource_estimate: Some(params.visual_spec.clone()),
+            resource_estimate: None,
             output_manifest: None,
             safe_error_message: None,
             started_at: None,
             finished_at: None,
             created_at: now,
         };
-        if let Ok(mut service) = self.service.lock() {
-            if let Err(error) = service.save_video_job(&job) {
-                return structured_error("video_job_rejected", error.to_string());
+        let mut service = match self.service.lock() {
+            Ok(service) => service,
+            Err(_) => return structured_error("internal", "NIP service lock failed"),
+        };
+        let mut typed_specs = Vec::with_capacity(references.len());
+        for reference in &references {
+            let spec = match service.video_visual_spec(reference.spec_id.trim(), reference.revision)
+            {
+                Ok(Some(spec)) => spec,
+                Ok(None) => {
+                    return structured_error(
+                        "invalid_request",
+                        "a requested VideoVisualSpec revision was not found",
+                    )
+                }
+                Err(error) => return structured_error("storage_unavailable", error.to_string()),
+            };
+            if references.len() > 1 && spec.scene_id.as_deref().is_none_or(str::is_empty) {
+                return structured_error(
+                    "invalid_request",
+                    "each storyboard VisualSpec must reference a persisted scene",
+                );
             }
-        } else {
-            return structured_error("internal", "NIP service lock failed");
+            if let Some(first) = typed_specs.first() {
+                let first: &VideoVisualSpec = first;
+                if spec.project_id != first.project_id || spec.episode_id != first.episode_id {
+                    return structured_error(
+                        "invalid_request",
+                        "all storyboard VisualSpecs must belong to the same project and episode",
+                    );
+                }
+                if spec.width != first.width || spec.height != first.height || spec.fps != first.fps
+                {
+                    return structured_error(
+                        "invalid_request",
+                        "all storyboard VisualSpecs must use the same frame dimensions and rate",
+                    );
+                }
+            }
+            typed_specs.push(spec);
         }
+        let visual_specs = match serde_json::to_value(&typed_specs) {
+            Ok(value) => value,
+            Err(error) => return structured_error("internal", error.to_string()),
+        };
+        let mut job = job;
+        job.resource_estimate = Some(json!({ "visual_specs": visual_specs }));
+        if let Err(error) = service.save_video_job(&job) {
+            return structured_error("video_job_rejected", error.to_string());
+        }
+        drop(service);
         let cancel = Arc::new(AtomicBool::new(false));
         self.video_cancel
             .lock()
@@ -458,7 +1208,7 @@ impl NipMcp {
             self.service.clone(),
             self.video_cancel.clone(),
             job_id.clone(),
-            params.visual_spec,
+            job.resource_estimate.clone().unwrap_or(Value::Null),
             cancel,
         );
         structured_success(
@@ -686,6 +1436,55 @@ impl NipMcp {
                     Err(error) => structured_error("storage_unavailable", error.to_string()),
                 }
             }
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Save a versioned Video narrative attached to a persisted episode; the episode preserves its owning project identity."
+    )]
+    fn save_video_narrative(
+        &self,
+        Parameters(params): Parameters<VideoNarrativeParams>,
+    ) -> CallToolResult {
+        let narrative = match parse_video_value::<VideoNarrative>(params.narrative) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_video_narrative(&narrative) {
+                Ok(()) => structured_success(serde_json::to_value(narrative).unwrap()),
+                Err(error) => structured_error("video_narrative_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "Read the latest persisted revision of one Video narrative.")]
+    fn get_video_narrative(
+        &self,
+        Parameters(params): Parameters<VideoNarrativeIdParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_narrative(&params.narrative_id) {
+                Ok(Some(narrative)) => structured_success(serde_json::to_value(narrative).unwrap()),
+                Ok(None) => structured_error("not_found", "Video narrative was not found"),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "List the latest Video narrative revisions for one persisted episode.")]
+    fn list_video_narratives(
+        &self,
+        Parameters(params): Parameters<VideoNarrativeListParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_narratives(&params.episode_id, params.limit) {
+                Ok(narratives) => structured_success(serde_json::to_value(narratives).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
             Err(_) => structured_error("internal", "NIP service lock failed"),
         }
     }
@@ -1237,13 +2036,11 @@ impl NipMcp {
                 Err(_) => return structured_error("internal", "NIP service lock failed"),
             };
             let client = HttpAudioClient::for_test();
-            let provider = match DeterministicFakeAsrProvider::new(
-                "The fixture research team expects policy to remain restrictive until inflation cools.",
-                Some("en".into()),
-            ) {
-                Ok(provider) => provider,
-                Err(error) => return structured_error("internal", error.to_string()),
-            };
+            let provider =
+                match DeterministicFakeAsrProvider::new(test_asr_transcript(), Some("en".into())) {
+                    Ok(provider) => provider,
+                    Err(error) => return structured_error("internal", error.to_string()),
+                };
             return match service.transcribe_podcast_episode_from_enclosure(
                 &episode,
                 &client,
@@ -1647,6 +2444,20 @@ impl NipMcp {
         }
     }
 
+    #[tool(
+        description = "Read one retained canonical event, including transcript text when available, by its immutable ID."
+    )]
+    fn get_event(&self, Parameters(params): Parameters<EventIdParams>) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.event(&params.event_id) {
+                Ok(Some(event)) => structured_success(serde_json::to_value(event).unwrap()),
+                Ok(None) => structured_error("not_found", "Retained event was not found"),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
     #[tool(description = "List persisted source-linked claims and their evidence references.")]
     fn list_claims(&self) -> CallToolResult {
         match self
@@ -1883,6 +2694,72 @@ impl NipMcp {
     }
 
     #[tool(
+        description = "List persisted external-agent narratives, evidence-bound claim annotations and unresolved entity candidates with caller-declared, unattested model provenance."
+    )]
+    fn list_agent_narrative_analyses(&self) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.agent_narrative_analyses() {
+                Ok(analyses) => structured_success(serde_json::to_value(analyses).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error_chain(&error)),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Persist structured narrative, claims and entity candidates already generated by an external agent, then rebuild the evidence graph. This tool does not call an LLM or attest the caller-declared model. It rejects quotes that do not uniquely match the retained event transcript; entity identities remain unresolved candidates."
+    )]
+    fn build_agent_narrative_graph(
+        &self,
+        Parameters(params): Parameters<AgentNarrativeGraphParams>,
+    ) -> CallToolResult {
+        let draft = AgentNarrativeGraphDraft {
+            event_id: params.event_id,
+            producer: params.producer,
+            model: params.model,
+            prompt_version: params.prompt_version,
+            narrative_title: params.narrative_title,
+            narrative_thesis: params.narrative_thesis,
+            narrative_summary: params.narrative_summary,
+            entities: params
+                .entities
+                .into_iter()
+                .map(|entity| AgentEntityDraft {
+                    canonical_name: entity.canonical_name,
+                    entity_type: entity.entity_type,
+                    surface_form: entity.surface_form,
+                    evidence_quote: entity.evidence_quote,
+                })
+                .collect(),
+            claims: params
+                .claims
+                .into_iter()
+                .map(|claim| AgentClaimDraft {
+                    claim_text: claim.claim_text,
+                    claim_type: claim.claim_type,
+                    speaker_or_author: claim.speaker_or_author,
+                    confidence_millis: claim.confidence_millis,
+                    evidence_quote: claim.evidence_quote,
+                    entity_names: claim.entity_names,
+                    polarity: claim.polarity,
+                    horizon: claim.horizon,
+                })
+                .collect(),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.build_agent_narrative_graph(draft) {
+                Ok((analysis, claims, graph)) => structured_success(json!({
+                    "analysis": analysis,
+                    "claims": claims,
+                    "graph": graph,
+                })),
+                Err(error) => structured_error("agent_graph_rejected", error_chain(&error)),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
         description = "Compute versioned descriptive narrative signals for the completed UTC week before as_of. Coverage is explicit and remains unknown without a source-completeness manifest."
     )]
     fn narrative_signal_snapshot(
@@ -1912,28 +2789,6 @@ impl NipMcp {
                 Ok(clusters) => structured_success(serde_json::to_value(clusters).unwrap()),
                 Err(error) => structured_error("storage_unavailable", error.to_string()),
             },
-            Err(_) => structured_error("internal", "NIP service lock failed"),
-        }
-    }
-
-    #[tool(description = "Run the deterministic local claim extractor against one retained event.")]
-    fn extract_claims(&self, Parameters(params): Parameters<ExtractParams>) -> CallToolResult {
-        let event: EventRecord = match serde_json::from_value(params.event) {
-            Ok(event) => event,
-            Err(_) => {
-                return structured_error(
-                    "invalid_request",
-                    "event does not match the NIP event schema",
-                )
-            }
-        };
-        match self.service.lock() {
-            Ok(mut service) => {
-                match service.extract_claims(&event, &DeterministicFakeClaimProvider) {
-                    Ok(claims) => structured_success(serde_json::to_value(claims).unwrap()),
-                    Err(error) => structured_error("extraction_failed", error.to_string()),
-                }
-            }
             Err(_) => structured_error("internal", "NIP service lock failed"),
         }
     }
@@ -2079,8 +2934,38 @@ struct ImportParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct ExtractParams {
-    event: Value,
+struct AgentNarrativeGraphParams {
+    event_id: String,
+    producer: String,
+    model: String,
+    prompt_version: String,
+    narrative_title: String,
+    narrative_thesis: String,
+    narrative_summary: String,
+    entities: Vec<AgentEntityGraphParams>,
+    claims: Vec<AgentClaimGraphParams>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AgentEntityGraphParams {
+    canonical_name: String,
+    entity_type: String,
+    surface_form: String,
+    evidence_quote: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AgentClaimGraphParams {
+    claim_text: String,
+    claim_type: String,
+    speaker_or_author: Option<String>,
+    confidence_millis: u16,
+    evidence_quote: String,
+    entity_names: Vec<String>,
+    polarity: Option<String>,
+    horizon: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -2139,6 +3024,191 @@ fn default_page_limit() -> u32 {
     50
 }
 
+fn video_visual_spec_ref(value: &Value) -> Option<(&str, u32)> {
+    let spec_id = value
+        .get("visual_spec_id")
+        .or_else(|| value.get("spec_id"))?
+        .as_str()?
+        .trim();
+    let revision = value
+        .get("visual_spec_revision")
+        .or_else(|| value.get("revision"))?
+        .as_u64()?
+        .try_into()
+        .ok()?;
+    (!spec_id.is_empty() && revision > 0).then_some((spec_id, revision))
+}
+
+fn linkzag_asset_lineage(asset: &VideoAsset, specs: &[VideoVisualSpec]) -> Vec<VideoAssetLineage> {
+    let mut lineage = Vec::new();
+    for spec in specs {
+        lineage.push(VideoAssetLineage {
+            asset_id: asset.asset_id.clone(),
+            asset_revision: asset.revision,
+            upstream_kind: VideoAssetUpstreamKind::VisualSpec,
+            upstream_id: spec.spec_id.clone(),
+            upstream_revision: Some(spec.revision),
+            relationship: "rendered_from".into(),
+            input_hash: None,
+            created_at: asset.created_at,
+        });
+        for source in &spec.sources {
+            let upstream_kind = match source.source_kind {
+                VideoVisualSourceKind::Event => VideoAssetUpstreamKind::Event,
+                VideoVisualSourceKind::Claim => VideoAssetUpstreamKind::Claim,
+                VideoVisualSourceKind::TranscriptSpan | VideoVisualSourceKind::SignalSnapshot => {
+                    continue
+                }
+            };
+            if lineage.iter().any(|record| {
+                record.upstream_kind == upstream_kind
+                    && record.upstream_id == source.source_id
+                    && record.relationship == "source_evidence"
+            }) {
+                continue;
+            }
+            lineage.push(VideoAssetLineage {
+                asset_id: asset.asset_id.clone(),
+                asset_revision: asset.revision,
+                upstream_kind,
+                upstream_id: source.source_id.clone(),
+                upstream_revision: None,
+                relationship: "source_evidence".into(),
+                input_hash: None,
+                created_at: asset.created_at,
+            });
+        }
+    }
+    lineage
+}
+
+fn video_visual_spec_values(value: &Value) -> Vec<Value> {
+    value
+        .get("visual_specs")
+        .and_then(Value::as_array)
+        .filter(|specs| !specs.is_empty())
+        .cloned()
+        .unwrap_or_else(|| vec![value.clone()])
+}
+
+fn export_error_code(error: &str) -> &'static str {
+    match error.split(':').next().unwrap_or("") {
+        "invalid_argument" => "invalid_argument",
+        "not_found" => "not_found",
+        "revision_conflict" => "revision_conflict",
+        "cross_project_reference" => "cross_project_reference",
+        "profile_unavailable" => "profile_unavailable",
+        "unsupported_profile" => "unsupported_profile",
+        "timeline_invalid" => "timeline_invalid",
+        "input_changed" => "input_changed",
+        "stale_qa_report" => "stale_qa_report",
+        "blocked_by_qa" => "blocked_by_qa",
+        "rights_blocked" => "rights_blocked",
+        "path_rejected" => "path_rejected",
+        "media_integrity_failed" => "media_integrity_failed",
+        "capability_unavailable" => "capability_unavailable",
+        "resource_limit" => "resource_limit",
+        "job_cancelled" => "job_cancelled",
+        "export_failed" => "export_failed",
+        "storage_unavailable" => "storage_unavailable",
+        _ => "export_failed",
+    }
+}
+
+fn spawn_video_export_job(
+    service: Arc<Mutex<NipService>>,
+    cancel_map: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    media_root: PathBuf,
+    request: nip_engine::video_export_producer::ExportStartRequest,
+    job_id: String,
+    cancel: Arc<AtomicBool>,
+) {
+    let service_on_spawn_failure = service.clone();
+    let cancel_map_on_worker = cancel_map.clone();
+    let spawn_id = job_id.clone();
+    let spawned = thread::Builder::new()
+        .name(format!("video-export-{job_id}"))
+        .spawn(move || {
+            let mut plan = match service.lock() {
+                Ok(service) => service.prepare_video_export_worker(&media_root, &request, &job_id),
+                Err(_) => Err("storage_unavailable: NIP service lock failed".into()),
+            };
+            if let Ok(mut service) = service.lock() {
+                if let Ok(Some(mut job)) = service.video_job(&job_id) {
+                    job.status = "running".into();
+                    job.started_at = Some(Utc::now());
+                    job.progress_millis = 2_000;
+                    if service.update_video_export_job(&job) != Ok(true) {
+                        plan = Err("job_cancelled: export job is no longer active".into());
+                    }
+                }
+            }
+            if cancel.load(Ordering::SeqCst) {
+                plan = Err("job_cancelled: export cancelled before execution".into());
+            }
+            let outcome = match plan {
+                Ok(plan) => {
+                    let progress_saved = match service.lock() {
+                        Ok(mut service) => match service.video_job(&job_id) {
+                            Ok(Some(mut job)) => {
+                                job.progress_millis = 10_000;
+                                service.update_video_export_job(&job) == Ok(true)
+                            }
+                            _ => false,
+                        },
+                        Err(_) => false,
+                    };
+                    if !progress_saved {
+                        Err("job_cancelled: export job is no longer active".into())
+                    } else {
+                        nip_engine::video_export_producer::execute(&plan, &media_root, &cancel)
+                            .map(|result| (plan, result))
+                    }
+                }
+                Err(error) => Err(error),
+            };
+            match outcome {
+                Ok((_plan, result)) => {
+                    if let Ok(mut service) = service.lock() {
+                        if let Ok(Some(mut job)) = service.video_job(&job_id) {
+                            job.progress_millis = 90_000;
+                            let _ = service.update_video_export_job(&job);
+                        }
+                        if let Err(error) = service.complete_video_export(&result, &job_id) {
+                            let _ = fs::remove_file(&result.output_path);
+                            let cancelled = error.starts_with("job_cancelled:");
+                            let _ = service.fail_video_export(&job_id, &error, cancelled);
+                        }
+                    } else {
+                        let _ = fs::remove_file(&result.output_path);
+                    }
+                }
+                Err(error) => {
+                    let cancelled =
+                        error.starts_with("job_cancelled:") || cancel.load(Ordering::SeqCst);
+                    if let Ok(mut service) = service.lock() {
+                        let _ = service.fail_video_export(&job_id, &error, cancelled);
+                    }
+                }
+            }
+            if let Ok(mut flags) = cancel_map_on_worker.lock() {
+                flags.remove(&job_id);
+            }
+        });
+    if let Err(error) = spawned {
+        if let Ok(mut service) = service_on_spawn_failure.lock() {
+            let _ = service.fail_video_export(
+                &spawn_id,
+                &format!("capability_unavailable: export worker could not start: {error}"),
+                false,
+            );
+        }
+        if let Ok(mut flags) = cancel_map.lock() {
+            flags.remove(&spawn_id);
+        }
+    }
+}
+
 fn spawn_video_linkzag_job(
     service: Arc<Mutex<NipService>>,
     cancel_map: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
@@ -2163,43 +3233,128 @@ fn spawn_video_linkzag_job(
             ),
             Err(_) => { update(&|job| { job.status = "failed".into(); job.safe_error_message = Some("NIP service lock failed".into()); job.finished_at = Some(Utc::now()); }); return; }
         };
-        update(&|job| job.progress_millis = 5_000);
-        let result = linkzag::render(&visual_spec, &workspace, &media_root, &job_id, &cancel);
-        match result {
-            Ok(outcome) if outcome.state == "cancelled" => update(&|job| {
-                job.status = "cancelled".into(); job.cancellation_requested = true; job.safe_error_message = Some(outcome.message.clone()); job.finished_at = Some(Utc::now());
-            }),
-            Ok(outcome) if outcome.state != "ready" => update(&|job| {
-                job.status = "failed".into(); job.safe_error_message = Some(outcome.message.clone()); job.output_manifest = outcome.manifest.clone(); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000;
-            }),
-            Ok(outcome) => {
-                let asset_id = format!("linkzag-{}-{}", outcome.scene_id, &outcome.scene_checksum[..12.min(outcome.scene_checksum.len())]);
-                let relative_path = outcome.manifest.as_ref().and_then(|manifest| manifest.pointer("/files/0/path")).and_then(Value::as_str)
-                    .and_then(|path| Path::new(path).strip_prefix(&media_root).ok()).map(|path| path.to_string_lossy().replace('\\', "/"));
-                let (width, height, duration_ms) = outcome.manifest.as_ref().map(|manifest| (
-                    manifest.pointer("/scene/width").and_then(Value::as_u64).map(|value| value as u32),
-                    manifest.pointer("/scene/height").and_then(Value::as_u64).map(|value| value as u32),
-                    manifest.pointer("/scene/duration").and_then(Value::as_f64).map(|value| (value * 1000.0) as u64),
-                )).unwrap_or((None, None, None));
-                let asset = VideoAsset { asset_id, revision: 1, asset_kind: "linkzag_segment".into(), relative_path,
-                    mime_type: Some("video/mp4".into()), content_hash: Some(outcome.scene_checksum.clone()), width, height, duration_ms,
-                    provider: "linkzag".into(), workflow_id: Some("linkzag.commentary.v1".into()), model: None,
-                    reproducibility: "deterministic".into(), capability_state: outcome.state.clone(), license_state: "fixture_only".into(),
-                    job_id: Some(job_id.clone()), created_at: Utc::now() };
-                if let Ok(mut service) = service.lock() {
-                    if service.save_video_asset(&asset).is_ok() {
-                        if let Ok(Some(mut job)) = service.video_job(&job_id) {
-                            job.status = "succeeded".into(); job.progress_millis = 100_000; job.output_manifest = Some(json!({ "asset": asset, "renderer": "linkzag", "renderer_revision": outcome.renderer_revision, "scene_checksum": outcome.scene_checksum, "manifest": outcome.manifest })); job.finished_at = Some(Utc::now());
-                            let _ = service.save_video_job(&job);
-                        }
-                    } else if let Ok(Some(mut job)) = service.video_job(&job_id) {
-                        job.status = "failed".into(); job.safe_error_message = Some("render completed but asset registration failed".into()); job.finished_at = Some(Utc::now()); let _ = service.save_video_job(&job);
-                    }
+        let cleanup_cancel = || {
+            cancel_map.lock().ok().map(|mut flags| flags.remove(&job_id));
+        };
+        let specs = video_visual_spec_values(&visual_spec);
+        if specs.is_empty() || specs.len() > 24 {
+            update(&|job| { job.status = "failed".into(); job.safe_error_message = Some("persisted storyboard must contain between 1 and 24 slide specs".into()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+            cleanup_cancel();
+            return;
+        }
+        let mut segments = Vec::with_capacity(specs.len());
+        for (index, spec) in specs.iter().enumerate() {
+            update(&|job| job.progress_millis = 5_000 + ((index as u32 * 70_000) / specs.len() as u32));
+            let render_id = format!("{job_id}-slide-{:02}", index + 1);
+            match linkzag::render(spec, &workspace, &media_root, &render_id, &cancel) {
+                Ok(outcome) if outcome.state == "ready" => segments.push(outcome),
+                Ok(outcome) if outcome.state == "cancelled" => {
+                    update(&|job| { job.status = "cancelled".into(); job.cancellation_requested = true; job.safe_error_message = Some(outcome.message.clone()); job.finished_at = Some(Utc::now()); });
+                    cleanup_cancel();
+                    return;
+                }
+                Ok(outcome) => {
+                    update(&|job| { job.status = "failed".into(); job.safe_error_message = Some(outcome.message.clone()); job.output_manifest = outcome.manifest.clone(); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+                    cleanup_cancel();
+                    return;
+                }
+                Err(error) => {
+                    update(&|job| { job.status = "failed".into(); job.safe_error_message = Some(error.clone()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+                    cleanup_cancel();
+                    return;
                 }
             }
-            Err(error) => update(&|job| { job.status = "failed".into(); job.safe_error_message = Some(error.clone()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; }),
         }
-        cancel_map.lock().ok().map(|mut flags| flags.remove(&job_id));
+        update(&|job| job.progress_millis = 80_000);
+        let assembly = match linkzag::assemble(&segments, &media_root, &job_id) {
+            Ok(assembly) => assembly,
+            Err(error) => {
+                update(&|job| { job.status = "failed".into(); job.safe_error_message = Some(error.clone()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+                cleanup_cancel();
+                return;
+            }
+        };
+        let relative_path = media_root.canonicalize().ok().and_then(|root| {
+            assembly.media_path.strip_prefix(root).ok().map(|path| path.to_string_lossy().replace('\\', "/"))
+        });
+        let Some(relative_path) = relative_path else {
+            update(&|job| { job.status = "failed".into(); job.safe_error_message = Some("assembled MP4 was outside the managed media directory".into()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+            cleanup_cancel();
+            return;
+        };
+        let width = assembly.media_file.get("width").and_then(Value::as_u64).map(|value| value as u32);
+        let height = assembly.media_file.get("height").and_then(Value::as_u64).map(|value| value as u32);
+        let duration_ms = assembly.media_file.get("duration").and_then(Value::as_f64).map(|value| (value * 1000.0) as u64);
+        let content_hash = assembly.media_hash.clone();
+        let asset_id = format!(
+            "linkzag-storyboard-{job_id}-{}",
+            &content_hash[..12.min(content_hash.len())]
+        );
+        let asset = VideoAsset {
+            asset_id,
+            revision: 1,
+            asset_kind: "commentary_video".into(),
+            relative_path: Some(relative_path),
+            mime_type: Some("video/mp4".into()),
+            content_hash: Some(content_hash),
+            width,
+            height,
+            duration_ms,
+            provider: "linkzag".into(),
+            workflow_id: Some("linkzag.commentary.v1".into()),
+            model: None,
+            reproducibility: "deterministic".into(),
+            capability_state: "ready".into(),
+            license_state: "internal_review_only".into(),
+            job_id: Some(job_id.clone()),
+            created_at: Utc::now(),
+        };
+        if let Ok(mut service) = service.lock() {
+            let source_specs = video_visual_spec_values(&visual_spec)
+                .into_iter()
+                .map(|value| {
+                    video_visual_spec_ref(&value).and_then(|(spec_id, revision)| {
+                        service.video_visual_spec(spec_id, revision).ok().flatten()
+                    })
+                })
+                .collect::<Option<Vec<_>>>();
+            let lineage = source_specs
+                .as_ref()
+                .map(|specs| linkzag_asset_lineage(&asset, specs));
+            let registration = lineage.as_ref().ok_or(()).and_then(|lineage| {
+                service.save_video_asset_with_lineage(&asset, lineage).map_err(|_| ())
+            });
+            if let Ok(Some(mut job)) = service.video_job(&job_id) {
+                match registration {
+                    Ok(()) => {
+                        job.status = "succeeded".into();
+                        job.progress_millis = 100_000;
+                        job.output_manifest = Some(json!({
+                            "asset": asset,
+                            "lineage": lineage.unwrap_or_default(),
+                            "renderer": "linkzag",
+                            "renderer_revision": segments.first().map(|segment| segment.renderer_revision.clone()),
+                            "scene_checksums": segments.iter().map(|segment| segment.scene_checksum.clone()).collect::<Vec<_>>(),
+                            "segment_manifests": segments.iter().map(|segment| segment.manifest.clone()).collect::<Vec<_>>(),
+                            "assembly": assembly.manifest
+                        }));
+                        job.finished_at = Some(Utc::now());
+                    }
+                    Err(()) => {
+                        job.status = "failed".into();
+                        job.safe_error_message = Some(if source_specs.is_some() {
+                            "render completed but atomic asset/lineage registration failed".into()
+                        } else {
+                            "render completed but one or more pinned VideoVisualSpec revisions were unavailable; no asset was registered".into()
+                        });
+                        job.finished_at = Some(Utc::now());
+                        job.progress_millis = 100_000;
+                    }
+                }
+                let _ = service.save_video_job(&job);
+            }
+        }
+        cleanup_cancel();
     });
 }
 
@@ -2441,10 +3596,7 @@ fn run_transcription_job(
     }
 
     let provider: Box<dyn AsrProvider> = if context.test_mode {
-        match DeterministicFakeAsrProvider::new(
-            "The fixture research team expects policy to remain restrictive until inflation cools.",
-            Some("en".into()),
-        ) {
+        match DeterministicFakeAsrProvider::new(test_asr_transcript(), Some("en".into())) {
             Ok(provider) => Box::new(provider),
             Err(error) => {
                 registry.update(&job_id, |job| {
@@ -3057,5 +4209,102 @@ mod tests {
         assert!(preview.chars().count() <= 321);
         assert!(preview.ends_with('…'));
         assert_eq!(preview_text("short text"), "short text");
+    }
+
+    #[test]
+    fn linkzag_asset_lineage_is_pinned_to_the_visual_spec_and_canonical_sources() {
+        let now = "2026-11-18T09:01:00Z".parse().unwrap();
+        let asset = VideoAsset {
+            asset_id: "rendered-asset".into(),
+            revision: 1,
+            asset_kind: "linkzag_segment".into(),
+            relative_path: None,
+            mime_type: Some("video/mp4".into()),
+            content_hash: Some("sha256:output".into()),
+            width: Some(1280),
+            height: Some(720),
+            duration_ms: Some(12_000),
+            provider: "linkzag".into(),
+            workflow_id: None,
+            model: None,
+            reproducibility: "deterministic".into(),
+            capability_state: "ready".into(),
+            license_state: "fixture_only".into(),
+            job_id: Some("render-job".into()),
+            created_at: now,
+        };
+        let spec = VideoVisualSpec {
+            spec_id: "visual-spec-1".into(),
+            revision: 3,
+            schema_version: "video-visual-spec-v1".into(),
+            project_id: "project-1".into(),
+            episode_id: "episode-1".into(),
+            scene_id: Some("scene-1".into()),
+            shot_id: None,
+            template: nip_domain::VideoVisualTemplate::EvidenceCard,
+            duration_ms: 12_000,
+            width: 1280,
+            height: 720,
+            fps: 30,
+            payload: nip_domain::VideoVisualPayload::EvidenceCard {
+                title: "Fixture".into(),
+                body: "Evidence remains canonical.".into(),
+                disclosure: None,
+            },
+            sources: vec![
+                nip_domain::VideoVisualSource {
+                    source_kind: VideoVisualSourceKind::Event,
+                    source_id: "event-1".into(),
+                    source_revision: None,
+                    start_offset: None,
+                    end_offset: None,
+                    quote: None,
+                },
+                nip_domain::VideoVisualSource {
+                    source_kind: VideoVisualSourceKind::Claim,
+                    source_id: "claim-1".into(),
+                    source_revision: None,
+                    start_offset: None,
+                    end_offset: None,
+                    quote: None,
+                },
+                nip_domain::VideoVisualSource {
+                    source_kind: VideoVisualSourceKind::SignalSnapshot,
+                    source_id: "snapshot-1".into(),
+                    source_revision: Some(2),
+                    start_offset: None,
+                    end_offset: None,
+                    quote: None,
+                },
+            ],
+            deterministic: true,
+            created_at: now,
+        };
+
+        assert_eq!(
+            video_visual_spec_ref(&json!({
+                "visual_spec_id": "visual-spec-1",
+                "visual_spec_revision": 3
+            })),
+            Some(("visual-spec-1", 3))
+        );
+        assert_eq!(
+            video_visual_spec_ref(&json!({ "visual_spec_id": "visual-spec-1" })),
+            None
+        );
+        let mut second_spec = spec.clone();
+        second_spec.spec_id = "visual-spec-2".into();
+        second_spec.revision = 1;
+        let lineage = linkzag_asset_lineage(&asset, &[spec.clone(), second_spec]);
+        assert_eq!(lineage.len(), 4);
+        assert_eq!(lineage[0].upstream_kind, VideoAssetUpstreamKind::VisualSpec);
+        assert_eq!(lineage[0].upstream_id, "visual-spec-1");
+        assert_eq!(lineage[0].upstream_revision, Some(3));
+        assert_eq!(lineage[1].upstream_kind, VideoAssetUpstreamKind::Event);
+        assert_eq!(lineage[1].upstream_id, "event-1");
+        assert_eq!(lineage[2].upstream_kind, VideoAssetUpstreamKind::Claim);
+        assert_eq!(lineage[2].upstream_id, "claim-1");
+        assert_eq!(lineage[3].upstream_kind, VideoAssetUpstreamKind::VisualSpec);
+        assert_eq!(lineage[3].upstream_id, "visual-spec-2");
     }
 }
