@@ -14,7 +14,7 @@
 use std::{
     collections::HashSet,
     net::{Ipv4Addr, Ipv6Addr},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
     time::Duration,
@@ -660,6 +660,50 @@ impl NipServiceState {
     }
 }
 
+/// The data directory owned by the single NIP engine for this host run.
+fn nip_data_dir(app: &AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("NIP"))
+        .unwrap_or_else(|_| PathBuf::from(".nip-data"))
+}
+
+/// Resolve a managed media file for the webview's asset protocol.
+///
+/// Only files beneath `<NIP_DATA_DIR>/media` are returned. Absolute paths,
+/// parent traversal and symlinks that escape the media root are rejected; the
+/// command never exposes the rest of the filesystem.
+#[tauri::command]
+pub fn nip_media_file(app: AppHandle, relative_path: String) -> Result<String, String> {
+    let root = nip_data_dir(&app).join("media");
+    let root = root
+        .canonicalize()
+        .map_err(|_| "NIP media directory is not available".to_owned())?;
+    let trimmed = relative_path.trim();
+    if trimmed.is_empty() {
+        return Err("A media relative path is required".to_owned());
+    }
+    let relative = Path::new(trimmed);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
+    {
+        return Err("Media path must stay inside the managed media directory".to_owned());
+    }
+    let canonical = root
+        .join(relative)
+        .canonicalize()
+        .map_err(|_| "Media file was not found".to_owned())?;
+    if !canonical.starts_with(&root) {
+        return Err("Media path escaped the managed media directory".to_owned());
+    }
+    if !canonical.is_file() {
+        return Err("Media path is not a file".to_owned());
+    }
+    Ok(canonical.to_string_lossy().into_owned())
+}
+
 /// Start the single NIP Streamable HTTP MCP server for this app run.
 pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipService, String> {
     let binary = crate::mcp_commands::get_nip_engine_path(app.clone())?;
@@ -671,11 +715,7 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
         .port();
     drop(listener);
 
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map(|dir| dir.join("NIP"))
-        .unwrap_or_else(|_| std::path::PathBuf::from(".nip-data"));
+    let data_dir = nip_data_dir(app);
     let pidfile = pidfile_for(&data_dir);
     // A previous run that was killed rather than shut down still owns the
     // DuckDB lock; starting a second engine would only fail.
@@ -1034,7 +1074,7 @@ mod tests {
                     .as_ref()
                     .and_then(|value| value.get("schema_version"))
                     .and_then(Value::as_u64),
-                Some(10)
+                Some(18)
             );
             Ok(())
         });

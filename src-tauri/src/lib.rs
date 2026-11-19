@@ -149,6 +149,7 @@ pub fn run() {
             nip_http::nip_get_local_model_settings,
             nip_http::nip_check_local_model,
             nip_http::nip_save_local_model_settings,
+            nip_http::nip_media_file,
             // RIGA agent (chat panel).
             riga_agent::kernel_health,
             riga_agent::riga_transport_connect,

@@ -141,6 +141,7 @@ pub struct NipConfig {
     test_mode: bool,
     comfyui_url: Option<LoopbackUrl>,
     comfy: ComfyWorkspaceConfig,
+    linkzag_dir: PathBuf,
     riga_bridge: Option<RigaBridgeConfig>,
     claim_provider_mode: ClaimProviderMode,
     local_llm: Option<LocalLlmConfig>,
@@ -159,6 +160,7 @@ impl NipConfig {
             "NIP_COMFY_DIR",
             "NIP_COMFY_REPO",
             "NIP_COMFY_RENDER",
+            "NIP_LINKZAG_DIR",
             "NIP_ASR_CHUNK_SECONDS",
             "NIP_RIGA_BRIDGE_URL",
             "NIP_RIGA_BRIDGE_TOKEN",
@@ -199,6 +201,8 @@ impl NipConfig {
             .transpose()?;
         let comfy =
             resolve_comfy_workspace(values, &repo_root, app_data_root.as_deref(), debug_build)?;
+        let linkzag_dir =
+            resolve_linkzag_dir(values, &repo_root, app_data_root.as_deref(), debug_build)?;
         let riga_bridge = resolve_riga_bridge(values)?;
         let claim_provider_mode = resolve_claim_provider_mode(values)?;
         let local_llm = resolve_local_llm(values)?;
@@ -266,6 +270,7 @@ impl NipConfig {
             test_mode,
             comfyui_url,
             comfy,
+            linkzag_dir,
             riga_bridge,
             claim_provider_mode,
             local_llm,
@@ -316,6 +321,14 @@ impl NipConfig {
     /// The external `comfy` workflow pack: workspace, CLI, optional clone URL.
     pub fn comfy(&self) -> &ComfyWorkspaceConfig {
         &self.comfy
+    }
+
+    /// Absolute checkout of the `linkZagShow` renderer used by the Video
+    /// adapter. Resolved once from the repository/app-data root so rendering
+    /// never depends on the process working directory (the desktop app starts
+    /// the engine from `src-tauri`).
+    pub fn linkzag_dir(&self) -> &Path {
+        &self.linkzag_dir
     }
 
     /// NIP-owned staging area for audio handed to the local ASR adapter.
@@ -404,6 +417,30 @@ fn resolve_comfy_workspace(
         repo,
         chunk_seconds,
     })
+}
+
+fn resolve_linkzag_dir(
+    values: &BTreeMap<String, String>,
+    repo_root: &Path,
+    app_data_root: Option<&Path>,
+    debug_build: bool,
+) -> Result<PathBuf, ConfigError> {
+    if let Some(path) = configured_path(values, "NIP_LINKZAG_DIR")? {
+        return Ok(normalize_absolute(&path, repo_root));
+    }
+    // A source checkout ships the renderer beside the app; prefer it even in a
+    // release build launched from that checkout. A packaged app elsewhere has
+    // no renderer and reports `not_configured` against the app-data path.
+    let checkout = repo_root.join("modules").join("linkZagShow");
+    if debug_build || checkout.join("package.json").is_file() {
+        return Ok(checkout);
+    }
+    Ok(app_data_root
+        .map(|root| normalize_absolute(root, Path::new("/")))
+        .ok_or(ConfigError::AppDataUnavailable)?
+        .join("fina-builder")
+        .join("NIP")
+        .join("linkZagShow"))
 }
 
 fn resolve_riga_bridge(
@@ -715,6 +752,23 @@ mod tests {
             NipConfig::resolve(&env(&[("NIP_TEST_MODE", "yes")]), root, None, true).unwrap_err(),
             ConfigError::InvalidTestMode
         );
+    }
+
+    #[test]
+    fn linkzag_dir_is_absolute_and_independent_of_process_cwd() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let config = NipConfig::resolve(&env(&[]), root, None, true).unwrap();
+        assert_eq!(config.linkzag_dir(), root.join("modules/linkZagShow"));
+
+        let custom = NipConfig::resolve(
+            &env(&[("NIP_LINKZAG_DIR", "vendor/linkZagShow")]),
+            root,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(custom.linkzag_dir(), root.join("vendor/linkZagShow"));
     }
 
     #[test]

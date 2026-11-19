@@ -266,11 +266,7 @@ impl RigaBridgeClaimProvider {
             .reasoning_effort
             .clone()
             .or_else(|| status.reasoning_effort.clone());
-        let text_length = event
-            .content_text
-            .as_deref()
-            .map(|text| text.chars().count() as u32)
-            .unwrap_or(0);
+        let transcript = event.content_text.as_deref().unwrap_or("");
         extraction
             .claims
             .into_iter()
@@ -287,13 +283,14 @@ impl RigaBridgeClaimProvider {
                 let quote = claim
                     .quote
                     .map(|value| value.trim().to_owned())
-                    .filter(|value| !value.is_empty());
-                if claim.start_offset.is_some_and(|offset| offset > text_length)
-                    || claim.end_offset.is_some_and(|offset| offset > text_length)
-                    || matches!((claim.start_offset, claim.end_offset), (Some(start), Some(end)) if start > end)
-                {
-                    return Err(NipError::ExtractionFailed);
-                }
+                    .filter(|value| !value.is_empty())
+                    .ok_or(NipError::ExtractionFailed)?;
+                // The bridge is only a transport. Its model output is untrusted,
+                // so anchor every quote to the retained transcript here instead
+                // of storing whatever offsets the model happened to return.
+                let (start_offset, end_offset, quote) =
+                    resolve_claim_span(transcript, &quote, claim.start_offset, claim.end_offset)
+                        .ok_or(NipError::ExtractionFailed)?;
                 Ok(ClaimRecord {
                     claim_id: format!(
                         "claim-{}",
@@ -318,9 +315,9 @@ impl RigaBridgeClaimProvider {
                     extracted_at: chrono::Utc::now(),
                     evidence: vec![ClaimEvidence {
                         event_id: event.event_id.clone(),
-                        quote,
-                        start_offset: claim.start_offset,
-                        end_offset: claim.end_offset,
+                        quote: Some(quote),
+                        start_offset: Some(start_offset),
+                        end_offset: Some(end_offset),
                     }],
                 })
             })
@@ -335,6 +332,89 @@ impl ClaimExtractionProvider for RigaBridgeClaimProvider {
             .map_err(|_| NipError::ProviderUnavailable)?;
         self.extract_with_status(event, &status)
     }
+}
+
+/// Resolve a provider-supplied quote to a half-open Unicode-scalar span on the
+/// retained transcript. The provider hint is only accepted when it selects the
+/// quote exactly; otherwise the quote itself is located deterministically. A
+/// case/whitespace-insensitive fallback updates the quote to the exact source
+/// text so the ledger never stores a quote that its own offsets do not select.
+fn resolve_claim_span(
+    text: &str,
+    quote: &str,
+    hinted_start: Option<u32>,
+    hinted_end: Option<u32>,
+) -> Option<(u32, u32, String)> {
+    let characters: Vec<char> = text.chars().collect();
+    let quote_characters: Vec<char> = quote.chars().collect();
+    if quote_characters.is_empty() || quote_characters.len() > characters.len() {
+        return None;
+    }
+
+    if let (Some(start), Some(end)) = (hinted_start, hinted_end) {
+        if let (Ok(start), Ok(end)) = (usize::try_from(start), usize::try_from(end)) {
+            if start < end
+                && end <= characters.len()
+                && characters[start..end] == quote_characters[..]
+            {
+                return Some((start as u32, end as u32, quote.to_owned()));
+            }
+        }
+    }
+
+    let mut exact = characters
+        .windows(quote_characters.len())
+        .enumerate()
+        .filter_map(|(index, window)| (window == quote_characters.as_slice()).then_some(index));
+    if let Some(index) = exact.next() {
+        if exact.next().is_none() {
+            let end = index + quote_characters.len();
+            return Some((index as u32, end as u32, quote.to_owned()));
+        }
+    }
+
+    let (normalized_text, origins) = normalized_characters_with_origins(text);
+    let (normalized_quote, _) = normalized_characters_with_origins(quote);
+    if normalized_quote.is_empty() || normalized_quote.len() > normalized_text.len() {
+        return None;
+    }
+    let mut fallback = normalized_text
+        .windows(normalized_quote.len())
+        .enumerate()
+        .filter_map(|(index, window)| (window == normalized_quote.as_slice()).then_some(index));
+    let index = fallback.next()?;
+    if fallback.next().is_some() {
+        return None;
+    }
+    let start = *origins.get(index)?;
+    let end = *origins.get(index + normalized_quote.len() - 1)? + 1;
+    let exact_quote = characters.get(start..end)?.iter().collect::<String>();
+    Some((start as u32, end as u32, exact_quote))
+}
+
+/// Normalize case and whitespace while retaining each normalized character's
+/// index in the original text, so a match can be mapped back to a real span.
+fn normalized_characters_with_origins(text: &str) -> (Vec<char>, Vec<usize>) {
+    let mut normalized = Vec::new();
+    let mut origins = Vec::new();
+    let mut previous_whitespace = false;
+    for (index, character) in text.chars().enumerate() {
+        if character.is_whitespace() {
+            if previous_whitespace {
+                continue;
+            }
+            normalized.push(' ');
+            origins.push(index);
+            previous_whitespace = true;
+        } else {
+            for lowercase in character.to_lowercase() {
+                normalized.push(lowercase);
+                origins.push(index);
+            }
+            previous_whitespace = false;
+        }
+    }
+    (normalized, origins)
 }
 
 fn stable_hash(value: String) -> String {
@@ -448,6 +528,58 @@ mod tests {
             RigaBridgeClaimProvider::new("http://127.0.0.1:12345", "a b"),
             Err(BridgeError::NotConfigured)
         ));
+    }
+
+    #[test]
+    fn claim_quotes_are_anchored_to_exact_transcript_spans() {
+        let text = "🛰️ Policy remains restrictive until inflation cools.";
+        let quote = "Policy remains restrictive";
+        let start = text.find(quote).unwrap();
+        let start = text[..start].chars().count() as u32;
+        let end = start + quote.chars().count() as u32;
+
+        assert_eq!(
+            resolve_claim_span(text, quote, None, None),
+            Some((start, end, quote.into()))
+        );
+        // A provider hint that selects the quote is accepted.
+        assert_eq!(
+            resolve_claim_span(text, quote, Some(start), Some(end)),
+            Some((start, end, quote.into()))
+        );
+    }
+
+    #[test]
+    fn claim_quotes_accept_case_and_whitespace_normalization_but_store_exact_text() {
+        let text = "He was intensely involved   in the company.";
+        let (start, end, quote) = resolve_claim_span(
+            text,
+            "he was intensely involved in the company.",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(quote, "He was intensely involved   in the company.");
+        assert_eq!(
+            text.chars()
+                .skip(start as usize)
+                .take((end - start) as usize)
+                .collect::<String>(),
+            quote
+        );
+    }
+
+    #[test]
+    fn claim_quotes_that_do_not_occur_in_the_transcript_are_rejected() {
+        assert_eq!(
+            resolve_claim_span(
+                "A retained transcript",
+                "not in this transcript",
+                None,
+                None
+            ),
+            None
+        );
     }
 
     #[test]

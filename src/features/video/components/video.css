@@ -135,3 +135,29 @@
   .video-project-delete { margin-left:auto; }
   .video-delete-actions { flex-wrap:wrap; }
 }
+
+.video-episode-bar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 14px; border:1px solid var(--theme-line); border-radius:10px; background:color-mix(in srgb,var(--theme-primary) 4%,var(--theme-panel)); padding:10px 12px; }
+.video-episode-select { display:inline-flex; align-items:center; gap:8px; color:var(--theme-muted); font-size:10px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
+.video-episode-select select { min-width:220px; max-width:min(100%,420px); border:1px solid var(--theme-line); border-radius:7px; background:var(--theme-background); color:var(--theme-text); padding:6px 8px; font-size:11px; outline:none; }
+.video-episode-select select:focus { border-color:var(--theme-primary); box-shadow:0 0 0 2px color-mix(in srgb,var(--theme-primary) 18%,transparent); }
+.video-episode-bar .video-footnote { margin:0; }
+
+.video-preview-panel { margin:18px 0 12px; border:1px solid var(--theme-line); border-radius:10px; background:var(--theme-background); padding:14px; }
+.video-preview-stage { display:flex; justify-content:center; border-radius:9px; background:#05080d; overflow:hidden; }
+.video-preview-player { display:block; width:100%; max-height:520px; background:#05080d; }
+.video-preview-fallback { display:grid; justify-items:center; gap:6px; width:100%; padding:34px 16px; color:var(--theme-muted); text-align:center; }
+.video-preview-fallback strong { color:var(--theme-text); font-size:12px; }
+.video-preview-fallback p { max-width:520px; margin:0; font-size:11px; line-height:1.55; }
+.video-preview-fallback.is-error { color:#e5a2a2; }
+.video-preview-meta { display:flex; flex-wrap:wrap; gap:6px 16px; margin-top:10px; color:var(--theme-muted); font-size:10px; }
+.video-preview-meta strong { color:var(--theme-text); }
+.video-preview-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:10px; }
+.video-preview-actions .video-footnote { margin:0; }
+.video-preview-empty { display:flex; align-items:flex-start; gap:10px; padding:14px; color:var(--theme-muted); }
+.video-preview-empty p { margin:0; font-size:11px; line-height:1.55; }
+.video-asset-row.is-active { border-color:var(--theme-primary); background:color-mix(in srgb,var(--theme-primary) 8%,var(--theme-panel)); }
+@media (max-width:640px) {
+  .video-episode-select { width:100%; align-items:stretch; flex-direction:column; }
+  .video-episode-select select { min-width:0; max-width:none; }
+}
+

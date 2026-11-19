@@ -145,6 +145,23 @@ struct VideoProjectIdParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct VideoProjectAssetsParams {
+    project_id: String,
+    #[serde(default)]
+    episode_id: Option<String>,
+    #[serde(default = "default_page_limit")]
+    limit: u32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoEpisodeSpecsParams {
+    project_id: String,
+    episode_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct VideoEpisodeIdParams {
     episode_id: String,
 }
@@ -676,6 +693,24 @@ impl NipMcp {
     ) -> CallToolResult {
         match self.service.lock() {
             Ok(service) => match service.video_visual_specs(params.limit) {
+                Ok(specs) => structured_success(serde_json::to_value(specs).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "List the latest VisualSpec revision per scene for one episode in storyboard order, so reopened projects can render without in-memory state."
+    )]
+    fn list_video_episode_visual_specs(
+        &self,
+        Parameters(params): Parameters<VideoEpisodeSpecsParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service
+                .video_episode_visual_specs(&params.project_id, &params.episode_id)
+            {
                 Ok(specs) => structured_success(serde_json::to_value(specs).unwrap()),
                 Err(error) => structured_error("storage_unavailable", error.to_string()),
             },
@@ -1487,6 +1522,40 @@ impl NipMcp {
             Ok(service) => match service.video_episode(&params.episode_id) {
                 Ok(Some(episode)) => structured_success(serde_json::to_value(episode).unwrap()),
                 Ok(None) => structured_error("not_found", "Video episode was not found"),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "List the current revision of every Video episode in a project.")]
+    fn list_video_episodes(
+        &self,
+        Parameters(params): Parameters<VideoProjectIdParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_episodes(&params.project_id) {
+                Ok(episodes) => structured_success(serde_json::to_value(episodes).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "List Video assets whose saved VisualSpec lineage belongs to a project (optionally one episode), newest first."
+    )]
+    fn list_video_project_assets(
+        &self,
+        Parameters(params): Parameters<VideoProjectAssetsParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_project_assets(
+                &params.project_id,
+                params.episode_id.as_deref(),
+                params.limit,
+            ) {
+                Ok(assets) => structured_success(serde_json::to_value(assets).unwrap()),
                 Err(error) => structured_error("storage_unavailable", error.to_string()),
             },
             Err(_) => structured_error("internal", "NIP service lock failed"),
@@ -3319,10 +3388,10 @@ fn spawn_video_linkzag_job(
             }
         };
         update(&|job| { job.status = "running".into(); job.started_at = Some(Utc::now()); job.progress_millis = 1_000; });
-        let (media_root, workspace) = match service.lock() {
+        let (media_root, linkzag_root) = match service.lock() {
             Ok(service) => (
                 std::env::var_os("NIP_MEDIA_DIR").map(PathBuf::from).unwrap_or_else(|| service.config().data_dir().join("media")),
-                std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                service.config().linkzag_dir().to_path_buf(),
             ),
             Err(_) => { update(&|job| { job.status = "failed".into(); job.safe_error_message = Some("NIP service lock failed".into()); job.finished_at = Some(Utc::now()); }); return; }
         };
@@ -3349,7 +3418,7 @@ fn spawn_video_linkzag_job(
         for (index, spec) in specs.iter().enumerate() {
             update(&|job| job.progress_millis = 5_000 + ((index as u32 * 70_000) / specs.len() as u32));
             let render_id = format!("{job_id}-slide-{:02}", index + 1);
-            match linkzag::render(spec, &workspace, &media_root, &render_id, &capture_mode, &cancel) {
+            match linkzag::render(spec, &linkzag_root, &media_root, &render_id, &capture_mode, &cancel) {
                 Ok(outcome) if outcome.state == "ready" => segments.push(outcome),
                 Ok(outcome) if outcome.state == "cancelled" => {
                     update(&|job| { job.status = "cancelled".into(); job.cancellation_requested = true; job.safe_error_message = Some(outcome.message.clone()); job.finished_at = Some(Utc::now()); });

@@ -1,4 +1,4 @@
-import { Clapperboard, FileCheck2, Film, Plus, RefreshCw, ShieldCheck, Sparkles, Trash2 } from 'lucide-react'
+import { Clapperboard, Download, FileCheck2, Film, Plus, RefreshCw, ShieldCheck, Sparkles, Trash2, Video as VideoIcon } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { videoApi } from '../api'
 import { narrativeApi } from '../../narrative/api'
@@ -14,6 +14,7 @@ import type {
   VideoProject,
   VideoSourceEvent,
   VideoStoryboardDocument,
+  VideoVisualSpec,
   VideoWorkflow,
 } from '../types'
 import type { VideoView } from '../../workspace/navigation'
@@ -22,6 +23,13 @@ import './video.css'
 const id = (prefix: string) => `${prefix}-${typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID().slice(0, 12) : Math.random().toString(36).slice(2, 14)}`
 const now = () => new Date().toISOString()
 const evidenceKey = (ref: VideoEvidenceRef) => JSON.stringify([ref.evidence_kind, ref.evidence_id, ref.start_offset, ref.end_offset, ref.quote])
+const formatDuration = (milliseconds: number | null | undefined) => {
+  if (!milliseconds || milliseconds <= 0) return 'duration unknown'
+  const totalSeconds = Math.round(milliseconds / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return minutes ? `${minutes}m ${seconds.toString().padStart(2, '0')}s` : `${seconds}s`
+}
 const blankProject = (): VideoProject => ({ project_id: id('project'), revision: 1, title: '', language: 'en', target_platform: 'youtube', target_duration_ms: 90_000, audience: '', style_profile: 'evidence_first', status: 'draft', created_at: now(), updated_at: now() })
 
 export function VideoWorkspace({ view, projectId, episodeId, claimId, onNavigate }: { view: VideoView; projectId?: string; episodeId?: string; claimId?: string; onNavigate: (view: VideoView, projectId?: string) => void }) {
@@ -133,18 +141,72 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
   const [storyboard, setStoryboard] = useState<VideoStoryboardDocument | null>(null)
   const [saving, setSaving] = useState(false)
   const [loadingSource, setLoadingSource] = useState(false)
-  const [assets, setAssets] = useState<VideoAsset[]>([])
   const [workflows, setWorkflows] = useState<VideoWorkflow[]>([])
   const [rendering, setRendering] = useState(false)
   const [captureMode, setCaptureMode] = useState<'flash' | 'full'>('flash')
   const [activeJob, setActiveJob] = useState<VideoJob | null>(null)
   const [jobNotice, setJobNotice] = useState<string | null>(null)
+  const [episodes, setEpisodes] = useState<VideoEpisode[]>([])
+  const [episodesLoading, setEpisodesLoading] = useState(true)
+  const [activeEpisodeId, setActiveEpisodeId] = useState<string | undefined>(episodeId)
+  const [persistedSpecs, setPersistedSpecs] = useState<VideoVisualSpec[]>([])
+  const [projectAssets, setProjectAssets] = useState<VideoAsset[]>([])
+  const [previewAsset, setPreviewAsset] = useState<VideoAsset | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const previewRef = useRef<HTMLVideoElement | null>(null)
+
+  const loadEpisodes = useCallback(async () => {
+    setEpisodesLoading(true)
+    try {
+      const items = await videoApi.listEpisodes(project.project_id)
+      setEpisodes(items)
+      setActiveEpisodeId((current) => current ?? items[0]?.episode_id)
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : 'Persisted episodes could not be loaded.')
+    } finally {
+      setEpisodesLoading(false)
+    }
+  }, [project.project_id, onMessage])
+
+  useEffect(() => { void loadEpisodes() }, [loadEpisodes])
 
   useEffect(() => {
-    void Promise.all([videoApi.listAssets(), videoApi.listWorkflows()]).then(([nextAssets, nextWorkflows]) => {
-      setAssets(nextAssets)
-      setWorkflows(nextWorkflows)
-    }).catch(() => undefined)
+    setStoryboard(null)
+    setPersistedSpecs([])
+    setProjectAssets([])
+    setPreviewAsset(null)
+    setPreviewUrl(null)
+    setPreviewError(null)
+    setEpisode(null)
+    setEvidence([])
+    setSourceEvent(null)
+    setHydrationFailed(false)
+    setHydrating(Boolean(activeEpisodeId))
+  }, [activeEpisodeId])
+
+  useEffect(() => {
+    if (!previewAsset?.relative_path) {
+      setPreviewUrl(null)
+      return
+    }
+    let cancelled = false
+    setPreviewUrl(null)
+    setPreviewError(null)
+    void videoApi.mediaUrl(previewAsset.relative_path)
+      .then((url) => {
+        if (cancelled) return
+        if (url) setPreviewUrl(url)
+        else setPreviewError('Inline preview requires the desktop app; the MP4 is still recorded in the asset ledger.')
+      })
+      .catch((error) => {
+        if (!cancelled) setPreviewError(error instanceof Error ? error.message : 'The rendered MP4 could not be resolved.')
+      })
+    return () => { cancelled = true }
+  }, [previewAsset])
+
+  useEffect(() => {
+    void videoApi.listWorkflows().then(setWorkflows).catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -173,7 +235,13 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
     setSaving(true)
     const timestamp = now()
     const created: VideoEpisode = { episode_id: id('episode'), project_id: project.project_id, revision: 1, title: `${project.title} · Episode 1`, as_of: timestamp, disclosure: 'Candidate planning output; source evidence remains authoritative.', status: 'draft', created_at: timestamp, updated_at: timestamp }
-    try { await videoApi.createEpisode(created); setEpisode(created); onMessage('Episode created. Link a retained event, then explicitly select its eligible claims to build the storyboard.') } catch (error) { onMessage(error instanceof Error ? error.message : 'Episode creation failed.') } finally { setSaving(false) }
+    try {
+      await videoApi.createEpisode(created)
+      setEpisode(created)
+      setEpisodes((items) => [created, ...items.filter((item) => item.episode_id !== created.episode_id)])
+      setActiveEpisodeId(created.episode_id)
+      onMessage('Episode created. Link a retained event, then explicitly select its eligible claims to build the storyboard.')
+    } catch (error) { onMessage(error instanceof Error ? error.message : 'Episode creation failed.') } finally { setSaving(false) }
   }
 
   const refreshClaims = useCallback(async (event: VideoSourceEvent, preferredClaimId?: string): Promise<boolean> => {
@@ -200,15 +268,21 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
   }, [onMessage])
 
   useEffect(() => {
-    if (!episodeId) return
+    if (!activeEpisodeId) return
     let cancelled = false
+    setHydrating(true)
+    setHydrationFailed(false)
     const hydrate = async () => {
       try {
-        const persistedEpisode = await videoApi.getEpisode(episodeId)
+        const persistedEpisode = await videoApi.getEpisode(activeEpisodeId)
         if (persistedEpisode.project_id !== project.project_id) {
           throw new Error('The requested episode does not belong to the selected project.')
         }
-        const persistedEvidence = await videoApi.listEvidence(persistedEpisode.episode_id, persistedEpisode.revision)
+        const [persistedEvidence, savedSpecs, renderedAssets] = await Promise.all([
+          videoApi.listEvidence(persistedEpisode.episode_id, persistedEpisode.revision),
+          videoApi.listEpisodeVisualSpecs(project.project_id, persistedEpisode.episode_id),
+          videoApi.listProjectAssets(project.project_id, persistedEpisode.episode_id),
+        ])
         const firstEventRef = persistedEvidence.find((ref) => ref.evidence_kind === 'event')
         const canonicalEvent = firstEventRef ? await videoApi.getEvent(firstEventRef.evidence_id) : null
         if (firstEventRef && canonicalEvent?.event_id !== firstEventRef.evidence_id) {
@@ -223,6 +297,9 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
         setEpisode(persistedEpisode)
         setEvidence(persistedEvidence)
         setSourceEvent(canonicalEvent)
+        setPersistedSpecs(savedSpecs)
+        setProjectAssets(renderedAssets)
+        setPreviewAsset((current) => current ?? renderedAssets.find((asset) => asset.asset_kind === 'commentary_video' && asset.relative_path) ?? null)
         setHydrating(false)
         onMessage(null)
       } catch (error) {
@@ -235,7 +312,7 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
     }
     void hydrate()
     return () => { cancelled = true }
-  }, [episodeId, project.project_id, claimId, refreshClaims, onMessage])
+  }, [activeEpisodeId, project.project_id, claimId, refreshClaims, onMessage])
 
   const addEvidence = async (event: FormEvent) => {
     event.preventDefault()
@@ -315,6 +392,7 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
       await Promise.all(draft.shots.map((shot) => videoApi.saveShot(shot)))
       await Promise.all(draft.visualSpecs.map((spec) => videoApi.saveVisualSpec(spec)))
       setStoryboard(draft.document)
+      setPersistedSpecs(draft.visualSpecs)
       onMessage(`Storyboard saved from ${selected.length} explicitly selected retained claim${selected.length === 1 ? '' : 's'}, with exact claim/event evidence spans pinned to each visual spec.`)
     } catch (error) {
       onMessage(error instanceof Error ? error.message : 'Storyboard save failed.')
@@ -335,7 +413,8 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
       const asset = current.output_manifest.asset
       const completedMode = current.output_manifest.capture_mode ?? current.resource_estimate?.capture_mode ?? captureMode
       const modeLabel = completedMode === 'full' ? 'Full deterministic' : 'Flash real-time preview'
-      setAssets((items) => [asset, ...items.filter((item) => item.asset_id !== asset.asset_id)])
+      setProjectAssets((items) => [asset, ...items.filter((item) => item.asset_id !== asset.asset_id)])
+      setPreviewAsset(asset)
       setJobNotice(`Silent commentary MP4 ready · ${asset.asset_id} · ${modeLabel}`)
       onMessage(`Silent commentary MP4 ready · ${asset.asset_id} · ${modeLabel}`)
     } else if (current.status === 'cancelled') {
@@ -349,7 +428,8 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
 
   const renderLinkZag = async () => {
     const visualSpecs = storyboard?.slides.map((slide) => ({ spec_id: slide.visual_spec.spec_id, revision: slide.visual_spec.revision }))
-    if (!visualSpecs?.length) { onMessage('Build and save the slides storyboard before rendering.'); return }
+      ?? persistedSpecs.map((spec) => ({ spec_id: spec.spec_id, revision: spec.revision }))
+    if (!visualSpecs.length) { onMessage('Build and save the slides storyboard before rendering.'); return }
     setRendering(true)
     setJobNotice(null)
     try {
@@ -392,6 +472,13 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
 
   return <div className="video-page" data-testid="video-episode-workspace">
     <header className="video-hero"><div><button type="button" className="video-back" onClick={onBack}>← Projects</button><p className="eyebrow">Project v{project.revision} · {project.status}</p><h1>{project.title}</h1><p>Episode → narrative → slides → scenes, shots, and audio cues. Source text remains in NIP.</p></div><span className="video-chip video-chip-strong">{capabilities?.planning ?? 'planning'}</span></header>
+    {episodesLoading || episodes.length ? <section className="video-episode-bar" aria-label="Project episodes" data-testid="video-episode-bar">
+      {episodesLoading ? <span className="video-footnote" role="status">Loading persisted episodes…</span> : <>
+        <label className="video-episode-select">Episode<select aria-label="Select episode" data-testid="video-episode-select" value={activeEpisodeId ?? ''} onChange={(event) => setActiveEpisodeId(event.target.value || undefined)}>{episodes.map((item) => <option key={item.episode_id} value={item.episode_id}>v{item.revision} · {item.title}</option>)}</select></label>
+        <span className="video-chip">{episodes.length} episode{episodes.length === 1 ? '' : 's'} saved</span>
+        <span className="video-footnote">{persistedSpecs.length ? `${persistedSpecs.length} saved slide spec${persistedSpecs.length === 1 ? '' : 's'} ready to render.` : 'No saved slides for this episode yet.'}</span>
+      </>}
+    </section> : null}
     <section className="video-capability-grid"><Capability label="Planning" state={capabilities?.planning} /><Capability label="Evidence linkage" state={capabilities?.evidence_linkage} /><Capability label="Capture modes" state="Flash default · Full available" /><Capability label="TTS / narration audio" state={capabilities?.tts} /></section>
     {jobNotice ? <section className={`video-job-banner ${activeJob?.status === 'succeeded' ? 'is-success' : activeJob?.status === 'failed' || activeJob?.status === 'cancelled' ? 'is-error' : 'is-info'}`} role={activeJob?.status === 'failed' ? 'alert' : 'status'}><div><strong>Video job {activeJob?.status ?? 'notice'}</strong><p>{jobNotice}</p>{activeJob ? <small>{activeJob.job_id} · {Math.round(activeJob.progress_millis / 1000)}% · {activeJob.cancellation_requested ? 'cancellation requested' : 'durable state persisted'}</small> : null}</div><div className="video-job-actions">{activeJob && !['succeeded', 'failed', 'cancelled'].includes(activeJob.status) ? <button type="button" className="video-secondary-button" onClick={() => void cancelActiveJob()}>Cancel</button> : null}{activeJob && ['failed', 'cancelled'].includes(activeJob.status) ? <button type="button" className="video-primary-button" onClick={() => void retryActiveJob()} disabled={rendering}>Retry job</button> : null}<button type="button" className="video-secondary-button" onClick={() => setJobNotice(null)}>Dismiss</button></div></section> : null}
     {activeJob?.status === 'succeeded' && jobLineage.length ? <p className="video-footnote" data-testid="video-job-lineage">Final asset retains {jobLineage.length} upstream links: {jobLineage.filter((item) => item.upstream_kind === 'visual_spec').length} saved slide specs and {jobLineage.filter((item) => item.upstream_kind === 'event' || item.upstream_kind === 'claim').length} canonical event/claim sources.</p> : null}
@@ -419,14 +506,39 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
         <p className="video-footnote">{selectedClaimIds.filter((claimId) => claimOptions.some((option) => option.claim.claim_id === claimId && option.evidence.length > 0)).length} claim(s) selected · selection order follows the retained claim list.</p>
       </section> : null}
       <div className="video-card-head video-storyboard-head"><div><p className="eyebrow">Storyboard</p><h2>Selected-claim slides.json</h2></div><div className="video-inline-actions"><button className="video-primary-button" type="button" onClick={() => void saveStoryboard()} disabled={saving || loadingSource || claimsLoading || !sourceEvent || selectedClaimIds.length === 0}><Sparkles size={14} /> {saving ? 'Saving…' : `Build from selected claims (${selectedClaimIds.length})`}</button>{storyboard && downloadHref ? <a className="video-secondary-button" href={downloadHref} download={`${storyboard.storyboard_id}.slides.json`}>Download slides.json</a> : null}</div></div>
-      {storyboard ? <><div className="video-scene-grid">{storyboard.slides.map((slide, index) => <article className="video-scene-card" key={slide.slide_id} data-testid={`storyboard-slide-${index + 1}`}><span>0{index + 1}</span><strong>{slide.purpose}</strong><p>{slide.scene.narration_text}</p><small>{Math.round((slide.scene.duration_ms ?? 0) / 1000)}s · {slide.shots.length} shot · audio cue {slide.audio_cue.status}</small></article>)}</div><details className="video-storyboard-json"><summary>Inspect slides.json · scenes, shots, audio cues, and evidence</summary><pre data-testid="storyboard-json">{storyboardJson}</pre></details></> : <p className="video-footnote">{sourceEvent ? 'Select one or more eligible claims above to build the storyboard. No event-only placeholder beats are added.' : 'Load a retained event, review its stored claims, and explicitly select which claims should appear in the storyboard.'}</p>}
+      {storyboard ? <><div className="video-scene-grid">{storyboard.slides.map((slide, index) => <article className="video-scene-card" key={slide.slide_id} data-testid={`storyboard-slide-${index + 1}`}><span>0{index + 1}</span><strong>{slide.purpose}</strong><p>{slide.scene.narration_text}</p><small>{Math.round((slide.scene.duration_ms ?? 0) / 1000)}s · {slide.shots.length} shot · audio cue {slide.audio_cue.status}</small></article>)}</div><details className="video-storyboard-json"><summary>Inspect slides.json · scenes, shots, audio cues, and evidence</summary><pre data-testid="storyboard-json">{storyboardJson}</pre></details></> : persistedSpecs.length ? <><div className="video-scene-grid" data-testid="persisted-storyboard">{persistedSpecs.map((spec, index) => {
+        const label = spec.payload.kind === 'evidence_card' ? spec.payload.title
+          : spec.payload.kind === 'quote_card' ? spec.payload.quote
+          : spec.payload.kind === 'kinetic_text' || spec.payload.kind === 'caption' ? spec.payload.text
+          : spec.payload.kind === 'chart_transition' ? spec.payload.title
+          : spec.payload.label ?? 'Scene transition'
+        return <article className="video-scene-card" key={spec.spec_id} data-testid={`persisted-slide-${index + 1}`}><span>0{index + 1}</span><strong>{spec.template.replaceAll('_', ' ')}</strong><p>{label}</p><small>{Math.round(spec.duration_ms / 1000)}s · saved spec v{spec.revision} · {spec.sources.length} source{spec.sources.length === 1 ? '' : 's'}</small></article>
+      })}</div><p className="video-footnote" role="status">These slides were saved from a previous storyboard and are ready to render. Rebuild only when you want to replace them from a new claim selection.</p></> : <p className="video-footnote">{sourceEvent ? 'Select one or more eligible claims above to build the storyboard. No event-only placeholder beats are added.' : 'Load a retained event, review its stored claims, and explicitly select which claims should appear in the storyboard.'}</p>}
       <p className="video-footnote">Audio cue scripts are in the storyboard, but TTS is {capabilities?.tts?.replaceAll('_', ' ') ?? 'not configured'}; the current LinkZag MP4 is silent.</p>
-      <div className="video-card-head video-storyboard-head"><div><p className="eyebrow">LinkZag renderer</p><h2>Commentary video capture</h2></div><div className="video-render-controls"><label className="video-render-mode">Capture mode<select aria-label="Capture mode" data-testid="video-capture-mode" value={captureMode} onChange={(event) => setCaptureMode(event.target.value as 'flash' | 'full')} disabled={rendering}><option value="flash">Flash · real-time preview (Canvas)</option><option value="full">Full · deterministic screenshots (SVG)</option></select></label><button className="video-secondary-button" type="button" onClick={() => void renderLinkZag()} disabled={rendering || !storyboard}><Clapperboard size={14} /> {rendering ? 'Rendering…' : 'Render slides · silent MP4'}</button></div></div>
+      <div className="video-card-head video-storyboard-head"><div><p className="eyebrow">LinkZag renderer</p><h2>Commentary video capture</h2></div><div className="video-render-controls"><label className="video-render-mode">Capture mode<select aria-label="Capture mode" data-testid="video-capture-mode" value={captureMode} onChange={(event) => setCaptureMode(event.target.value as 'flash' | 'full')} disabled={rendering}><option value="flash">Flash · real-time preview (Canvas)</option><option value="full">Full · deterministic screenshots (SVG)</option></select></label><button className="video-primary-button" type="button" data-testid="video-render-button" onClick={() => void renderLinkZag()} disabled={rendering || (!storyboard && persistedSpecs.length === 0)}><Clapperboard size={14} /> {rendering ? 'Rendering…' : storyboard ? 'Render slides · silent MP4' : `Render ${persistedSpecs.length || ''} saved slide${persistedSpecs.length === 1 ? '' : 's'} · silent MP4`}</button></div></div>
       <p className="video-footnote">Flash is the speed-first default and may drop frames on a slow CPU. Choose Full when you need deterministic frame-by-frame capture or Flash motion/text quality is not acceptable.</p>
-      <div className="video-asset-summary"><span>{assets.length} reusable asset{assets.length === 1 ? '' : 's'}</span><span>{workflows.length} workflow{workflows.length === 1 ? '' : 's'} registered</span><span>Flash default · Full quality fallback · source lineage retained</span></div>
-      {assets.length ? <div className="video-asset-list">{assets.slice(0, 5).map((asset) => <div className="video-asset-row" data-testid="video-asset-row" data-asset-hash={asset.content_hash ?? ''} data-asset-path={asset.relative_path ?? ''} key={`${asset.asset_id}-${asset.revision}`}><Film size={14} /><span className="min-w-0 flex-1"><strong>{asset.asset_id}</strong><small>{asset.asset_kind} · {asset.provider} · {asset.mime_type ?? 'unknown format'} · {asset.content_hash?.slice(0, 12) ?? 'no hash'}</small></span><span className="video-chip">{asset.capability_state}</span></div>)}</div> : null}
+      <section className="video-preview-panel" data-testid="video-final-preview" aria-label="Final rendered video">
+        <div className="video-card-head"><div><p className="eyebrow">Final video</p><h2>Rendered MP4</h2></div>{previewAsset ? <span className="video-chip video-chip-strong">{previewAsset.capability_state.replaceAll('_', ' ')}</span> : null}</div>
+        {previewAsset ? <>
+          <div className="video-preview-stage">
+            {previewUrl ? <video ref={previewRef} className="video-preview-player" data-testid="video-preview-player" src={previewUrl} controls playsInline preload="metadata" /> : previewError ? <div className="video-preview-fallback is-error" role="alert"><VideoIcon size={22} /><strong>Inline preview unavailable</strong><p>{previewError}</p></div> : <div className="video-preview-fallback" role="status"><RefreshCw size={18} className="animate-spin" /><span>Resolving rendered MP4…</span></div>}
+          </div>
+          <div className="video-preview-meta" data-testid="video-preview-meta">
+            <span><strong>{previewAsset.asset_id}</strong> · v{previewAsset.revision}</span>
+            <span>{formatDuration(previewAsset.duration_ms)} · {previewAsset.width && previewAsset.height ? `${previewAsset.width}×${previewAsset.height}` : 'resolution unknown'}</span>
+            <span>hash {previewAsset.content_hash?.slice(0, 12) ?? 'not recorded'}</span>
+          </div>
+          <div className="video-preview-actions">
+            {previewUrl ? <button type="button" className="video-primary-button" onClick={() => { const player = previewRef.current; if (!player) return; player.currentTime = 0; void player.play().catch(() => undefined) }}><VideoIcon size={14} /> Play</button> : null}
+            {previewUrl ? <a className="video-secondary-button" href={previewUrl} download={`${previewAsset.asset_id}.mp4`}><Download size={14} /> Save MP4</a> : null}
+            <span className="video-footnote">{previewAsset.mime_type ?? 'video/mp4'} · {previewAsset.provider} · {previewAsset.reproducibility.replaceAll('_', ' ')}</span>
+          </div>
+        </> : <div className="video-preview-empty"><VideoIcon size={22} /><p>No rendered MP4 for this episode yet. Render the saved slides and the result appears here — playable, with its hash and stored lineage.</p></div>}
+      </section>
+      <div className="video-asset-summary"><span>{projectAssets.length} project asset{projectAssets.length === 1 ? '' : 's'} linked to saved slides</span><span>{workflows.length} workflow{workflows.length === 1 ? '' : 's'} registered</span><span>Flash default · Full quality fallback · source lineage retained</span></div>
+      {projectAssets.length ? <div className="video-asset-list">{projectAssets.slice(0, 5).map((asset) => <div className={`video-asset-row${previewAsset?.asset_id === asset.asset_id ? ' is-active' : ''}`} data-testid="video-asset-row" data-asset-hash={asset.content_hash ?? ''} data-asset-path={asset.relative_path ?? ''} key={`${asset.asset_id}-${asset.revision}`}><Film size={14} /><span className="min-w-0 flex-1"><strong>{asset.asset_id}</strong><small>{asset.asset_kind} · {asset.provider} · {asset.mime_type ?? 'unknown format'} · {formatDuration(asset.duration_ms)} · {asset.content_hash?.slice(0, 12) ?? 'no hash'}</small></span>{asset.relative_path ? <button type="button" className="video-secondary-button" onClick={() => setPreviewAsset(asset)} aria-label={`Preview asset ${asset.asset_id}`}>{previewAsset?.asset_id === asset.asset_id ? 'Previewing' : 'Preview'}</button> : <span className="video-chip">{asset.capability_state}</span>}</div>)}</div> : null}
       <p className="video-footnote">All saved slides render in order and assemble into one silent MP4. TTS is not configured, so this is not a publish-ready narrated episode; the output manifest records capture mode and determinism.</p>
-    </section> : episodeId ? <section className="video-card video-empty" role={hydrationFailed ? 'alert' : 'status'}><Clapperboard size={24} /><h2>{hydrating ? 'Loading persisted episode…' : 'Episode could not be loaded'}</h2><p>{hydrating ? 'Validating this episode and its retained evidence for the selected project.' : 'The persisted episode was not opened. Check the workspace message and reopen the episode; no replacement episode was created.'}</p></section> : <section className="video-card video-empty"><Clapperboard size={24} /><h2>Create the first episode revision</h2><p>This creates production metadata only. Then link a retained event transcript before drafting candidate narration.</p><button className="video-primary-button" type="button" onClick={() => void createEpisode()} disabled={saving}>{saving ? 'Creating…' : 'Create episode'}</button></section>}
+    </section> : episodesLoading ? <section className="video-card video-empty" role="status"><RefreshCw size={24} className="animate-spin" /><h2>Loading saved episodes…</h2><p>Checking this project for existing episode revisions and saved slides before offering a new episode.</p></section> : activeEpisodeId || episodeId ? <section className="video-card video-empty" role={hydrationFailed ? 'alert' : 'status'}><Clapperboard size={24} /><h2>{hydrating ? 'Loading persisted episode…' : 'Episode could not be loaded'}</h2><p>{hydrating ? 'Validating this episode and its retained evidence for the selected project.' : 'The persisted episode was not opened. Check the workspace message and reopen the episode; no replacement episode was created.'}</p></section> : <section className="video-card video-empty"><Clapperboard size={24} /><h2>Create the first episode revision</h2><p>This project has no saved episodes. This creates production metadata only; then link a retained event transcript before drafting candidate narration.</p><button className="video-primary-button" type="button" onClick={() => void createEpisode()} disabled={saving}>{saving ? 'Creating…' : 'Create episode'}</button></section>}
     <p className="video-status" role="status">{project.title} · source truth stays in NIP</p>
   </div>
 }

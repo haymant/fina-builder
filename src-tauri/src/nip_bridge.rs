@@ -657,8 +657,8 @@ fn extraction_prompt(
     format!(
         "You extract evidence-linked claims for a local narrative research ledger.\n\
          Return only one JSON object with this exact shape:\n\
-         {{\"claims\":[{{\"text\":\"short claim\",\"speaker_or_author\":null,\"confidence_millis\":0,\"quote\":\"exact supporting excerpt\",\"start_offset\":null,\"end_offset\":null}}]}}\n\
-         Rules: at most 10 claims; each claim must be directly supported by the transcript; quote must be copied from the transcript; do not invent facts; if there are no supportable claims return {{\"claims\":[]}}.\n\
+         {{\"claims\":[{{\"text\":\"short claim\",\"speaker_or_author\":null,\"confidence_millis\":0,\"quote\":\"exact supporting excerpt\"}}]}}\n\
+         Rules: at most 10 claims; each claim must be directly supported by the transcript; quote must be a single contiguous excerpt copied exactly from the transcript, preserving capitalization, punctuation and whitespace; do not invent facts; if there are no supportable claims return {{\"claims\":[]}}.\n\
          Prompt version: {prompt_version}\n\
          Event id: {event_id}\n\
          Transcript window: {window_index} of {window_total}; characters {window_start} to {window_end} of the full transcript. Extract only claims supported inside this window.\n\
@@ -716,6 +716,10 @@ fn parse_claims_output(output: &str) -> Result<Vec<Value>, ()> {
         if text.trim().is_empty() {
             return Err(());
         }
+        let quote = object.get("quote").and_then(Value::as_str).ok_or(())?;
+        if quote.trim().is_empty() {
+            return Err(());
+        }
     }
     Ok(claims.clone())
 }
@@ -736,7 +740,7 @@ mod tests {
     #[test]
     fn claim_output_parser_accepts_fenced_json_and_rejects_empty_or_malformed_claims() {
         let claims = parse_claims_output(
-            "```json\n{\"claims\":[{\"text\":\"Policy remains restrictive.\"}]}\n```",
+            "```json\n{\"claims\":[{\"text\":\"Policy remains restrictive.\",\"quote\":\"policy remains restrictive\"}]}\n```",
         )
         .unwrap();
         assert_eq!(claims.len(), 1);
@@ -744,6 +748,10 @@ mod tests {
         assert_eq!(parse_claims_output("not json"), Err(()));
         assert_eq!(
             parse_claims_output("{\"claims\":[{\"text\":\"\"}]}"),
+            Err(())
+        );
+        assert_eq!(
+            parse_claims_output("{\"claims\":[{\"text\":\"A claim\"}]}"),
             Err(())
         );
     }
@@ -781,7 +789,7 @@ mod tests {
 
     #[test]
     fn ansi_codes_do_not_break_cli_json_parsing() {
-        let output = "\u{1b}[0m> build · gpt-5-nano\u{1b}[0m\n{\"claims\":[{\"text\":\"Rates stay high.\"}]}\n";
+        let output = "\u{1b}[0m> build · gpt-5-nano\u{1b}[0m\n{\"claims\":[{\"text\":\"Rates stay high.\",\"quote\":\"Rates stay high.\"}]}\n";
         let claims = parse_claims_output(output).unwrap();
         assert_eq!(claims.len(), 1);
         assert_eq!(strip_ansi("\u{1b}[31mred\u{1b}[0m"), "red");

@@ -39,7 +39,7 @@ const MIGRATION_14: &str = include_str!("../migrations/0014_video_edl.sql");
 const MIGRATION_15: &str = include_str!("../migrations/0015_video_qa_reports.sql");
 const MIGRATION_16: &str = include_str!("../migrations/0016_video_audio_cues.sql");
 const MIGRATION_17: &str = include_str!("../migrations/0017_video_export_producer.sql");
-const LATEST_SCHEMA_VERSION: u32 = 17;
+const LATEST_SCHEMA_VERSION: u32 = 18;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -2368,6 +2368,46 @@ impl Store {
             .collect::<duckdb::Result<Vec<_>>>()?)
     }
 
+    /// Assets whose lineage reaches a VisualSpec owned by the project (and
+    /// optionally the episode). Assets have no project column of their own, so
+    /// the saved spec lineage is the authoritative scoping path.
+    pub fn video_project_assets(
+        &self,
+        project_id: &str,
+        episode_id: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<VideoAsset>, StoreError> {
+        let episode_filter = if episode_id.is_some() {
+            " AND s.episode_id = ?"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT DISTINCT a.asset_id, a.revision, a.asset_kind, a.relative_path, a.mime_type, a.content_hash,
+                    a.width, a.height, a.duration_ms, a.provider, a.workflow_id, a.model,
+                    a.reproducibility, a.capability_state, a.license_state, a.job_id, a.created_at
+             FROM video_assets a
+             JOIN (SELECT asset_id, MAX(revision) revision FROM video_assets GROUP BY asset_id) h
+               ON h.asset_id = a.asset_id AND h.revision = a.revision
+             JOIN video_asset_lineage l
+               ON l.asset_id = a.asset_id AND l.asset_revision = a.revision
+             JOIN video_visual_specs s
+               ON s.spec_id = l.upstream_id AND s.revision = l.upstream_revision
+             WHERE l.upstream_kind = 'visual_spec' AND s.project_id = ?{episode_filter}
+             ORDER BY a.created_at DESC LIMIT ?"
+        );
+        let mut statement = self.connection.prepare(&sql)?;
+        let limit = limit.clamp(1, 500) as i32;
+        let rows = match episode_id {
+            Some(episode_id) => statement.query_map(
+                params![project_id, episode_id, limit],
+                raw_video_asset_from_row,
+            )?,
+            None => statement.query_map(params![project_id, limit], raw_video_asset_from_row)?,
+        };
+        Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
     pub fn save_video_asset_lineage(
         &mut self,
         lineage: &VideoAssetLineage,
@@ -2715,6 +2755,54 @@ impl Store {
             )?;
             statement
                 .query_map(params![limit.clamp(1, 500) as i32], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)? as u32))
+                })?
+                .collect::<duckdb::Result<Vec<_>>>()?
+        };
+        ids.into_iter()
+            .map(|(spec_id, revision)| {
+                self.video_visual_spec(&spec_id, revision)?
+                    .ok_or(StoreError::InvalidVideoRecord)
+            })
+            .collect()
+    }
+
+    /// Latest VisualSpec revision per scene for the episode's most recent
+    /// storyboard, in scene order. Used to rebuild the render list after the
+    /// workspace is reopened instead of relying on in-memory state. Scoping to
+    /// the newest storyboard avoids replaying slides from superseded builds.
+    pub fn video_episode_visual_specs(
+        &self,
+        project_id: &str,
+        episode_id: &str,
+    ) -> Result<Vec<VideoVisualSpec>, StoreError> {
+        let ids = {
+            let mut statement = self.connection.prepare(
+                "WITH latest_narrative AS (
+                     SELECT narrative_id FROM video_narratives
+                     WHERE episode_id = ?
+                     ORDER BY updated_at DESC, created_at DESC LIMIT 1
+                 ), latest_storyboard AS (
+                     SELECT sb.storyboard_id FROM video_storyboards sb
+                     JOIN latest_narrative n ON n.narrative_id = sb.narrative_id
+                     ORDER BY sb.updated_at DESC, sb.created_at DESC LIMIT 1
+                 ), latest_scenes AS (
+                     SELECT sc.scene_id, sc.ordinal
+                     FROM video_scenes sc
+                     JOIN latest_storyboard ls ON ls.storyboard_id = sc.storyboard_id
+                     JOIN (SELECT scene_id, MAX(revision) revision FROM video_scenes GROUP BY scene_id) h
+                       ON h.scene_id = sc.scene_id AND h.revision = sc.revision
+                 )
+                 SELECT s.spec_id, s.revision
+                 FROM video_visual_specs s
+                 JOIN latest_scenes lsc ON lsc.scene_id = s.scene_id
+                 JOIN (SELECT spec_id, MAX(revision) revision FROM video_visual_specs GROUP BY spec_id) h
+                   ON h.spec_id = s.spec_id AND h.revision = s.revision
+                 WHERE s.project_id = ? AND s.episode_id = ?
+                 ORDER BY lsc.ordinal, s.created_at, s.spec_id",
+            )?;
+            statement
+                .query_map(params![episode_id, project_id, episode_id], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)? as u32))
                 })?
                 .collect::<duckdb::Result<Vec<_>>>()?
@@ -4154,6 +4242,21 @@ impl Store {
             .map_err(StoreError::from)
     }
 
+    /// Current revision of every episode in a project, newest activity first.
+    pub fn video_episodes(&self, project_id: &str) -> Result<Vec<VideoEpisode>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT e.episode_id, e.project_id, e.revision, e.title, e.as_of, e.disclosure, e.status, e.created_at, e.updated_at
+             FROM video_episodes e
+             JOIN video_episode_heads h
+               ON h.episode_id = e.episode_id AND h.revision = e.revision
+             WHERE e.project_id = ?
+             ORDER BY e.updated_at DESC, e.episode_id",
+        )?;
+        Ok(statement
+            .query_map(params![project_id], raw_video_episode_from_row)?
+            .collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
     pub fn video_episode_evidence(
         &self,
         episode_id: &str,
@@ -4942,6 +5045,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<u32, StoreError> {
         apply_migration(connection, 17, "video_export_producer", MIGRATION_17)?;
         applied_any = true;
     }
+    if current_version < 18 {
+        apply_claim_evidence_span_repair(connection)?;
+        applied_any = true;
+    }
     if applied_any {
         // Migration 0009 rebuilds tables (DROP/RENAME). DuckDB cannot replay
         // those catalog records from a WAL left behind by a crashed process, so
@@ -4965,6 +5072,197 @@ fn apply_migration(
     )?;
     transaction.commit()?;
     Ok(())
+}
+
+/// Legacy bridge extractions stored quotes with no offsets (and occasionally a
+/// quote whose capitalization differed from the transcript). Restore the
+/// invariant that every stored quote is exactly selected by its stored span.
+/// Rows whose quote cannot be located are left untouched rather than guessed.
+fn apply_claim_evidence_span_repair(connection: &mut Connection) -> Result<(), StoreError> {
+    let transaction = connection.transaction()?;
+    let rows = {
+        let mut statement = transaction.prepare(
+            "SELECT ce.claim_id, ce.event_id, ce.quote, ce.start_offset, ce.end_offset, e.content_text
+             FROM nip_claim_evidence ce
+             JOIN nip_events e ON e.event_id = ce.event_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<i32>>(3)?,
+                row.get::<_, Option<i32>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+            ))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+
+    {
+        let mut update = transaction.prepare(
+            "UPDATE nip_claim_evidence
+             SET quote = ?, start_offset = ?, end_offset = ?
+             WHERE claim_id = ? AND event_id = ?",
+        )?;
+        for (claim_id, event_id, quote, start, end, text) in rows {
+            let (Some(quote), Some(text)) = (quote, text) else {
+                continue;
+            };
+            if quote.trim().is_empty() {
+                continue;
+            }
+            let Some((start_offset, end_offset, exact_quote)) =
+                resolve_claim_evidence_span(&text, &quote, start, end)
+            else {
+                continue;
+            };
+            if Some(start_offset as i32) == start
+                && Some(end_offset as i32) == end
+                && exact_quote == quote
+            {
+                continue;
+            }
+            update.execute(params![
+                exact_quote,
+                start_offset as i32,
+                end_offset as i32,
+                claim_id,
+                event_id
+            ])?;
+        }
+    }
+
+    transaction.execute(
+        "INSERT INTO nip_schema_migrations (version, name) VALUES (?, ?)",
+        params![18, "claim_evidence_spans"],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn resolve_claim_evidence_span(
+    text: &str,
+    quote: &str,
+    hinted_start: Option<i32>,
+    hinted_end: Option<i32>,
+) -> Option<(u32, u32, String)> {
+    let characters: Vec<char> = text.chars().collect();
+    let quote_characters: Vec<char> = quote.chars().collect();
+    if quote_characters.is_empty() || quote_characters.len() > characters.len() {
+        return None;
+    }
+
+    let hinted_start = hinted_start.and_then(|value| u32::try_from(value).ok());
+    let hinted_end = hinted_end.and_then(|value| u32::try_from(value).ok());
+    if let (Some(start), Some(end)) = (hinted_start, hinted_end) {
+        if let (Ok(start), Ok(end)) = (usize::try_from(start), usize::try_from(end)) {
+            if start < end
+                && end <= characters.len()
+                && characters[start..end] == quote_characters[..]
+            {
+                return Some((start as u32, end as u32, quote.to_owned()));
+            }
+        }
+    }
+
+    let mut exact = characters
+        .windows(quote_characters.len())
+        .enumerate()
+        .filter_map(|(index, window)| (window == quote_characters.as_slice()).then_some(index));
+    if let Some(index) = exact.next() {
+        if exact.next().is_none() {
+            let end = index + quote_characters.len();
+            return Some((index as u32, end as u32, quote.to_owned()));
+        }
+    }
+
+    let (normalized_text, origins) = normalized_characters_with_origins(text);
+    let (normalized_quote, _) = normalized_characters_with_origins(quote);
+    if normalized_quote.is_empty() || normalized_quote.len() > normalized_text.len() {
+        return None;
+    }
+    let mut fallback = normalized_text
+        .windows(normalized_quote.len())
+        .enumerate()
+        .filter_map(|(index, window)| (window == normalized_quote.as_slice()).then_some(index));
+    if let Some(index) = fallback.next() {
+        if fallback.next().is_none() {
+            return span_from_normalized(&characters, &origins, index, normalized_quote.len());
+        }
+    }
+
+    // The provider occasionally trims or reorders a word at one end of an
+    // otherwise verbatim excerpt. Accept only a long common substring so a
+    // repair cannot silently attach an unrelated passage.
+    let (start, _, length) = longest_common_substring(&normalized_text, &normalized_quote)?;
+    if length < 30 || length * 2 < normalized_quote.len() {
+        return None;
+    }
+    span_from_normalized(&characters, &origins, start, length)
+}
+
+fn span_from_normalized(
+    characters: &[char],
+    origins: &[usize],
+    start: usize,
+    length: usize,
+) -> Option<(u32, u32, String)> {
+    let last_normalized = start.checked_add(length)?.checked_sub(1)?;
+    let original_start = *origins.get(start)?;
+    let original_end = *origins.get(last_normalized)? + 1;
+    let exact_quote = characters
+        .get(original_start..original_end)?
+        .iter()
+        .collect::<String>();
+    Some((original_start as u32, original_end as u32, exact_quote))
+}
+
+fn normalized_characters_with_origins(text: &str) -> (Vec<char>, Vec<usize>) {
+    let mut normalized = Vec::new();
+    let mut origins = Vec::new();
+    let mut previous_whitespace = false;
+    for (index, character) in text.chars().enumerate() {
+        if character.is_whitespace() {
+            if previous_whitespace {
+                continue;
+            }
+            normalized.push(' ');
+            origins.push(index);
+            previous_whitespace = true;
+        } else {
+            for lowercase in character.to_lowercase() {
+                normalized.push(lowercase);
+                origins.push(index);
+            }
+            previous_whitespace = false;
+        }
+    }
+    (normalized, origins)
+}
+
+/// Longest common substring over normalized characters. Returns the start in
+/// the haystack, the start in the needle, and the length.
+fn longest_common_substring(haystack: &[char], needle: &[char]) -> Option<(usize, usize, usize)> {
+    if haystack.is_empty() || needle.is_empty() {
+        return None;
+    }
+    let mut previous = vec![0_usize; needle.len() + 1];
+    let mut best = (0_usize, 0_usize, 0_usize);
+    for (row, character) in haystack.iter().enumerate() {
+        let mut current = vec![0_usize; needle.len() + 1];
+        for (column, needle_character) in needle.iter().enumerate() {
+            if character == needle_character {
+                let length = previous[column] + 1;
+                current[column + 1] = length;
+                if length > best.2 {
+                    best = (row + 1 - length, column + 1 - length, length);
+                }
+            }
+        }
+        previous = current;
+    }
+    (best.2 > 0).then_some(best)
 }
 
 fn sql_string_literal(path: &Path) -> String {
@@ -5375,6 +5673,41 @@ mod tests {
             start,
             end + 1
         ));
+    }
+
+    #[test]
+    fn legacy_claim_quotes_are_repaired_to_exact_transcript_spans() {
+        let text = "He was intensely involved   in the company. The China hawks are not going to get the scenario they wanted.";
+        let quote = "He was intensely involved in the company.";
+        let (start, end, repaired) = resolve_claim_evidence_span(text, quote, None, None).unwrap();
+        assert_eq!(repaired, "He was intensely involved   in the company.");
+        assert_eq!(
+            text.chars()
+                .skip(start as usize)
+                .take((end - start) as usize)
+                .collect::<String>(),
+            repaired
+        );
+
+        // A paraphrased ending still resolves to the long shared excerpt rather
+        // than being left with no usable span.
+        let paraphrased = "The China hawks are probably not going to get the scenario they wanted.";
+        let (start, end, repaired) =
+            resolve_claim_evidence_span(text, paraphrased, None, None).unwrap();
+        assert!(text.contains(&repaired));
+        assert!(repaired.chars().count() >= 30);
+        assert_eq!(
+            text.chars()
+                .skip(start as usize)
+                .take((end - start) as usize)
+                .collect::<String>(),
+            repaired
+        );
+
+        assert_eq!(
+            resolve_claim_evidence_span(text, "not in this transcript", None, None),
+            None
+        );
     }
 
     #[test]

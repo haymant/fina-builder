@@ -1,9 +1,14 @@
+import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { nip } from '../../api/nipTransport'
 import { toSnakeKeys } from '../../api/keyCase'
 import type { VideoAsset, VideoAssetLineage, VideoCapabilities, VideoEpisode, VideoEvidenceRef, VideoExportManifest, VideoJob, VideoNarrative, VideoProject, VideoProjectDeleteResult, VideoQaReport, VideoScene, VideoShot, VideoSourceEvent, VideoStoryboard, VideoTimeline, VideoVisualSpec, VideoWorkflow } from './types'
 
 function fromTransport<T>(value: unknown): T {
   return toSnakeKeys(value) as T
+}
+
+function isDesktopRuntime(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
 export const videoApi = {
@@ -15,6 +20,19 @@ export const videoApi = {
   getEvent: (eventId: string) => nip.callTool('get_event', { event_id: eventId }).then((value) => fromTransport<VideoSourceEvent>(value)),
   createEpisode: (episode: VideoEpisode) => nip.callTool('create_video_episode', { episode }).then((value) => fromTransport<VideoEpisode>(value)),
   getEpisode: (episodeId: string) => nip.callTool('get_video_episode', { episode_id: episodeId }).then((value) => fromTransport<VideoEpisode>(value)),
+  listEpisodes: (projectId: string) => nip.callTool('list_video_episodes', { project_id: projectId }).then((value) => fromTransport<VideoEpisode[]>(value)),
+  listProjectAssets: (projectId: string, episodeId?: string, limit = 50) => nip.callTool('list_video_project_assets', { project_id: projectId, ...(episodeId ? { episode_id: episodeId } : {}), limit }).then((value) => fromTransport<VideoAsset[]>(value)),
+  listEpisodeVisualSpecs: (projectId: string, episodeId: string) => nip.callTool('list_video_episode_visual_specs', { project_id: projectId, episode_id: episodeId }).then((value) => fromTransport<VideoVisualSpec[]>(value)),
+  /**
+   * Resolve a managed media path to a webview-asset URL. Returns null outside
+   * the desktop host; the UI then keeps the asset metadata but cannot inline
+   * the MP4.
+   */
+  mediaUrl: async (relativePath: string): Promise<string | null> => {
+    if (!isDesktopRuntime()) return null
+    const path = await invoke<string>('nip_media_file', { relativePath })
+    return convertFileSrc(path)
+  },
   linkEvidence: (episodeId: string, episodeRevision: number, evidence: VideoEvidenceRef) => nip.callTool('link_video_evidence', { episode_id: episodeId, episode_revision: episodeRevision, evidence }).then((value) => fromTransport<Record<string, unknown>>(value)),
   listEvidence: (episodeId: string, episodeRevision: number) => nip.callTool('list_video_evidence', { episode_id: episodeId, episode_revision: episodeRevision }).then((value) => fromTransport<VideoEvidenceRef[]>(value)),
   saveNarrative: (narrative: VideoNarrative) => nip.callTool('save_video_narrative', { narrative }).then((value) => fromTransport<VideoNarrative>(value)),

@@ -39,7 +39,7 @@ impl Drop for ProjectStageDir {
 
 pub fn render(
     spec: &Value,
-    workspace: &Path,
+    linkzag_root: &Path,
     media_root: &Path,
     run_id: &str,
     capture_mode: &str,
@@ -74,9 +74,6 @@ pub fn render(
         .unwrap_or(1080)
         .clamp(180, 2160);
     let scene = compile_scene(spec, &scene_id, duration_ms, width, height)?;
-    let linkzag_root = std::env::var_os("NIP_LINKZAG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace.join("modules/linkZagShow"));
     let package = linkzag_root.join("package.json");
     if !package.is_file() {
         let canonical = serde_json::to_vec(&scene).map_err(|error| error.to_string())?;

@@ -291,6 +291,10 @@ impl NipService {
         Ok(self.store.video_episode(episode_id)?)
     }
 
+    pub fn video_episodes(&self, project_id: &str) -> Result<Vec<VideoEpisode>, NipError> {
+        Ok(self.store.video_episodes(project_id)?)
+    }
+
     pub fn save_video_episode(&mut self, episode: &VideoEpisode) -> Result<(), NipError> {
         Ok(self.store.save_video_episode(episode)?)
     }
@@ -369,6 +373,17 @@ impl NipService {
         Ok(self.store.video_assets(limit)?)
     }
 
+    pub fn video_project_assets(
+        &self,
+        project_id: &str,
+        episode_id: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<VideoAsset>, NipError> {
+        Ok(self
+            .store
+            .video_project_assets(project_id, episode_id, limit)?)
+    }
+
     pub fn save_video_asset(&mut self, asset: &VideoAsset) -> Result<(), NipError> {
         Ok(self.store.save_video_asset(asset)?)
     }
@@ -414,6 +429,16 @@ impl NipService {
 
     pub fn video_visual_specs(&self, limit: u32) -> Result<Vec<VideoVisualSpec>, NipError> {
         Ok(self.store.video_visual_specs(limit)?)
+    }
+
+    pub fn video_episode_visual_specs(
+        &self,
+        project_id: &str,
+        episode_id: &str,
+    ) -> Result<Vec<VideoVisualSpec>, NipError> {
+        Ok(self
+            .store
+            .video_episode_visual_specs(project_id, episode_id)?)
     }
 
     pub fn save_video_visual_spec(&mut self, spec: &VideoVisualSpec) -> Result<(), NipError> {
@@ -2652,7 +2677,7 @@ mod tests {
         let health = service.health();
         assert_eq!(health.service, "nip-engine");
         assert_eq!(health.readiness, Readiness::Ready);
-        assert_eq!(health.schema_version, 17);
+        assert_eq!(health.schema_version, 18);
 
         let capabilities = service.capabilities();
         assert!(capabilities.features.duckdb_store);
@@ -3533,6 +3558,18 @@ mod tests {
         assert_eq!(claims[0].reasoning_effort.as_deref(), Some("low"));
         assert_eq!(claims[0].prompt_version, provider::BRIDGE_PROMPT_VERSION);
         assert_eq!(claims[0].evidence[0].event_id, event.event_id);
+        assert_eq!(claims[0].evidence[0].start_offset, Some(0));
+        assert_eq!(
+            claims[0].evidence[0].end_offset,
+            Some(
+                claims[0].evidence[0]
+                    .quote
+                    .as_deref()
+                    .unwrap()
+                    .chars()
+                    .count() as u32
+            )
+        );
         assert_eq!(service.claims().unwrap().len(), 1);
     }
 
