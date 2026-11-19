@@ -8,6 +8,7 @@ pub mod media;
 pub mod podcast;
 pub mod provider;
 pub mod semantic;
+pub mod tts;
 pub mod video_edl;
 pub mod video_export;
 pub mod video_export_producer;
@@ -289,6 +290,10 @@ impl NipService {
 
     pub fn video_episode(&self, episode_id: &str) -> Result<Option<VideoEpisode>, NipError> {
         Ok(self.store.video_episode(episode_id)?)
+    }
+
+    pub fn video_scene(&self, scene_id: &str) -> Result<Option<VideoScene>, NipError> {
+        Ok(self.store.video_scene(scene_id)?)
     }
 
     pub fn video_episodes(&self, project_id: &str) -> Result<Vec<VideoEpisode>, NipError> {

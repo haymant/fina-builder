@@ -410,6 +410,291 @@ pub fn assemble(
     })
 }
 
+pub struct LinkZagNarration {
+    pub media_path: PathBuf,
+    pub media_hash: String,
+    pub media_file: Value,
+    pub manifest: Value,
+}
+
+/// Fit each synthesized narration clip to its slide duration and mux the
+/// resulting track into the assembled MP4.
+///
+/// `clips` pairs an optional audio file with the slide's target duration in
+/// milliseconds. `None` produces silence so the timeline always matches the
+/// rendered segments. Clips longer than their slide are time-compressed with
+/// `atempo`; shorter clips are padded with silence.
+pub fn attach_narration(
+    video: &Path,
+    clips: &[(Option<PathBuf>, u64)],
+    media_root: &Path,
+    run_id: &str,
+    cancel: &AtomicBool,
+) -> Result<LinkZagNarration, String> {
+    if clips.is_empty() {
+        return Err("narration requires at least one slide".into());
+    }
+    let output_dir = media_root
+        .join("video")
+        .join("linkzag")
+        .join(safe_name(run_id))
+        .join("assembled");
+    fs::create_dir_all(&output_dir)
+        .map_err(|error| format!("cannot create narration directory: {error}"))?;
+    let concat_path = output_dir.join("narration.txt");
+    let mut concat = File::create(&concat_path)
+        .map_err(|error| format!("cannot create narration segment list: {error}"))?;
+    let mut clip_durations = Vec::with_capacity(clips.len());
+    for (index, (audio, duration_ms)) in clips.iter().enumerate() {
+        if cancel.load(Ordering::SeqCst) {
+            return Err("narration assembly was cancelled".into());
+        }
+        let target_seconds = (*duration_ms).max(1_000) as f64 / 1_000.0;
+        let wav = output_dir.join(format!("narration-{:02}.wav", index + 1));
+        if let Some(audio) = audio {
+            let source_seconds = media_duration_seconds(audio)?;
+            let audio_filter = if source_seconds > target_seconds + 0.05 {
+                format!(
+                    "{},apad",
+                    atempo_chain(source_seconds / target_seconds)
+                )
+            } else {
+                "apad".to_owned()
+            };
+            let output = Command::new("ffmpeg")
+                .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
+                .arg(audio)
+                .args(["-af", &audio_filter, "-t"])
+                .arg(format!("{target_seconds:.3}"))
+                .args(["-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le"])
+                .arg(&wav)
+                .output()
+                .map_err(|error| format!("FFmpeg narration fit could not start: {error}"))?;
+            if !output.status.success() {
+                return Err(format!(
+                    "FFmpeg narration fit failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ));
+            }
+        } else {
+            let output = Command::new("ffmpeg")
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-nostdin",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "anullsrc=r=48000:cl=stereo",
+                    "-t",
+                ])
+                .arg(format!("{target_seconds:.3}"))
+                .args(["-c:a", "pcm_s16le"])
+                .arg(&wav)
+                .output()
+                .map_err(|error| format!("FFmpeg silence generation could not start: {error}"))?;
+            if !output.status.success() {
+                return Err(format!(
+                    "FFmpeg silence generation failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ));
+            }
+        }
+        let escaped = wav
+            .to_string_lossy()
+            .replace('\\', "/")
+            .replace('\'', "\\'");
+        writeln!(concat, "file '{escaped}'")
+            .map_err(|error| format!("cannot write narration segment list: {error}"))?;
+        clip_durations.push(json!({
+            "index": index,
+            "target_ms": duration_ms,
+            "has_speech": audio.is_some(),
+        }));
+    }
+    concat
+        .flush()
+        .map_err(|error| format!("cannot flush narration segment list: {error}"))?;
+    if cancel.load(Ordering::SeqCst) {
+        return Err("narration assembly was cancelled".into());
+    }
+    let narration_path = output_dir.join("narration.wav");
+    let concat_output = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+        ])
+        .arg(&concat_path)
+        .args(["-c:a", "pcm_s16le"])
+        .arg(&narration_path)
+        .output()
+        .map_err(|error| format!("FFmpeg narration concat could not start: {error}"))?;
+    if !concat_output.status.success() {
+        return Err(format!(
+            "FFmpeg narration concat failed: {}",
+            String::from_utf8_lossy(&concat_output.stderr).trim()
+        ));
+    }
+    let output_path = output_dir.join("storyboard_narrated.mp4");
+    let mux_output = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
+        .arg(video)
+        .args(["-i"])
+        .arg(&narration_path)
+        .args([
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-af",
+            "apad",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+        ])
+        .arg(&output_path)
+        .output()
+        .map_err(|error| format!("FFmpeg narration mux could not start: {error}"))?;
+    if !mux_output.status.success() {
+        return Err(format!(
+            "FFmpeg narration mux failed: {}",
+            String::from_utf8_lossy(&mux_output.stderr).trim()
+        ));
+    }
+    let output = output_path
+        .canonicalize()
+        .map_err(|error| format!("narrated MP4 was not produced: {error}"))?;
+    let metadata = fs::metadata(&output)
+        .map_err(|error| format!("cannot inspect narrated MP4: {error}"))?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Err("narrated MP4 is empty or is not a regular file".into());
+    }
+    let duration = media_duration_seconds(&output)?;
+    let dimensions = media_dimensions(&output)?;
+    let media_hash = hash_file(&output)?;
+    let media_file = json!({
+        "format": "mp4",
+        "path": output,
+        "byte_size": metadata.len(),
+        "width": dimensions.0,
+        "height": dimensions.1,
+        "duration": duration
+    });
+    let manifest = json!({
+        "format": "mp4",
+        "content_hash": media_hash,
+        "byte_size": metadata.len(),
+        "width": dimensions.0,
+        "height": dimensions.1,
+        "duration": duration,
+        "audio": {
+            "provider": "qwen3_tts_local",
+            "workflow": "qwen3_tts_local",
+            "mode": "narrated",
+            "sample_rate": 48_000,
+            "slides": clip_durations
+        }
+    });
+    Ok(LinkZagNarration {
+        media_path: output,
+        media_hash,
+        media_file,
+        manifest,
+    })
+}
+
+/// `atempo` accepts 0.5–2.0; chain stages for larger ratios.
+fn atempo_chain(mut ratio: f64) -> String {
+    let mut stages = Vec::new();
+    while ratio > 2.0 {
+        stages.push("atempo=2.0".to_owned());
+        ratio /= 2.0;
+    }
+    if ratio > 1.001 {
+        stages.push(format!("atempo={ratio:.6}"));
+    }
+    if stages.is_empty() {
+        stages.push("atempo=1.0".to_owned());
+    }
+    stages.join(",")
+}
+
+fn media_duration_seconds(path: &Path) -> Result<f64, String> {
+    let output = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nw=1:nk=1",
+        ])
+        .arg(path)
+        .output()
+        .map_err(|error| format!("ffprobe could not inspect {}: {error}", path.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "ffprobe rejected {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .ok_or_else(|| format!("{} has no valid duration", path.display()))
+}
+
+fn media_dimensions(path: &Path) -> Result<(u64, u64), String> {
+    let output = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=p=0:s=x",
+        ])
+        .arg(path)
+        .output()
+        .map_err(|error| format!("ffprobe could not inspect {}: {error}", path.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "ffprobe rejected {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut parts = text.trim().split('x');
+    let width = parts.next().and_then(|value| value.parse::<u64>().ok());
+    let height = parts.next().and_then(|value| value.parse::<u64>().ok());
+    match (width, height) {
+        (Some(width), Some(height)) => Ok((width, height)),
+        _ => Err(format!("{} has no readable video dimensions", path.display())),
+    }
+}
+
 fn compile_scene(
     spec: &Value,
     scene_id: &str,
@@ -822,5 +1107,84 @@ mod tests {
             assert!(stage.join("scene.json").is_file());
         }
         assert!(!stage.exists());
+    }
+
+    #[test]
+    fn narration_clips_are_fitted_to_slide_durations_and_muxed() {
+        if Command::new("ffmpeg").arg("-version").output().is_err() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let media_root = root.path().join("media");
+        let job_dir = media_root.join("video/linkzag/job-1/assembled");
+        fs::create_dir_all(&job_dir).unwrap();
+        let video = job_dir.join("storyboard.mp4");
+        let generated = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=320x180:d=2",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(&video)
+            .output()
+            .unwrap();
+        assert!(generated.status.success());
+        let short_audio = job_dir.join("short.flac");
+        let generated = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=0.5",
+            ])
+            .arg(&short_audio)
+            .output()
+            .unwrap();
+        assert!(generated.status.success());
+        let narration = attach_narration(
+            &video,
+            &[(Some(short_audio), 1_000), (None, 1_000)],
+            &media_root,
+            "job-1",
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(narration.media_path.is_file());
+        assert_eq!(narration.media_hash.len(), 64);
+        let probe = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&narration.media_path)
+            .output()
+            .unwrap();
+        let streams = String::from_utf8_lossy(&probe.stdout);
+        assert!(streams.contains("video"));
+        assert!(streams.contains("audio"));
+        assert_eq!(
+            narration
+                .manifest
+                .pointer("/audio/provider")
+                .and_then(Value::as_str),
+            Some("qwen3_tts_local")
+        );
     }
 }

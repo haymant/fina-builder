@@ -30,6 +30,7 @@ use nip_engine::{
         DeterministicEmbeddingProvider, HttpEmbeddingProvider, QdrantIndex, DEFAULT_DIMENSIONS,
         DEFAULT_MODEL_ID, DEFAULT_MODEL_REVISION,
     },
+    tts::{self, ComfyTtsStatus},
     NipConfig, NipError, NipService, PodcastSubscriptionRequest, SourceDraft,
 };
 use nip_store::{Store, StoreError};
@@ -436,6 +437,10 @@ struct LinkZagRenderParams {
     visual_specs: Option<Vec<VideoVisualSpecRefParams>>,
     #[serde(default)]
     capture_mode: LinkZagCaptureMode,
+    /// Synthesize each scene's narration with local Qwen3-TTS and mux it into
+    /// the assembled MP4. Defaults to silence for existing API callers.
+    #[serde(default)]
+    narrate: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
@@ -483,15 +488,33 @@ impl NipMcp {
         description = "Report Video Workspace capability states. Deterministic planning is available without model providers."
     )]
     fn video_capabilities(&self) -> CallToolResult {
+        let tts = match self.service.lock() {
+            Ok(service) => ComfyTtsStatus::collect(service.config()),
+            Err(_) => ComfyTtsStatus {
+                ready: false,
+                render_script: String::new(),
+                render_script_present: false,
+                comfyui_url: None,
+                server_reachable: false,
+                nodes_present: false,
+                python: String::new(),
+                python_present: false,
+                ffmpeg_present: false,
+                blockers: vec!["NIP service lock failed".into()],
+                next_actions: Vec::new(),
+            },
+        };
         structured_success(json!({
             "planning": "ready",
             "evidence_linkage": "ready",
             "deterministic_renderer": "linkzag_adapter",
             "mock_assets": "candidate_only",
             "generative_video": "not_configured",
-            "tts": "not_configured",
+            "tts": if tts.ready { "ready" } else { "not_configured" },
+            "tts_reason": tts.blockers.first().cloned().unwrap_or_default(),
+            "tts_detail": tts,
             "asr": "not_configured",
-            "disclosure": "Evidence and planning are available; no model-generated video is executed by this surface."
+            "disclosure": "Evidence and planning are available; narration uses a loopback Qwen3-TTS model and no model-generated video is executed by this surface."
         }))
     }
 
@@ -1231,6 +1254,18 @@ impl NipMcp {
             Ok(service) => service,
             Err(_) => return structured_error("internal", "NIP service lock failed"),
         };
+        if params.narrate {
+            let status = ComfyTtsStatus::collect(service.config());
+            if !status.ready {
+                return structured_error(
+                    "capability_unavailable",
+                    format!(
+                        "local Qwen3-TTS is not ready: {}",
+                        status.blockers.join("; ")
+                    ),
+                );
+            }
+        }
         let mut typed_specs = Vec::with_capacity(references.len());
         for reference in &references {
             let spec = match service.video_visual_spec(reference.spec_id.trim(), reference.revision)
@@ -1275,7 +1310,8 @@ impl NipMcp {
         let mut job = job;
         job.resource_estimate = Some(json!({
             "visual_specs": visual_specs,
-            "capture_mode": capture_mode.as_str()
+            "capture_mode": capture_mode.as_str(),
+            "narrate": params.narrate
         }));
         if let Err(error) = service.save_video_job(&job) {
             return structured_error("video_job_rejected", error.to_string());
@@ -3388,10 +3424,11 @@ fn spawn_video_linkzag_job(
             }
         };
         update(&|job| { job.status = "running".into(); job.started_at = Some(Utc::now()); job.progress_millis = 1_000; });
-        let (media_root, linkzag_root) = match service.lock() {
+        let (media_root, linkzag_root, config) = match service.lock() {
             Ok(service) => (
                 std::env::var_os("NIP_MEDIA_DIR").map(PathBuf::from).unwrap_or_else(|| service.config().data_dir().join("media")),
                 service.config().linkzag_dir().to_path_buf(),
+                service.config().clone(),
             ),
             Err(_) => { update(&|job| { job.status = "failed".into(); job.safe_error_message = Some("NIP service lock failed".into()); job.finished_at = Some(Utc::now()); }); return; }
         };
@@ -3414,9 +3451,83 @@ fn spawn_video_linkzag_job(
             cleanup_cancel();
             return;
         }
+        let narrate = render_request
+            .get("narrate")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let mut narration_clips: Vec<(Option<PathBuf>, u64)> = Vec::new();
+        if narrate {
+            let status = ComfyTtsStatus::collect(&config);
+            if !status.ready {
+                update(&|job| { job.status = "failed".into(); job.safe_error_message = Some(format!("capability_unavailable: local Qwen3-TTS is not ready: {}", status.blockers.join("; "))); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+                cleanup_cancel();
+                return;
+            }
+            let narration_texts: Vec<Option<String>> = match service.lock() {
+                Ok(service) => specs
+                    .iter()
+                    .map(|spec| {
+                        let from_scene = spec
+                            .get("scene_id")
+                            .and_then(Value::as_str)
+                            .and_then(|scene_id| service.video_scene(scene_id).ok().flatten())
+                            .and_then(|scene| scene.narration_text)
+                            .filter(|text| !text.trim().is_empty());
+                        from_scene.or_else(|| tts::spec_narration_fallback(spec))
+                    })
+                    .collect(),
+                Err(_) => {
+                    update(&|job| { job.status = "failed".into(); job.safe_error_message = Some("capability_unavailable: NIP service lock failed while reading narration".into()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+                    cleanup_cancel();
+                    return;
+                }
+            };
+            let narration_root = media_root.join("video").join("narration").join(
+                job_id
+                    .chars()
+                    .map(|character| {
+                        if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                            character
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect::<String>(),
+            );
+            for (index, text) in narration_texts.iter().enumerate() {
+                if cancel.load(Ordering::SeqCst) {
+                    update(&|job| { job.status = "cancelled".into(); job.cancellation_requested = true; job.safe_error_message = Some("narration synthesis was cancelled".into()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+                    cleanup_cancel();
+                    return;
+                }
+                let duration_ms = specs[index]
+                    .get("duration_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(12_000);
+                match text {
+                    Some(text) => {
+                        update(&|job| job.progress_millis = 2_000 + ((index as u32 * 23_000) / specs.len() as u32));
+                        let output = narration_root.join(format!("slide-{:02}.flac", index + 1));
+                        if let Err(error) = tts::synthesize(&config, text, &output, &cancel) {
+                            if cancel.load(Ordering::SeqCst) {
+                                update(&|job| { job.status = "cancelled".into(); job.cancellation_requested = true; job.safe_error_message = Some(error.clone()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+                            } else {
+                                update(&|job| { job.status = "failed".into(); job.safe_error_message = Some(format!("capability_unavailable: {error}")); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+                            }
+                            cleanup_cancel();
+                            return;
+                        }
+                        narration_clips.push((Some(output), duration_ms));
+                    }
+                    None => narration_clips.push((None, duration_ms)),
+                }
+            }
+        }
+        let render_base: u32 = if narrate { 25_000 } else { 5_000 };
+        let render_span: u32 = if narrate { 55_000 } else { 70_000 };
         let mut segments = Vec::with_capacity(specs.len());
         for (index, spec) in specs.iter().enumerate() {
-            update(&|job| job.progress_millis = 5_000 + ((index as u32 * 70_000) / specs.len() as u32));
+            update(&|job| job.progress_millis = render_base + ((index as u32 * render_span) / specs.len() as u32));
             let render_id = format!("{job_id}-slide-{:02}", index + 1);
             match linkzag::render(spec, &linkzag_root, &media_root, &render_id, &capture_mode, &cancel) {
                 Ok(outcome) if outcome.state == "ready" => segments.push(outcome),
@@ -3446,18 +3557,57 @@ fn spawn_video_linkzag_job(
                 return;
             }
         };
+        let narration = if narrate {
+            update(&|job| job.progress_millis = 90_000);
+            if narration_clips.len() != segments.len() {
+                update(&|job| { job.status = "failed".into(); job.safe_error_message = Some("narration did not match the rendered slide count".into()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+                cleanup_cancel();
+                return;
+            }
+            match linkzag::attach_narration(
+                &assembly.media_path,
+                &narration_clips,
+                &media_root,
+                &job_id,
+                &cancel,
+            ) {
+                Ok(narration) => Some(narration),
+                Err(error) => {
+                    if cancel.load(Ordering::SeqCst) {
+                        update(&|job| { job.status = "cancelled".into(); job.cancellation_requested = true; job.safe_error_message = Some(error.clone()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+                    } else {
+                        update(&|job| { job.status = "failed".into(); job.safe_error_message = Some(error.clone()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+                    }
+                    cleanup_cancel();
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let final_media_file = narration
+            .as_ref()
+            .map(|value| value.media_file.clone())
+            .unwrap_or_else(|| assembly.media_file.clone());
+        let final_media_path = narration
+            .as_ref()
+            .map(|value| value.media_path.clone())
+            .unwrap_or_else(|| assembly.media_path.clone());
         let relative_path = media_root.canonicalize().ok().and_then(|root| {
-            assembly.media_path.strip_prefix(root).ok().map(|path| path.to_string_lossy().replace('\\', "/"))
+            final_media_path.strip_prefix(root).ok().map(|path| path.to_string_lossy().replace('\\', "/"))
         });
         let Some(relative_path) = relative_path else {
             update(&|job| { job.status = "failed".into(); job.safe_error_message = Some("assembled MP4 was outside the managed media directory".into()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
             cleanup_cancel();
             return;
         };
-        let width = assembly.media_file.get("width").and_then(Value::as_u64).map(|value| value as u32);
-        let height = assembly.media_file.get("height").and_then(Value::as_u64).map(|value| value as u32);
-        let duration_ms = assembly.media_file.get("duration").and_then(Value::as_f64).map(|value| (value * 1000.0) as u64);
-        let content_hash = assembly.media_hash.clone();
+        let width = final_media_file.get("width").and_then(Value::as_u64).map(|value| value as u32);
+        let height = final_media_file.get("height").and_then(Value::as_u64).map(|value| value as u32);
+        let duration_ms = final_media_file.get("duration").and_then(Value::as_f64).map(|value| (value * 1000.0) as u64);
+        let content_hash = narration
+            .as_ref()
+            .map(|value| value.media_hash.clone())
+            .unwrap_or_else(|| assembly.media_hash.clone());
         let asset_id = format!(
             "linkzag-storyboard-{job_id}-{}",
             &content_hash[..12.min(content_hash.len())]
@@ -3474,8 +3624,10 @@ fn spawn_video_linkzag_job(
             duration_ms,
             provider: "linkzag".into(),
             workflow_id: Some("linkzag.commentary.v1".into()),
-            model: None,
-            reproducibility: if capture_mode == "full" {
+            model: narrate.then(|| "Qwen3-TTS-12Hz-0.6B-CustomVoice".to_owned()),
+            reproducibility: if narrate {
+                "seeded_nondeterministic".into()
+            } else if capture_mode == "full" {
                 "deterministic".into()
             } else {
                 "nondeterministic".into()
@@ -3516,7 +3668,9 @@ fn spawn_video_linkzag_job(
                             "renderer": "linkzag",
                             "capture_mode": capture_mode,
                             "chart_renderer": if capture_mode == "flash" { "canvas" } else { "svg" },
-                            "deterministic": capture_mode == "full",
+                            "deterministic": capture_mode == "full" && narration.is_none(),
+                            "narrated": narration.is_some(),
+                            "narration": narration.as_ref().map(|value| value.manifest.clone()),
                             "renderer_revision": segments.first().map(|segment| segment.renderer_revision.clone()),
                             "scene_checksums": segments.iter().map(|segment| segment.scene_checksum.clone()).collect::<Vec<_>>(),
                             "segment_manifests": segments.iter().map(|segment| segment.manifest.clone()).collect::<Vec<_>>(),

@@ -138,6 +138,14 @@ export interface VideoCapabilities {
   mock_assets: string
   generative_video: string
   tts: string
+  tts_reason?: string
+  tts_detail?: {
+    ready: boolean
+    blockers: string[]
+    next_actions: string[]
+    comfyui_url?: string | null
+    nodes_present?: boolean
+  }
   asr: string
   disclosure: string
 }

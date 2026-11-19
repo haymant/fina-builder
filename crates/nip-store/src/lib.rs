@@ -4242,6 +4242,37 @@ impl Store {
             .map_err(StoreError::from)
     }
 
+    /// Latest revision of one scene. Narration text is stored on the scene and
+    /// is what the local TTS adapter speaks for the matching visual spec.
+    pub fn video_scene(&self, scene_id: &str) -> Result<Option<VideoScene>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT scene_id, storyboard_id, revision, ordinal, purpose, narration_text,
+                        visual_intent, duration_ms, created_at, updated_at
+                 FROM video_scenes
+                 WHERE scene_id = ?
+                 ORDER BY revision DESC
+                 LIMIT 1",
+                params![scene_id],
+                |row| {
+                    Ok(VideoScene {
+                        scene_id: row.get(0)?,
+                        storyboard_id: row.get(1)?,
+                        revision: row.get::<_, i32>(2)? as u32,
+                        ordinal: row.get::<_, i32>(3)? as u32,
+                        purpose: row.get(4)?,
+                        narration_text: row.get(5)?,
+                        visual_intent: row.get(6)?,
+                        duration_ms: row.get::<_, Option<i64>>(7)?.map(|value| value as u64),
+                        created_at: row.get(8)?,
+                        updated_at: row.get(9)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
     /// Current revision of every episode in a project, newest activity first.
     pub fn video_episodes(&self, project_id: &str) -> Result<Vec<VideoEpisode>, StoreError> {
         let mut statement = self.connection.prepare(

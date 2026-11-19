@@ -144,6 +144,7 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
   const [workflows, setWorkflows] = useState<VideoWorkflow[]>([])
   const [rendering, setRendering] = useState(false)
   const [captureMode, setCaptureMode] = useState<'flash' | 'full'>('flash')
+  const [narrate, setNarrate] = useState(true)
   const [activeJob, setActiveJob] = useState<VideoJob | null>(null)
   const [jobNotice, setJobNotice] = useState<string | null>(null)
   const [episodes, setEpisodes] = useState<VideoEpisode[]>([])
@@ -411,12 +412,14 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
     }
     if (current.status === 'succeeded' && current.output_manifest?.asset) {
       const asset = current.output_manifest.asset
+      const narrated = current.output_manifest.narrated === true
       const completedMode = current.output_manifest.capture_mode ?? current.resource_estimate?.capture_mode ?? captureMode
       const modeLabel = completedMode === 'full' ? 'Full deterministic' : 'Flash real-time preview'
       setProjectAssets((items) => [asset, ...items.filter((item) => item.asset_id !== asset.asset_id)])
       setPreviewAsset(asset)
-      setJobNotice(`Silent commentary MP4 ready · ${asset.asset_id} · ${modeLabel}`)
-      onMessage(`Silent commentary MP4 ready · ${asset.asset_id} · ${modeLabel}`)
+      const label = `${narrated ? 'Narrated' : 'Silent'} commentary MP4 ready · ${asset.asset_id} · ${modeLabel}`
+      setJobNotice(label)
+      onMessage(label)
     } else if (current.status === 'cancelled') {
       setJobNotice(`Video job ${current.job_id} was cancelled. The attempt remains inspectable.`)
     } else if (current.status === 'failed') {
@@ -432,9 +435,10 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
     if (!visualSpecs.length) { onMessage('Build and save the slides storyboard before rendering.'); return }
     setRendering(true)
     setJobNotice(null)
+    const shouldNarrate = narrate && capabilities?.tts === 'ready'
     try {
-      const result = await videoApi.renderLinkZag(visualSpecs, captureMode)
-      onMessage(`Video job ${result.job_id} queued for all ${visualSpecs.length} saved slides in ${captureMode} mode.`)
+      const result = await videoApi.renderLinkZag(visualSpecs, captureMode, shouldNarrate)
+      onMessage(`Video job ${result.job_id} queued for all ${visualSpecs.length} saved slides in ${captureMode} mode${shouldNarrate ? ' with local Qwen3-TTS narration' : ' (silent)'}.`)
       await pollJob(result)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'LinkZag render failed.'
@@ -469,6 +473,8 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
   const jobLineage = activeJob?.output_manifest?.lineage ?? []
   const normalizedClaimFilter = claimFilter.trim().toLocaleLowerCase()
   const filteredClaimOptions = claimOptions.filter(({ claim }) => [claim.claim_text, claim.speaker_or_author, claim.provider, claim.model, claim.claim_id].some((value) => value?.toLocaleLowerCase().includes(normalizedClaimFilter)))
+  const ttsReady = capabilities?.tts === 'ready'
+  const ttsReason = capabilities?.tts_reason || capabilities?.tts_detail?.blockers?.[0] || 'local Qwen3-TTS is not configured'
 
   return <div className="video-page" data-testid="video-episode-workspace">
     <header className="video-hero"><div><button type="button" className="video-back" onClick={onBack}>← Projects</button><p className="eyebrow">Project v{project.revision} · {project.status}</p><h1>{project.title}</h1><p>Episode → narrative → slides → scenes, shots, and audio cues. Source text remains in NIP.</p></div><span className="video-chip video-chip-strong">{capabilities?.planning ?? 'planning'}</span></header>
@@ -514,8 +520,8 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
           : spec.payload.label ?? 'Scene transition'
         return <article className="video-scene-card" key={spec.spec_id} data-testid={`persisted-slide-${index + 1}`}><span>0{index + 1}</span><strong>{spec.template.replaceAll('_', ' ')}</strong><p>{label}</p><small>{Math.round(spec.duration_ms / 1000)}s · saved spec v{spec.revision} · {spec.sources.length} source{spec.sources.length === 1 ? '' : 's'}</small></article>
       })}</div><p className="video-footnote" role="status">These slides were saved from a previous storyboard and are ready to render. Rebuild only when you want to replace them from a new claim selection.</p></> : <p className="video-footnote">{sourceEvent ? 'Select one or more eligible claims above to build the storyboard. No event-only placeholder beats are added.' : 'Load a retained event, review its stored claims, and explicitly select which claims should appear in the storyboard.'}</p>}
-      <p className="video-footnote">Audio cue scripts are in the storyboard, but TTS is {capabilities?.tts?.replaceAll('_', ' ') ?? 'not configured'}; the current LinkZag MP4 is silent.</p>
-      <div className="video-card-head video-storyboard-head"><div><p className="eyebrow">LinkZag renderer</p><h2>Commentary video capture</h2></div><div className="video-render-controls"><label className="video-render-mode">Capture mode<select aria-label="Capture mode" data-testid="video-capture-mode" value={captureMode} onChange={(event) => setCaptureMode(event.target.value as 'flash' | 'full')} disabled={rendering}><option value="flash">Flash · real-time preview (Canvas)</option><option value="full">Full · deterministic screenshots (SVG)</option></select></label><button className="video-primary-button" type="button" data-testid="video-render-button" onClick={() => void renderLinkZag()} disabled={rendering || (!storyboard && persistedSpecs.length === 0)}><Clapperboard size={14} /> {rendering ? 'Rendering…' : storyboard ? 'Render slides · silent MP4' : `Render ${persistedSpecs.length || ''} saved slide${persistedSpecs.length === 1 ? '' : 's'} · silent MP4`}</button></div></div>
+      <p className="video-footnote">{ttsReady ? (narrate ? 'Narration: each scene’s audio cue is synthesized locally with Qwen3-TTS through ComfyUI and muxed into this MP4.' : 'Narration is off for this render; the MP4 will be silent.') : `Narration unavailable: ${ttsReason}. The MP4 will be silent.`}</p>
+      <div className="video-card-head video-storyboard-head"><div><p className="eyebrow">LinkZag renderer</p><h2>Commentary video capture</h2></div><div className="video-render-controls"><label className="video-render-mode">Capture mode<select aria-label="Capture mode" data-testid="video-capture-mode" value={captureMode} onChange={(event) => setCaptureMode(event.target.value as 'flash' | 'full')} disabled={rendering}><option value="flash">Flash · real-time preview (Canvas)</option><option value="full">Full · deterministic screenshots (SVG)</option></select></label><label className="video-render-mode video-narrate-toggle" title={ttsReady ? 'Synthesize each audio cue locally with Qwen3-TTS' : ttsReason}><input type="checkbox" aria-label="Narrate with local Qwen3-TTS" data-testid="video-narrate-toggle" checked={narrate && ttsReady} disabled={!ttsReady || rendering} onChange={(event) => setNarrate(event.target.checked)} /> Narration (Qwen3-TTS)</label><button className="video-primary-button" type="button" data-testid="video-render-button" onClick={() => void renderLinkZag()} disabled={rendering || (!storyboard && persistedSpecs.length === 0)}><Clapperboard size={14} /> {rendering ? 'Rendering…' : storyboard ? (ttsReady && narrate ? 'Render narrated MP4' : 'Render silent MP4') : `Render ${persistedSpecs.length || ''} saved slide${persistedSpecs.length === 1 ? '' : 's'} · MP4`}</button></div></div>
       <p className="video-footnote">Flash is the speed-first default and may drop frames on a slow CPU. Choose Full when you need deterministic frame-by-frame capture or Flash motion/text quality is not acceptable.</p>
       <section className="video-preview-panel" data-testid="video-final-preview" aria-label="Final rendered video">
         <div className="video-card-head"><div><p className="eyebrow">Final video</p><h2>Rendered MP4</h2></div>{previewAsset ? <span className="video-chip video-chip-strong">{previewAsset.capability_state.replaceAll('_', ' ')}</span> : null}</div>
@@ -537,7 +543,7 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
       </section>
       <div className="video-asset-summary"><span>{projectAssets.length} project asset{projectAssets.length === 1 ? '' : 's'} linked to saved slides</span><span>{workflows.length} workflow{workflows.length === 1 ? '' : 's'} registered</span><span>Flash default · Full quality fallback · source lineage retained</span></div>
       {projectAssets.length ? <div className="video-asset-list">{projectAssets.slice(0, 5).map((asset) => <div className={`video-asset-row${previewAsset?.asset_id === asset.asset_id ? ' is-active' : ''}`} data-testid="video-asset-row" data-asset-hash={asset.content_hash ?? ''} data-asset-path={asset.relative_path ?? ''} key={`${asset.asset_id}-${asset.revision}`}><Film size={14} /><span className="min-w-0 flex-1"><strong>{asset.asset_id}</strong><small>{asset.asset_kind} · {asset.provider} · {asset.mime_type ?? 'unknown format'} · {formatDuration(asset.duration_ms)} · {asset.content_hash?.slice(0, 12) ?? 'no hash'}</small></span>{asset.relative_path ? <button type="button" className="video-secondary-button" onClick={() => setPreviewAsset(asset)} aria-label={`Preview asset ${asset.asset_id}`}>{previewAsset?.asset_id === asset.asset_id ? 'Previewing' : 'Preview'}</button> : <span className="video-chip">{asset.capability_state}</span>}</div>)}</div> : null}
-      <p className="video-footnote">All saved slides render in order and assemble into one silent MP4. TTS is not configured, so this is not a publish-ready narrated episode; the output manifest records capture mode and determinism.</p>
+      <p className="video-footnote">All saved slides render in order and assemble into one MP4. {ttsReady && narrate ? 'Narration is synthesized locally per scene and fitted to each slide; the output manifest records the TTS workflow and audio timeline.' : 'This render is silent; the output manifest records capture mode and determinism.'}</p>
     </section> : episodesLoading ? <section className="video-card video-empty" role="status"><RefreshCw size={24} className="animate-spin" /><h2>Loading saved episodes…</h2><p>Checking this project for existing episode revisions and saved slides before offering a new episode.</p></section> : activeEpisodeId || episodeId ? <section className="video-card video-empty" role={hydrationFailed ? 'alert' : 'status'}><Clapperboard size={24} /><h2>{hydrating ? 'Loading persisted episode…' : 'Episode could not be loaded'}</h2><p>{hydrating ? 'Validating this episode and its retained evidence for the selected project.' : 'The persisted episode was not opened. Check the workspace message and reopen the episode; no replacement episode was created.'}</p></section> : <section className="video-card video-empty"><Clapperboard size={24} /><h2>Create the first episode revision</h2><p>This project has no saved episodes. This creates production metadata only; then link a retained event transcript before drafting candidate narration.</p><button className="video-primary-button" type="button" onClick={() => void createEpisode()} disabled={saving}>{saving ? 'Creating…' : 'Create episode'}</button></section>}
     <p className="video-status" role="status">{project.title} · source truth stays in NIP</p>
   </div>
