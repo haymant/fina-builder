@@ -1,6 +1,6 @@
 import { nip } from '../../api/nipTransport'
 import { toSnakeKeys } from '../../api/keyCase'
-import type { VideoAsset, VideoAssetLineage, VideoCapabilities, VideoEpisode, VideoEvidenceRef, VideoExportManifest, VideoJob, VideoNarrative, VideoProject, VideoQaReport, VideoScene, VideoShot, VideoSourceEvent, VideoStoryboard, VideoTimeline, VideoVisualSpec, VideoWorkflow } from './types'
+import type { VideoAsset, VideoAssetLineage, VideoCapabilities, VideoEpisode, VideoEvidenceRef, VideoExportManifest, VideoJob, VideoNarrative, VideoProject, VideoProjectDeleteResult, VideoQaReport, VideoScene, VideoShot, VideoSourceEvent, VideoStoryboard, VideoTimeline, VideoVisualSpec, VideoWorkflow } from './types'
 
 function fromTransport<T>(value: unknown): T {
   return toSnakeKeys(value) as T
@@ -11,8 +11,10 @@ export const videoApi = {
   listProjects: () => nip.callTool('list_video_projects').then((value) => fromTransport<VideoProject[]>(value)),
   createProject: (project: VideoProject) => nip.callTool('create_video_project', { project }).then((value) => fromTransport<VideoProject>(value)),
   getProject: (projectId: string) => nip.callTool('get_video_project', { project_id: projectId }).then((value) => fromTransport<VideoProject>(value)),
+  deleteProject: (projectId: string, confirmationName: string) => nip.callTool('delete_video_project', { project_id: projectId, confirmation_name: confirmationName }).then((value) => fromTransport<VideoProjectDeleteResult>(value)),
   getEvent: (eventId: string) => nip.callTool('get_event', { event_id: eventId }).then((value) => fromTransport<VideoSourceEvent>(value)),
   createEpisode: (episode: VideoEpisode) => nip.callTool('create_video_episode', { episode }).then((value) => fromTransport<VideoEpisode>(value)),
+  getEpisode: (episodeId: string) => nip.callTool('get_video_episode', { episode_id: episodeId }).then((value) => fromTransport<VideoEpisode>(value)),
   linkEvidence: (episodeId: string, episodeRevision: number, evidence: VideoEvidenceRef) => nip.callTool('link_video_evidence', { episode_id: episodeId, episode_revision: episodeRevision, evidence }).then((value) => fromTransport<Record<string, unknown>>(value)),
   listEvidence: (episodeId: string, episodeRevision: number) => nip.callTool('list_video_evidence', { episode_id: episodeId, episode_revision: episodeRevision }).then((value) => fromTransport<VideoEvidenceRef[]>(value)),
   saveNarrative: (narrative: VideoNarrative) => nip.callTool('save_video_narrative', { narrative }).then((value) => fromTransport<VideoNarrative>(value)),

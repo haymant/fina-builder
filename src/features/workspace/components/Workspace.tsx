@@ -97,7 +97,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
     const l = loadLocation()
     if (l?.kind === 'trades' && TRADE_VIEWS.some((v) => v.id === l.view)) return l
     if (l?.kind === 'narrative' && (l.view === 'overview' || l.view === 'claims')) return l
-    if (l?.kind === 'video' && (l.view === 'projects' || l.view === 'workspace')) return l
+    if (l?.kind === 'video' && (l.view === 'projects' || l.view === 'workspace') && [l.projectId, l.episodeId, l.claimId].every((value) => value === undefined || (typeof value === 'string' && value.trim().length > 0))) return l
     return { kind: 'dashboard', dashboardId: selectedId }
   })
   const navigate = useCallback((l: Location) => {
@@ -245,7 +245,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
         <main className="workspace-canvas relative min-h-0 flex-1 overflow-auto p-5">
           <ViewLoadBoundary label="Narrative Intelligence">
             <Suspense fallback={<SlowModuleNotice label="Narrative Intelligence" />}>
-              <NarrativeWorkspace view={location.view} />
+              <NarrativeWorkspace view={location.view} onOpenVideoEpisode={(projectId, episodeId, claimId) => navigate({ kind: 'video', view: 'workspace', projectId, episodeId, claimId })} />
             </Suspense>
           </ViewLoadBoundary>
         </main>
@@ -253,7 +253,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
         <main className="workspace-canvas relative min-h-0 flex-1 overflow-auto p-5">
           <ViewLoadBoundary label="Video Workspace">
             <Suspense fallback={<SlowModuleNotice label="Video Workspace" />}>
-              <VideoWorkspace view={location.view} projectId={location.projectId} onNavigate={(view, projectId) => navigate({ kind: 'video', view, projectId })} />
+              <VideoWorkspace view={location.view} projectId={location.projectId} episodeId={location.episodeId} claimId={location.claimId} onNavigate={(view, projectId) => navigate({ kind: 'video', view, projectId })} />
             </Suspense>
           </ViewLoadBoundary>
         </main>

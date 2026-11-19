@@ -146,6 +146,9 @@ pub fn run() {
             mcp_commands::nip_mcp_call_tool,
             mcp_commands::nip_mcp_reset,
             mcp_commands::nip_service_url,
+            nip_http::nip_get_local_model_settings,
+            nip_http::nip_check_local_model,
+            nip_http::nip_save_local_model_settings,
             // RIGA agent (chat panel).
             riga_agent::kernel_health,
             riga_agent::riga_transport_connect,

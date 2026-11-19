@@ -32,7 +32,7 @@ use nip_engine::{
     },
     NipConfig, NipError, NipService, PodcastSubscriptionRequest, SourceDraft,
 };
-use nip_store::Store;
+use nip_store::{Store, StoreError};
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Implementation, ServerCapabilities, ServerConfig},
@@ -141,6 +141,19 @@ struct VideoProjectParams {
 #[serde(deny_unknown_fields)]
 struct VideoProjectIdParams {
     project_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VideoEpisodeIdParams {
+    episode_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DeleteVideoProjectParams {
+    project_id: String,
+    confirmation_name: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -675,8 +688,11 @@ impl NipMcp {
     )]
     fn save_video_export_manifest(
         &self,
-        Parameters(_params): Parameters<VideoExportManifestParams>,
+        Parameters(params): Parameters<VideoExportManifestParams>,
     ) -> CallToolResult {
+        // Consume the legacy payload only to preserve the tool schema; caller-authored
+        // success manifests are deliberately discarded and never persisted.
+        let _ = params.manifest;
         structured_error(
             "unsupported_operation",
             "only a validated producer run can create an export success manifest",
@@ -719,8 +735,11 @@ impl NipMcp {
     )]
     fn save_video_qa_report(
         &self,
-        Parameters(_params): Parameters<VideoQaReportParams>,
+        Parameters(params): Parameters<VideoQaReportParams>,
     ) -> CallToolResult {
+        // Keep this legacy input schema but discard caller-authored QA decisions;
+        // only the deterministic evaluator may create a persisted report.
+        let _ = params.report;
         structured_error(
             "unsupported_operation",
             "QA reports can only be produced by the deterministic evaluator",
@@ -1409,6 +1428,37 @@ impl NipMcp {
     }
 
     #[tool(
+        description = "Delete a Video project and its project-owned production metadata. confirmation_name must exactly match the current project title; global media and job history may be retained."
+    )]
+    fn delete_video_project(
+        &self,
+        Parameters(params): Parameters<DeleteVideoProjectParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(mut service) => match service
+                .delete_video_project(&params.project_id, &params.confirmation_name)
+            {
+                Ok(result) => structured_success(serde_json::to_value(result).unwrap()),
+                Err(NipError::Storage(StoreError::VideoProjectNotFound)) => {
+                    structured_error("not_found", "Video project was not found")
+                }
+                Err(NipError::Storage(StoreError::VideoProjectConfirmationMismatch)) => {
+                    structured_error(
+                        "conflict",
+                        "confirmation_name must exactly match the current Video project title; no data was changed",
+                    )
+                }
+                Err(NipError::Storage(StoreError::ActiveVideoJobs)) => structured_error(
+                    "conflict",
+                    "Video project deletion is blocked while any Video job is queued or running; no data was changed",
+                ),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
         description = "Create the first revision or append the next immutable revision of a Video episode."
     )]
     fn create_video_episode(
@@ -1423,6 +1473,21 @@ impl NipMcp {
             Ok(mut service) => match service.save_video_episode(&episode) {
                 Ok(()) => structured_success(serde_json::to_value(episode).unwrap()),
                 Err(error) => structured_error("video_episode_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "Get the current immutable revision of a Video episode by its stable ID.")]
+    fn get_video_episode(
+        &self,
+        Parameters(params): Parameters<VideoEpisodeIdParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.video_episode(&params.episode_id) {
+                Ok(Some(episode)) => structured_success(serde_json::to_value(episode).unwrap()),
+                Ok(None) => structured_error("not_found", "Video episode was not found"),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
             },
             Err(_) => structured_error("internal", "NIP service lock failed"),
         }

@@ -69,6 +69,12 @@ pub enum StoreError {
     InvalidVideoRecord,
     #[error("video evidence reference is invalid")]
     InvalidVideoEvidence,
+    #[error("Video project was not found")]
+    VideoProjectNotFound,
+    #[error("confirmation name does not exactly match the current Video project title")]
+    VideoProjectConfirmationMismatch,
+    #[error("Video project deletion is blocked while queued or running Video jobs exist")]
+    ActiveVideoJobs,
     #[error("EDL project, episode, or storyboard revision ownership is invalid")]
     InvalidEdlOwnership,
     #[error("EDL build request ID was reused with a different payload")]
@@ -99,6 +105,14 @@ pub struct SnapshotManifest {
 pub struct VideoEdlRef {
     pub id: String,
     pub revision: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoProjectDeleteResult {
+    pub project_id: String,
+    pub deleted: bool,
+    pub retained_global_media_and_job_history: bool,
+    pub retention_note: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2000,6 +2014,276 @@ impl Store {
         Ok(statement
             .query_map([], raw_video_project_from_row)?
             .collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
+    /// Delete a Video project and its dependent production metadata atomically.
+    /// Canonical NIP records and global/ownership-ambiguous media and job rows
+    /// are deliberately retained.
+    pub fn delete_video_project(
+        &mut self,
+        project_id: &str,
+        confirmation_name: &str,
+    ) -> Result<VideoProjectDeleteResult, StoreError> {
+        let tx = self.connection.transaction()?;
+        let title: Option<String> = tx
+            .query_row(
+                "SELECT p.title FROM video_projects p
+                 JOIN video_project_heads h
+                   ON h.project_id = p.project_id AND h.revision = p.revision
+                 WHERE p.project_id = ?",
+                params![project_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let title = title.ok_or(StoreError::VideoProjectNotFound)?;
+        if title != confirmation_name {
+            return Err(StoreError::VideoProjectConfirmationMismatch);
+        }
+
+        // Jobs have no reliable project ownership column. Refuse deletion if
+        // any are active rather than risking removal of inputs they may use.
+        let has_active_jobs: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM video_jobs WHERE status IN ('queued', 'running'))",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_active_jobs {
+            return Err(StoreError::ActiveVideoJobs);
+        }
+
+        // Remove project request mappings only where their owning QA report is
+        // unambiguously associated with this project. Other request/job history
+        // remains because it carries no reliable project key.
+        tx.execute(
+            "DELETE FROM video_qa_run_requests
+             WHERE report_id IN (SELECT report_id FROM video_qa_reports_v2 WHERE project_id = ?)",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_qa_reports_v2 WHERE project_id = ?",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_qa_reports WHERE project_id = ?",
+            params![project_id],
+        )?;
+
+        // Project export files/evidence are children of the matching manifest.
+        tx.execute(
+            "DELETE FROM video_export_manifest_files
+             WHERE manifest_id IN (SELECT manifest_id FROM video_export_manifests WHERE project_id = ?)",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_export_manifest_evidence
+             WHERE manifest_id IN (SELECT manifest_id FROM video_export_manifests WHERE project_id = ?)",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_export_manifests WHERE project_id = ?",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_export_manifests_v1 WHERE project_id = ?",
+            params![project_id],
+        )?;
+
+        // Remove associations/lineage rows only when the upstream artifact is
+        // an exact project-owned visual spec, scene, or shot revision. Asset
+        // records and their binary files remain global and untouched.
+        tx.execute(
+            "DELETE FROM video_shot_assets WHERE EXISTS (
+                SELECT 1 FROM video_shots sh
+                JOIN video_scenes sc ON sc.scene_id = sh.scene_id
+                JOIN video_storyboards sb ON sb.storyboard_id = sc.storyboard_id
+                JOIN video_narratives n ON n.narrative_id = sb.narrative_id
+                JOIN video_episodes e ON e.episode_id = n.episode_id
+                WHERE e.project_id = ? AND sh.shot_id = video_shot_assets.shot_id
+                  AND sh.revision = video_shot_assets.shot_revision
+             )",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_asset_lineage l WHERE
+                (l.upstream_kind = 'visual_spec' AND EXISTS (
+                    SELECT 1 FROM video_visual_specs v WHERE v.project_id = ?
+                      AND v.spec_id = l.upstream_id AND v.revision = l.upstream_revision
+                )) OR
+                (l.upstream_kind = 'scene' AND EXISTS (
+                    SELECT 1 FROM video_scenes sc
+                    JOIN video_storyboards sb ON sb.storyboard_id = sc.storyboard_id
+                    JOIN video_narratives n ON n.narrative_id = sb.narrative_id
+                    JOIN video_episodes e ON e.episode_id = n.episode_id
+                    WHERE e.project_id = ? AND sc.scene_id = l.upstream_id
+                      AND sc.revision = l.upstream_revision
+                )) OR
+                (l.upstream_kind = 'shot' AND EXISTS (
+                    SELECT 1 FROM video_shots sh
+                    JOIN video_scenes sc ON sc.scene_id = sh.scene_id
+                    JOIN video_storyboards sb ON sb.storyboard_id = sc.storyboard_id
+                    JOIN video_narratives n ON n.narrative_id = sb.narrative_id
+                    JOIN video_episodes e ON e.episode_id = n.episode_id
+                    WHERE e.project_id = ? AND sh.shot_id = l.upstream_id
+                      AND sh.revision = l.upstream_revision
+                ))",
+            params![project_id, project_id, project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_export_asset_lineage_v1 l WHERE
+                (l.upstream_kind = 'visual_spec' AND EXISTS (
+                    SELECT 1 FROM video_visual_specs v WHERE v.project_id = ?
+                      AND v.spec_id = l.upstream_id AND v.revision = l.upstream_revision
+                )) OR
+                (l.upstream_kind = 'scene' AND EXISTS (
+                    SELECT 1 FROM video_scenes sc
+                    JOIN video_storyboards sb ON sb.storyboard_id = sc.storyboard_id
+                    JOIN video_narratives n ON n.narrative_id = sb.narrative_id
+                    JOIN video_episodes e ON e.episode_id = n.episode_id
+                    WHERE e.project_id = ? AND sc.scene_id = l.upstream_id
+                      AND sc.revision = l.upstream_revision
+                )) OR
+                (l.upstream_kind = 'shot' AND EXISTS (
+                    SELECT 1 FROM video_shots sh
+                    JOIN video_scenes sc ON sc.scene_id = sh.scene_id
+                    JOIN video_storyboards sb ON sb.storyboard_id = sc.storyboard_id
+                    JOIN video_narratives n ON n.narrative_id = sb.narrative_id
+                    JOIN video_episodes e ON e.episode_id = n.episode_id
+                    WHERE e.project_id = ? AND sh.shot_id = l.upstream_id
+                      AND sh.revision = l.upstream_revision
+                ))",
+            params![project_id, project_id, project_id],
+        )?;
+
+        // The audio cue is project-keyed even though the referenced asset is
+        // global. Its project-specific cue row is safe to remove.
+        tx.execute(
+            "DELETE FROM video_audio_cues WHERE project_id = ?",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_timelines WHERE project_id = ?",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_edl_timelines WHERE project_id = ?",
+            params![project_id],
+        )?;
+
+        // Project-owned graph metadata and evidence are deleted from leaf to
+        // root. Evidence IDs here are only keys to Video evidence-reference
+        // rows; no NIP event or claim table is ever a delete target.
+        tx.execute(
+            "DELETE FROM video_shot_evidence WHERE EXISTS (
+                SELECT 1 FROM video_shots sh
+                JOIN video_scenes sc ON sc.scene_id = sh.scene_id
+                JOIN video_storyboards sb ON sb.storyboard_id = sc.storyboard_id
+                JOIN video_narratives n ON n.narrative_id = sb.narrative_id
+                JOIN video_episodes e ON e.episode_id = n.episode_id
+                WHERE e.project_id = ? AND sh.shot_id = video_shot_evidence.shot_id
+                  AND sh.revision = video_shot_evidence.shot_revision
+             )",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_scene_evidence WHERE EXISTS (
+                SELECT 1 FROM video_scenes sc
+                JOIN video_storyboards sb ON sb.storyboard_id = sc.storyboard_id
+                JOIN video_narratives n ON n.narrative_id = sb.narrative_id
+                JOIN video_episodes e ON e.episode_id = n.episode_id
+                WHERE e.project_id = ? AND sc.scene_id = video_scene_evidence.scene_id
+                  AND sc.revision = video_scene_evidence.scene_revision
+             )",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_narrative_evidence WHERE EXISTS (
+                SELECT 1 FROM video_narratives n
+                JOIN video_episodes e ON e.episode_id = n.episode_id
+                WHERE e.project_id = ? AND n.narrative_id = video_narrative_evidence.narrative_id
+                  AND n.revision = video_narrative_evidence.narrative_revision
+             )",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_episode_evidence WHERE EXISTS (
+                SELECT 1 FROM video_episodes e WHERE e.project_id = ?
+                  AND e.episode_id = video_episode_evidence.episode_id
+                  AND e.revision = video_episode_evidence.episode_revision
+             )",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_shots WHERE EXISTS (
+                SELECT 1 FROM video_scenes sc
+                JOIN video_storyboards sb ON sb.storyboard_id = sc.storyboard_id
+                JOIN video_narratives n ON n.narrative_id = sb.narrative_id
+                JOIN video_episodes e ON e.episode_id = n.episode_id
+                WHERE e.project_id = ? AND sc.scene_id = video_shots.scene_id
+             )",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_scenes WHERE EXISTS (
+                SELECT 1 FROM video_storyboards sb
+                JOIN video_narratives n ON n.narrative_id = sb.narrative_id
+                JOIN video_episodes e ON e.episode_id = n.episode_id
+                WHERE e.project_id = ? AND sb.storyboard_id = video_scenes.storyboard_id
+             )",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_storyboards WHERE EXISTS (
+                SELECT 1 FROM video_narratives n
+                JOIN video_episodes e ON e.episode_id = n.episode_id
+                WHERE e.project_id = ? AND n.narrative_id = video_storyboards.narrative_id
+             )",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_narratives WHERE EXISTS (
+                SELECT 1 FROM video_episodes e WHERE e.project_id = ?
+                  AND e.episode_id = video_narratives.episode_id
+             )",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_visual_spec_sources WHERE EXISTS (
+                SELECT 1 FROM video_visual_specs v WHERE v.project_id = ?
+                  AND v.spec_id = video_visual_spec_sources.spec_id
+                  AND v.revision = video_visual_spec_sources.spec_revision
+             )",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_visual_specs WHERE project_id = ?",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_episode_heads WHERE episode_id IN (
+                SELECT episode_id FROM video_episodes WHERE project_id = ?
+             )",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_episodes WHERE project_id = ?",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_project_heads WHERE project_id = ?",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM video_projects WHERE project_id = ?",
+            params![project_id],
+        )?;
+        tx.commit()?;
+
+        Ok(VideoProjectDeleteResult {
+            project_id: project_id.to_owned(),
+            deleted: true,
+            retained_global_media_and_job_history: true,
+            retention_note: "Project-owned Video metadata and references were removed. Global video_assets, binary media files, video_jobs, and video_workflows were retained; global media/job history may remain.".to_owned(),
+        })
     }
 
     pub fn save_video_asset(&mut self, asset: &VideoAsset) -> Result<(), StoreError> {
@@ -5355,6 +5639,240 @@ mod tests {
             store.save_video_project(&stale),
             Err(StoreError::InvalidVideoRecord)
         ));
+    }
+
+    fn deletion_fixture_project(project_id: &str, title: &str) -> VideoProject {
+        let now = "2026-11-18T09:00:00Z".parse().unwrap();
+        VideoProject {
+            project_id: project_id.into(),
+            revision: 1,
+            title: title.into(),
+            language: "en".into(),
+            target_platform: "youtube".into(),
+            target_duration_ms: Some(60_000),
+            audience: None,
+            style_profile: None,
+            status: VideoProjectStatus::Draft,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn video_project_delete_name_mismatch_is_exact_and_non_destructive() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let project = deletion_fixture_project("delete-mismatch", "Exact Title");
+        store.save_video_project(&project).unwrap();
+        let episode = VideoEpisode {
+            episode_id: "delete-mismatch-episode".into(),
+            project_id: project.project_id.clone(),
+            revision: 1,
+            title: Some("Keep this episode".into()),
+            as_of: None,
+            disclosure: None,
+            status: VideoEpisodeStatus::Draft,
+            created_at: project.created_at,
+            updated_at: project.updated_at,
+        };
+        store.save_video_episode(&episode).unwrap();
+
+        assert!(matches!(
+            store.delete_video_project(&project.project_id, "exact title"),
+            Err(StoreError::VideoProjectConfirmationMismatch)
+        ));
+        assert_eq!(
+            store.video_project(&project.project_id).unwrap(),
+            Some(project)
+        );
+        let episode_count: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM video_episodes WHERE project_id = ?",
+                params![episode.project_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(episode_count, 1);
+    }
+
+    #[test]
+    fn video_project_delete_removes_project_owned_rows_and_keeps_nip_evidence() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let event = store
+            .import_local_event(
+                &LocalEventImport {
+                    source_id: SourceId::new("delete-test-source").unwrap(),
+                    source_display_name: "Delete test source".into(),
+                    source_native_id: Some("delete-test-event".into()),
+                    canonical_url: None,
+                    title: Some("Canonical event".into()),
+                    content_text: "Canonical event evidence remains.".into(),
+                    published_at: None,
+                    source_updated_at: None,
+                    rights_statement: "Synthetic test fixture".into(),
+                    user_confirmed_rights: true,
+                },
+                "2026-11-18T09:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        let claim_id = "delete-test-claim";
+        store
+            .store_claim(&ClaimRecord {
+                claim_id: claim_id.into(),
+                claim_text: "Canonical event evidence remains.".into(),
+                speaker_or_author: None,
+                confidence_millis: 900,
+                extraction_run_id: "delete-test-run".into(),
+                provider: "test".into(),
+                model: "test-model".into(),
+                prompt_version: "test-v1".into(),
+                provider_kind: None,
+                provider_profile_id: None,
+                reasoning_effort: None,
+                extracted_at: "2026-11-18T09:01:00Z".parse().unwrap(),
+                evidence: vec![nip_domain::ClaimEvidence {
+                    event_id: event.event_id.clone(),
+                    quote: Some("Canonical event evidence remains.".into()),
+                    start_offset: Some(0),
+                    end_offset: Some(33),
+                }],
+            })
+            .unwrap();
+
+        let project = deletion_fixture_project("delete-success", "Delete me");
+        store.save_video_project(&project).unwrap();
+        let episode = VideoEpisode {
+            episode_id: "delete-success-episode".into(),
+            project_id: project.project_id.clone(),
+            revision: 1,
+            title: Some("Owned episode".into()),
+            as_of: None,
+            disclosure: None,
+            status: VideoEpisodeStatus::Draft,
+            created_at: project.created_at,
+            updated_at: project.updated_at,
+        };
+        store.save_video_episode(&episode).unwrap();
+        for (kind, id) in [("event", event.event_id.as_str()), ("claim", claim_id)] {
+            store
+                .link_video_episode_evidence(
+                    &episode.episode_id,
+                    episode.revision,
+                    &VideoEvidenceRef {
+                        evidence_kind: kind.into(),
+                        evidence_id: id.into(),
+                        start_offset: None,
+                        end_offset: None,
+                        quote: None,
+                    },
+                )
+                .unwrap();
+        }
+        store
+            .connection
+            .execute_batch(
+                "INSERT INTO video_narratives VALUES ('delete-success-narrative','delete-success-episode',1,'Summary','Thesis','human_authored','approved',NULL,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
+                 INSERT INTO video_storyboards VALUES ('delete-success-storyboard','delete-success-narrative',1,'v1','approved',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
+                 INSERT INTO video_scenes VALUES ('delete-success-scene','delete-success-storyboard',1,0,'purpose','narration','visual',1000,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
+                 INSERT INTO video_shots VALUES ('delete-success-shot','delete-success-scene',1,0,'broll',1000,NULL,NULL,'ready',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
+                 INSERT INTO video_narrative_evidence VALUES ('delete-success-narrative',1,'claim','delete-test-claim',-1,-1,NULL,CURRENT_TIMESTAMP);
+                 INSERT INTO video_scene_evidence VALUES ('delete-success-scene',1,'event','delete-test-event',-1,-1,NULL,CURRENT_TIMESTAMP);
+                 INSERT INTO video_shot_evidence VALUES ('delete-success-shot',1,'claim','delete-test-claim',-1,-1,NULL,CURRENT_TIMESTAMP);
+                 INSERT INTO video_visual_specs VALUES ('delete-success-spec',1,'v1','delete-success','delete-success-episode','delete-success-scene','delete-success-shot','evidence_card','{}',TRUE,CURRENT_TIMESTAMP);
+                 INSERT INTO video_visual_spec_sources VALUES ('delete-success-spec',1,'claim','delete-test-claim',-1,-1,-1,NULL);
+                 INSERT INTO video_export_manifests VALUES ('delete-success-manifest','v1','delete-success',1,'delete-success-episode','delete-success-storyboard','storyboard',TRUE,'{}',NULL,CURRENT_TIMESTAMP);
+                 INSERT INTO video_export_manifest_files VALUES ('delete-success-manifest','export.json','json',NULL,2,'application/json',NULL,NULL,NULL);
+                 INSERT INTO video_export_manifest_evidence VALUES ('delete-success-manifest','event','delete-test-event',-1,-1);
+                 INSERT INTO video_qa_reports VALUES ('delete-success-qa','delete-success',1,'passed','[]',CURRENT_TIMESTAMP);
+                 INSERT INTO video_timelines VALUES ('delete-success-timeline','delete-success',1,'{}',1,CURRENT_TIMESTAMP);
+                 INSERT INTO video_audio_cues VALUES ('delete-success-cue',1,'delete-success',1,'delete-success-episode',1,'delete-success-storyboard',1,'delete-success-scene',1,'delete-global-asset',1,'{}',CURRENT_TIMESTAMP);
+                 INSERT INTO video_assets VALUES ('delete-global-asset',1,'audio',NULL,NULL,NULL,NULL,NULL,NULL,'test',NULL,NULL,'fixture','ready','test',NULL,CURRENT_TIMESTAMP);
+                 INSERT INTO video_asset_lineage VALUES ('delete-global-asset',1,'event','delete-test-event',NULL,'evidence',NULL,CURRENT_TIMESTAMP);
+                 INSERT INTO video_asset_lineage VALUES ('delete-global-asset',1,'shot','delete-success-shot',1,'derived',NULL,CURRENT_TIMESTAMP);
+                 INSERT INTO video_shot_assets VALUES ('delete-success-shot',1,'delete-global-asset',1,'selected',CURRENT_TIMESTAMP);",
+            )
+            .unwrap();
+
+        let result = store
+            .delete_video_project(&project.project_id, "Delete me")
+            .unwrap();
+        assert!(result.deleted);
+        assert!(result.retained_global_media_and_job_history);
+        assert!(result.retention_note.contains("video_assets"));
+        assert_eq!(store.video_project(&project.project_id).unwrap(), None);
+        for table in [
+            "video_projects",
+            "video_project_heads",
+            "video_episodes",
+            "video_episode_heads",
+            "video_episode_evidence",
+            "video_narratives",
+            "video_narrative_evidence",
+            "video_storyboards",
+            "video_scenes",
+            "video_scene_evidence",
+            "video_shots",
+            "video_shot_evidence",
+            "video_shot_assets",
+            "video_visual_specs",
+            "video_visual_spec_sources",
+            "video_export_manifests",
+            "video_export_manifest_files",
+            "video_export_manifest_evidence",
+            "video_qa_reports",
+            "video_timelines",
+            "video_audio_cues",
+        ] {
+            let count: i64 = store
+                .connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 0, "expected {table} to be empty after deletion");
+        }
+        let canonical_counts: (i64, i64, i64) = store
+            .connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM nip_events),
+                        (SELECT COUNT(*) FROM nip_claims),
+                        (SELECT COUNT(*) FROM nip_claim_evidence)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(canonical_counts, (1, 1, 1));
+        let retained_asset: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM video_assets WHERE asset_id='delete-global-asset'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retained_asset, 1);
+        let retained_event_lineage: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM video_asset_lineage WHERE asset_id='delete-global-asset' AND upstream_kind='event'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retained_event_lineage, 1);
+        let removed_project_lineage: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM video_asset_lineage WHERE asset_id='delete-global-asset' AND upstream_kind='shot'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(removed_project_lineage, 0);
+        assert!(store.event(event.event_id.as_str()).unwrap().is_some());
+        assert_eq!(store.claims().unwrap().len(), 1);
     }
 
     #[test]

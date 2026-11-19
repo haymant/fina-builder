@@ -32,20 +32,23 @@ const claim = {
   provider_profile_id: 'riga-fixture-provider',
   reasoning_effort: 'low',
   extracted_at: '2026-11-16T09:01:00Z',
-  evidence: [{ event_id: event.event_id, quote: 'policy to remain restrictive until inflation cools', start_offset: 34, end_offset: 85 }],
+  evidence: [{ event_id: event.event_id, quote: 'policy to remain restrictive until inflation cools', start_offset: 34, end_offset: 84 }],
 }
 
-async function stubSetupJourney(page: Page, options: { directLocal?: boolean } = {}) {
+async function stubSetupJourney(page: Page, options: { directLocal?: boolean; retainedClaim?: boolean } = {}) {
   const state = {
     subscribed: false,
-    transcribed: false,
+    transcribed: Boolean(options.retainedClaim),
     consent: 'missing' as 'missing' | 'granted',
-    claims: [] as Array<typeof claim>,
+    claims: (options.retainedClaim ? [claim] : []) as Array<typeof claim>,
+    videoProjects: [] as Array<Record<string, unknown>>,
+    videoEpisode: null as Record<string, unknown> | null,
+    videoEvidence: [] as Array<Record<string, unknown>>,
   }
 
   // Stub only NIP: RIGA has a separate transport and must not receive NIP fixture payloads.
   await page.route('**/nip/mcp', async (route) => {
-    const body = route.request().postDataJSON() as { id?: number; method?: string; params?: { name?: string } }
+    const body = route.request().postDataJSON() as { id?: number; method?: string; params?: { name?: string; arguments?: Record<string, unknown> } }
     if (body.method === 'notifications/initialized') {
       await route.fulfill({ status: 202, body: '' })
       return
@@ -55,6 +58,29 @@ async function stubSetupJourney(page: Page, options: { directLocal?: boolean } =
       result = { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'nip-e2e', version: '0.1.0' } }
     } else if (body.method === 'tools/call') {
       const name = body.params?.name
+      const args = body.params?.arguments ?? {}
+      if (['list_video_projects', 'create_video_project', 'create_video_episode', 'link_video_evidence', 'get_video_episode', 'list_video_evidence', 'video_capabilities', 'list_video_assets', 'list_video_workflows', 'get_event'].includes(name ?? '')) {
+        let videoResult: unknown = {}
+        if (name === 'list_video_projects') videoResult = state.videoProjects
+        else if (name === 'create_video_project') {
+          const project = args.project as Record<string, unknown>
+          state.videoProjects = [project, ...state.videoProjects.filter((item) => item.project_id !== project.project_id)]
+          videoResult = project
+        } else if (name === 'create_video_episode') {
+          state.videoEpisode = args.episode as Record<string, unknown>
+          videoResult = state.videoEpisode
+        } else if (name === 'link_video_evidence') {
+          state.videoEvidence.push(args.evidence as Record<string, unknown>)
+          videoResult = args
+        } else if (name === 'get_video_episode') videoResult = state.videoEpisode?.episode_id === args.episode_id ? state.videoEpisode : null
+        else if (name === 'list_video_evidence') videoResult = state.videoEvidence
+        else if (name === 'video_capabilities') videoResult = { planning: 'ready', evidence_linkage: 'ready', deterministic_renderer: 'linkzag_adapter', generative_video: 'not_configured', tts: 'not_configured', asr: 'not_configured', disclosure: 'Fixture-backed deterministic test.' }
+        else if (name === 'list_video_assets' || name === 'list_video_workflows') videoResult = []
+        else if (name === 'get_event') videoResult = args.event_id === event.event_id ? event : null
+        result = { structuredContent: videoResult, content: [{ type: 'text', text: JSON.stringify(videoResult) }] }
+        await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Mcp-Session-Id': 'setup-session' }, body: JSON.stringify({ jsonrpc: '2.0', id: body.id, result }) })
+        return
+      }
       const subscription = {
         source_id: 'setup-fixture-source',
         feed_url: 'http://127.0.0.1:8795/fixture/feed.xml',
@@ -212,6 +238,48 @@ async function stubSetupJourney(page: Page, options: { directLocal?: boolean } =
 }
 
 test.describe('Narrative Intelligence first-run setup', () => {
+  test('creates and opens a Video episode from a retained Claim Explorer span', {
+    tag: [TAG.journey.narrativeEvidenceReview, TAG.feature.narrativeClaims, TAG.feature.videoWorkspace, TAG.priority.p1],
+  }, async ({ page }) => {
+    const state = await stubSetupJourney(page, { retainedClaim: true })
+    const workspace = new WorkspacePage(page)
+    await workspace.open()
+    await page.getByTestId('menu-narrative').click()
+    await page.getByTestId('menuitem-narrative-overview').click()
+    await page.getByRole('tab', { name: 'Claim Explorer' }).click()
+    await expect(page.getByRole('heading', { name: claim.claim_text })).toBeVisible()
+    await page.getByRole('button', { name: 'Create video episode' }).click()
+
+    const dialog = page.getByRole('dialog', { name: 'Create video episode' })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByLabel('Video project')).toHaveValue('new')
+    await expect(dialog.getByRole('radio', { name: /nip-fixture-episode-1/ })).toBeChecked()
+    await expect(dialog.getByRole('textbox')).toHaveCount(1)
+    await expect(dialog.getByText('1 exact matching span verified')).toBeVisible()
+    await expect(dialog.getByRole('status')).toContainText('34–84')
+    await expect(dialog.getByRole('status')).toContainText(claim.evidence[0]!.quote)
+    await dialog.getByRole('button', { name: 'Create video episode' }).click()
+
+    await expect(page.getByTestId('video-episode-workspace')).toBeVisible()
+    await expect.poll(() => state.videoEpisode).not.toBeNull()
+    const createdProject = state.videoProjects[0]!
+    const createdEpisode = state.videoEpisode!
+    await expect(page.getByRole('heading', { level: 1, name: String(createdProject.title) })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 2, name: String(createdEpisode.title) })).toBeVisible()
+    await expect.poll(() => state.videoEvidence.length).toBe(2)
+    expect(state.videoEvidence).toEqual([
+      { evidence_kind: 'event', evidence_id: event.event_id, start_offset: null, end_offset: null, quote: null },
+      { evidence_kind: 'claim', evidence_id: claim.claim_id, start_offset: claim.evidence[0]!.start_offset, end_offset: claim.evidence[0]!.end_offset, quote: claim.evidence[0]!.quote },
+    ])
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('fina.location.v1') ?? 'null'))).toEqual({
+      kind: 'video', view: 'workspace', projectId: createdProject.project_id, episodeId: createdEpisode.episode_id, claimId: claim.claim_id,
+    })
+    const selectedClaim = page.getByTestId(`video-claim-select-${claim.claim_id}`)
+    await expect(selectedClaim).toBeChecked()
+    await expect(page.getByTestId(`video-claim-option-${claim.claim_id}`)).toContainText(`Exact source span [${claim.evidence[0]!.start_offset}, ${claim.evidence[0]!.end_offset})`)
+    await expect(page.getByTestId('loaded-source-event')).toContainText(event.event_id)
+  })
+
   test('shows a ready direct-local provider without RIGA consent state', {
     tag: [TAG.journey.narrativeSetup, TAG.feature.narrativeSetup, TAG.priority.p1],
   }, async ({ page }) => {
@@ -280,6 +348,7 @@ test.describe('Narrative Intelligence first-run setup', () => {
     await expect(transcriptDialog).toContainText(event.content_text)
     await page.getByRole('button', { name: 'Show in event list' }).click()
     await expect(page.getByText(/Source-linked record/)).toBeVisible()
+    await expect(page.getByTestId('canonical-event-id')).toHaveText(event.event_id)
     await expect(page.getByTestId('event-consent')).toBeVisible()
     await page.getByTestId('event-consent-grant').click()
     await expect.poll(() => state.consent).toBe('granted')

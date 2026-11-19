@@ -12,6 +12,8 @@
 //!   loopback port directly (and the server stays CORS-closed).
 
 use std::{
+    collections::HashSet,
+    net::{Ipv4Addr, Ipv6Addr},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
@@ -30,6 +32,229 @@ use crate::{
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const CALL_TIMEOUT: Duration = Duration::from_secs(1_800);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
+const LOCAL_MODEL_RESPONSE_LIMIT: u64 = 4 * 1024 * 1024;
+const LOCAL_MODEL_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct SavedLocalModelSettings {
+    base_url: String,
+    model: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalModelSettingsResponse {
+    base_url: Option<String>,
+    model: Option<String>,
+    saved: bool,
+    env_override: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalModelCheckResponse {
+    ready: bool,
+    model: String,
+    available_model_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalModelSaveResponse {
+    restart_required: bool,
+    env_override: bool,
+}
+
+fn validate_local_model_settings(base_url: &str, model: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(base_url).map_err(|_| {
+        "Base URL must be a valid HTTP(S) URL using a literal loopback IP address".to_owned()
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err("Base URL must be HTTP(S), without credentials, query, or fragment".to_owned());
+    }
+    let host_is_loopback = match parsed.host() {
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address == Ipv6Addr::LOCALHOST,
+        _ => false,
+    };
+    // URL parsers accept shorthand and encoded host spellings. Require the host
+    // as written to be a conventional IP literal, not a DNS-like alias.
+    let raw_authority = base_url
+        .split_once("://")
+        .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or_default())
+        .unwrap_or_default();
+    let raw_host_is_loopback = if let Some(bracketed) = raw_authority.strip_prefix('[') {
+        bracketed
+            .split_once(']')
+            .and_then(|(host, _)| host.parse::<Ipv6Addr>().ok())
+            .map(|address| address == Ipv6Addr::LOCALHOST)
+            .unwrap_or(false)
+    } else {
+        raw_authority
+            .split_once(':')
+            .map(|(host, _)| host)
+            .unwrap_or(raw_authority)
+            .parse::<Ipv4Addr>()
+            .map(|address| address.is_loopback())
+            .unwrap_or(false)
+    };
+    if raw_authority.contains('@') || !host_is_loopback || !raw_host_is_loopback {
+        return Err("Base URL host must be a literal loopback IP (127.0.0.0/8 or ::1)".to_owned());
+    }
+    if model.trim().is_empty() || model.chars().count() > 256 || model.chars().any(char::is_control)
+    {
+        return Err(
+            "Model ID must be non-empty, at most 256 characters, and contain no control characters"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn local_model_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|directory| directory.join("NIP").join("local-model.json"))
+        .map_err(|_| "Could not access application data directory".to_owned())
+}
+
+fn read_saved_local_model_settings(path: &Path) -> Result<Option<SavedLocalModelSettings>, String> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("Could not read saved local model settings".to_owned()),
+    };
+    let settings: SavedLocalModelSettings = serde_json::from_str(&contents)
+        .map_err(|_| "Saved local model settings are invalid".to_owned())?;
+    validate_local_model_settings(&settings.base_url, &settings.model)?;
+    Ok(Some(settings))
+}
+
+fn save_local_model_settings(path: &Path, base_url: &str, model: &str) -> Result<(), String> {
+    validate_local_model_settings(base_url, model)?;
+    let settings = SavedLocalModelSettings {
+        base_url: base_url.to_owned(),
+        model: model.to_owned(),
+    };
+    let contents = serde_json::to_vec(&settings)
+        .map_err(|_| "Could not serialize local model settings".to_owned())?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Could not determine settings directory".to_owned())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|_| "Could not create local model settings directory".to_owned())?;
+    let temporary = path.with_extension("json.tmp");
+    std::fs::write(&temporary, contents)
+        .map_err(|_| "Could not save local model settings".to_owned())?;
+    std::fs::rename(&temporary, path).map_err(|_| "Could not save local model settings".to_owned())
+}
+
+fn local_model_env_keys() -> [&'static str; 3] {
+    [
+        "NIP_CLAIM_PROVIDER",
+        "NIP_LOCAL_LLM_URL",
+        "NIP_LOCAL_LLM_MODEL",
+    ]
+}
+
+fn explicit_local_model_env(app: &AppHandle) -> HashSet<&'static str> {
+    let dotenv = crate::mcp_commands::engine_env(app);
+    local_model_env_keys()
+        .into_iter()
+        .filter(|key| std::env::var_os(key).is_some() || dotenv.iter().any(|(name, _)| name == key))
+        .collect()
+}
+
+fn check_local_model(base_url: &str, model: &str) -> Result<usize, String> {
+    validate_local_model_settings(base_url, model)?;
+    let endpoint = format!("{}/models", base_url.trim_end_matches('/'));
+    let config = ureq::Agent::config_builder()
+        .proxy(None)
+        .max_redirects(0)
+        .http_status_as_error(false)
+        .timeout_global(Some(LOCAL_MODEL_TIMEOUT))
+        .build();
+    let agent: ureq::Agent = config.into();
+    let mut response = agent
+        .get(&endpoint)
+        .call()
+        .map_err(|_| "Could not reach the local model endpoint".to_owned())?;
+    let status = response.status().as_u16();
+    if status != 200 {
+        return Err(format!(
+            "Local model endpoint returned HTTP {status}; expected 200"
+        ));
+    }
+    let bytes = response
+        .body_mut()
+        .with_config()
+        // Read one sentinel byte so an exactly-at-limit response is accepted;
+        // ureq's limiter otherwise errors when the reader reaches the limit.
+        .limit(LOCAL_MODEL_RESPONSE_LIMIT + 1)
+        .read_to_vec()
+        .map_err(|_| {
+            "Local model endpoint returned an unreadable or oversized response".to_owned()
+        })?;
+    if bytes.len() as u64 > LOCAL_MODEL_RESPONSE_LIMIT {
+        return Err("Local model endpoint response exceeded the 4 MiB limit".to_owned());
+    }
+    let value: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| "Local model endpoint returned invalid model-list JSON".to_owned())?;
+    let models = value
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Local model endpoint response did not contain a model list".to_owned())?;
+    if !models
+        .iter()
+        .any(|entry| entry.get("id").and_then(Value::as_str) == Some(model))
+    {
+        return Err("The requested model ID is not listed by the local endpoint".to_owned());
+    }
+    Ok(models.len())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn nip_get_local_model_settings(app: AppHandle) -> Result<LocalModelSettingsResponse, String> {
+    let saved = read_saved_local_model_settings(&local_model_settings_path(&app)?)?;
+    Ok(LocalModelSettingsResponse {
+        base_url: saved.as_ref().map(|settings| settings.base_url.clone()),
+        model: saved.as_ref().map(|settings| settings.model.clone()),
+        saved: saved.is_some(),
+        env_override: !explicit_local_model_env(&app).is_empty(),
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn nip_check_local_model(
+    base_url: String,
+    model: String,
+) -> Result<LocalModelCheckResponse, String> {
+    let available_model_count = check_local_model(&base_url, &model)?;
+    Ok(LocalModelCheckResponse {
+        ready: true,
+        model,
+        available_model_count,
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn nip_save_local_model_settings(
+    app: AppHandle,
+    base_url: String,
+    model: String,
+) -> Result<LocalModelSaveResponse, String> {
+    save_local_model_settings(&local_model_settings_path(&app)?, &base_url, &model)?;
+    Ok(LocalModelSaveResponse {
+        restart_required: true,
+        env_override: !explicit_local_model_env(&app).is_empty(),
+    })
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -469,6 +694,13 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
         env.push(("NIP_RIGA_BRIDGE_URL".to_string(), bridge.url.clone()));
         env.push(("NIP_RIGA_BRIDGE_TOKEN".to_string(), bridge.token.clone()));
     }
+    let dotenv_env = crate::mcp_commands::engine_env(app);
+    let explicit_local_keys: HashSet<&str> = local_model_env_keys()
+        .into_iter()
+        .filter(|key| {
+            std::env::var_os(key).is_some() || dotenv_env.iter().any(|(name, _)| name == key)
+        })
+        .collect();
     // The optional local ASR boundary is configured by the user, not hard-coded.
     // Read the host environment first, then the same `.env` files the engine
     // children inherit.
@@ -476,10 +708,10 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
         .ok()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
-            crate::mcp_commands::engine_env(app)
-                .into_iter()
+            dotenv_env
+                .iter()
                 .find(|(key, _)| key == "NIP_COMFYUI_URL")
-                .map(|(_, value)| value)
+                .map(|(_, value)| value.clone())
                 .filter(|value| !value.trim().is_empty())
         });
     if let Some(url) = comfyui_url {
@@ -512,11 +744,27 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
             }
         }
     }
-    for (key, value) in crate::mcp_commands::engine_env(app) {
+    for (key, value) in &dotenv_env {
         let wanted = tooling_keys.contains(&key.as_str());
-        if wanted && !env.iter().any(|(existing, _)| existing == &key) {
-            env.push((key, value));
+        if wanted && !env.iter().any(|(existing, _)| existing == key) {
+            env.push((key.clone(), value.clone()));
         }
+    }
+    let saved_path = data_dir.join("local-model.json");
+    match read_saved_local_model_settings(&saved_path) {
+        Ok(Some(settings)) => {
+            if !explicit_local_keys.contains("NIP_CLAIM_PROVIDER") {
+                env.push(("NIP_CLAIM_PROVIDER".to_owned(), "direct_local".to_owned()));
+            }
+            if !explicit_local_keys.contains("NIP_LOCAL_LLM_URL") {
+                env.push(("NIP_LOCAL_LLM_URL".to_owned(), settings.base_url));
+            }
+            if !explicit_local_keys.contains("NIP_LOCAL_LLM_MODEL") {
+                env.push(("NIP_LOCAL_LLM_MODEL".to_owned(), settings.model));
+            }
+        }
+        Ok(None) => {}
+        Err(error) => eprintln!("NIP: ignoring saved local model settings: {error}"),
     }
     let logs_dir = data_dir.join("logs");
     let engine_log = logs_dir.join("nip-engine.log");
@@ -623,6 +871,94 @@ fn wait_until_ready(child: &mut Child, port: u16) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validates_literal_loopback_urls_and_model_ids() {
+        for base_url in [
+            "http://127.0.0.1:1234/v1",
+            "https://127.255.4.9",
+            "http://[::1]:8080",
+        ] {
+            assert!(validate_local_model_settings(base_url, "model-id").is_ok());
+        }
+        for base_url in [
+            "ftp://127.0.0.1",
+            "http://localhost:1234",
+            "http://192.168.1.4",
+            "http://127.1",
+            "http://user:password@127.0.0.1",
+            "http://127.0.0.1/path?key=value",
+            "http://127.0.0.1/path#fragment",
+            "http://127.0.0.1:bad",
+        ] {
+            assert!(
+                validate_local_model_settings(base_url, "model-id").is_err(),
+                "accepted invalid URL: {base_url}"
+            );
+        }
+        for model in ["", " \t", &"x".repeat(257), "bad\nmodel"] {
+            assert!(validate_local_model_settings("http://127.0.0.1", model).is_err());
+        }
+        assert!(validate_local_model_settings("http://127.0.0.1", &"x".repeat(256)).is_ok());
+    }
+
+    #[test]
+    fn saved_settings_round_trip_only_url_and_model() {
+        let directory = std::env::temp_dir().join(format!("nip-settings-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("NIP").join("local-model.json");
+        save_local_model_settings(&path, "http://127.0.0.1:11434/v1", "model:latest").unwrap();
+        let serialized = std::fs::read_to_string(&path).unwrap();
+        let json: Value = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(json.as_object().unwrap().len(), 2);
+        assert_eq!(json["baseUrl"], "http://127.0.0.1:11434/v1");
+        assert_eq!(json["model"], "model:latest");
+        assert_eq!(
+            read_saved_local_model_settings(&path).unwrap(),
+            Some(SavedLocalModelSettings {
+                base_url: "http://127.0.0.1:11434/v1".to_owned(),
+                model: "model:latest".to_owned(),
+            })
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn readiness_checks_exact_model_from_loopback_models_endpoint() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            loop {
+                let count = stream.read(&mut chunk).unwrap();
+                request.extend_from_slice(&chunk[..count]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let body = r#"{"data":[{"id":"wanted"},{"id":"other"}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+            String::from_utf8(request).unwrap()
+        });
+
+        let count = check_local_model(&format!("http://{address}/v1/"), "wanted").unwrap();
+        let request = server.join().unwrap();
+        assert_eq!(count, 2);
+        assert!(request.starts_with("GET /v1/models HTTP/1.1\r\n"));
+        assert!(!request.to_ascii_lowercase().contains("authorization:"));
+    }
 
     fn engine_binary() -> Option<std::path::PathBuf> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");

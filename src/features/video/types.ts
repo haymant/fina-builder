@@ -16,6 +16,13 @@ export interface VideoProject {
   updated_at: string
 }
 
+export interface VideoProjectDeleteResult {
+  project_id: string
+  deleted: boolean
+  retained_global_media_and_job_history: boolean
+  retention_note: string
+}
+
 export interface VideoEpisode {
   episode_id: string
   project_id: string

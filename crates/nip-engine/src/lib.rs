@@ -30,7 +30,9 @@ use nip_domain::{
     VideoTimeline, VideoVisualSpec, VideoWorkflow, API_VERSION, DOMAIN_SCHEMA_VERSION,
     SERVICE_NAME,
 };
-use nip_store::{SnapshotManifest, Store, StoreError, SubscriptionFetchStateUpdate};
+use nip_store::{
+    SnapshotManifest, Store, StoreError, SubscriptionFetchStateUpdate, VideoProjectDeleteResult,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -273,6 +275,16 @@ impl NipService {
 
     pub fn save_video_project(&mut self, project: &VideoProject) -> Result<(), NipError> {
         Ok(self.store.save_video_project(project)?)
+    }
+
+    pub fn delete_video_project(
+        &mut self,
+        project_id: &str,
+        confirmation_name: &str,
+    ) -> Result<VideoProjectDeleteResult, NipError> {
+        Ok(self
+            .store
+            .delete_video_project(project_id, confirmation_name)?)
     }
 
     pub fn video_episode(&self, episode_id: &str) -> Result<Option<VideoEpisode>, NipError> {

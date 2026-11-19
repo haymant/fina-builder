@@ -8,7 +8,7 @@ export type Location =
   | { kind: 'dashboard'; dashboardId: string }
   | { kind: 'trades'; view: TradeView }
   | { kind: 'narrative'; view: NarrativeView }
-  | { kind: 'video'; view: VideoView; projectId?: string }
+  | { kind: 'video'; view: VideoView; projectId?: string; episodeId?: string; claimId?: string }
 
 export const TRADE_VIEWS: { id: TradeView; label: string; accel: string }[] = [
   { id: 'blotter', label: 'Blotter', accel: 'Alt+Shift+1' },
