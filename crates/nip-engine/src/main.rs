@@ -1612,7 +1612,7 @@ impl NipMcp {
     }
 
     #[tool(
-        description = "Report the configured RIGA provider/model, local or remote boundary, NIP-specific remote-consent state, and whether claim extraction is currently available. Credentials and endpoints are never returned."
+        description = "Report the active direct-local or RIGA claim provider/model, local or remote boundary, NIP-specific remote-consent state, and whether extraction is available. Credentials and endpoints are never returned."
     )]
     fn nip_provider_status(&self) -> CallToolResult {
         match self.service.lock() {
@@ -1665,7 +1665,7 @@ impl NipMcp {
     }
 
     #[tool(
-        description = "Extract evidence-linked claims from one retained event with the configured RIGA provider. Remote providers require active NIP-specific consent; no fallback provider is used."
+        description = "Extract evidence-linked claims from one retained event with the host-selected NIP provider (direct local loopback model or RIGA). Remote providers require active NIP-specific consent; no fallback provider is used."
     )]
     fn extract_claims_from_event(
         &self,

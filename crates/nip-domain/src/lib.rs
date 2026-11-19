@@ -911,8 +911,8 @@ pub struct ProviderConsent {
     pub recorded_at: DateTime<Utc>,
 }
 
-/// Safe provider/consent view for the workspace. It never contains an endpoint
-/// path, API key, or other credential material.
+/// Safe active-provider/consent view for the workspace. It never contains an
+/// endpoint path, API key, or other credential material.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderStatus {
     pub configured: bool,

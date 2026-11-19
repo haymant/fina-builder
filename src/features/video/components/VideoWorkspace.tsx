@@ -1,7 +1,9 @@
 import { Clapperboard, FileCheck2, Film, Plus, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
-import { useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { videoApi } from '../api'
-import { buildTranscriptStoryboard } from '../storyboard'
+import { narrativeApi } from '../../narrative/api'
+import { claimsForEvent, type VideoClaimOption } from '../claim-selection'
+import { buildSelectedClaimsStoryboard } from '../storyboard'
 import type {
   VideoAsset,
   VideoCapabilities,
@@ -18,6 +20,7 @@ import './video.css'
 
 const id = (prefix: string) => `${prefix}-${typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID().slice(0, 12) : Math.random().toString(36).slice(2, 14)}`
 const now = () => new Date().toISOString()
+const evidenceKey = (ref: VideoEvidenceRef) => JSON.stringify([ref.evidence_kind, ref.evidence_id, ref.start_offset, ref.end_offset, ref.quote])
 const blankProject = (): VideoProject => ({ project_id: id('project'), revision: 1, title: '', language: 'en', target_platform: 'youtube', target_duration_ms: 90_000, audience: '', style_profile: 'evidence_first', status: 'draft', created_at: now(), updated_at: now() })
 
 export function VideoWorkspace({ view, projectId, onNavigate }: { view: VideoView; projectId?: string; onNavigate: (view: VideoView, projectId?: string) => void }) {
@@ -27,8 +30,7 @@ export function VideoWorkspace({ view, projectId, onNavigate }: { view: VideoVie
   const [message, setMessage] = useState<string | null>(null)
   const [selected, setSelected] = useState<VideoProject | null>(null)
 
-  const load = async () => {
-    setLoading(true)
+  const load = useCallback(async () => {
     try {
       const [items, caps] = await Promise.all([videoApi.listProjects(), videoApi.capabilities()])
       setProjects(items)
@@ -40,13 +42,17 @@ export function VideoWorkspace({ view, projectId, onNavigate }: { view: VideoVie
     } finally {
       setLoading(false)
     }
-  }
-  useEffect(() => { void load() }, [projectId])
+  }, [projectId])
+  const refresh = useCallback(() => {
+    setLoading(true)
+    void load()
+  }, [load])
+  useEffect(() => { void load() }, [load])
 
   if (view === 'workspace' && selected) {
     return <EpisodeWorkspace project={selected} capabilities={capabilities} onBack={() => onNavigate('projects')} onMessage={setMessage} />
   }
-  return <ProjectList projects={projects} loading={loading} message={message} onRefresh={() => void load()} onOpen={(project) => onNavigate('workspace', project.project_id)} onCreated={(project) => { setProjects((items) => [project, ...items]); onNavigate('workspace', project.project_id) }} />
+  return <ProjectList projects={projects} loading={loading} message={message} onRefresh={refresh} onOpen={(project) => onNavigate('workspace', project.project_id)} onCreated={(project) => { setProjects((items) => [project, ...items]); onNavigate('workspace', project.project_id) }} />
 }
 
 function ProjectList({ projects, loading, message, onRefresh, onOpen, onCreated }: { projects: VideoProject[]; loading: boolean; message: string | null; onRefresh: () => void; onOpen: (project: VideoProject) => void; onCreated: (project: VideoProject) => void }) {
@@ -66,7 +72,7 @@ function ProjectList({ projects, loading, message, onRefresh, onOpen, onCreated 
       <section className="video-card"><div className="video-card-head"><div><p className="eyebrow">Projects</p><h2>Production queue</h2></div><span className="video-chip">revisioned</span></div>
         {projects.length ? <div className="video-project-list">{projects.map((project) => <button type="button" className="video-project-row" key={project.project_id} onClick={() => onOpen(project)}><span className="video-project-icon"><Film size={16} /></span><span className="min-w-0 flex-1 text-left"><strong>{project.title}</strong><small>{project.target_platform} · {Math.round((project.target_duration_ms ?? 0) / 1000)}s · v{project.revision}</small></span><span className="video-chip">{project.status}</span></button>)}</div> : <div className="video-empty"><Clapperboard size={22} /><p>{loading ? 'Loading projects…' : 'No projects yet.'}</p><span>Create a project from retained source evidence; source text stays in the immutable NIP event ledger.</span></div>}
       </section>
-      <form className="video-card video-form" onSubmit={submit}><div className="video-card-head"><div><p className="eyebrow">New project</p><h2>Start a reviewable cut</h2></div><Plus size={18} /></div><label>Project title<input aria-label="Project title" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Policy outlook commentary" required /></label><div className="video-form-grid"><label>Platform<select value={draft.target_platform} onChange={(event) => setDraft({ ...draft, target_platform: event.target.value })}><option value="youtube">YouTube</option><option value="shorts">Shorts</option><option value="internal_review">Internal review</option></select></label><label>Length (seconds)<input type="number" min="10" value={Math.round((draft.target_duration_ms ?? 90_000) / 1000)} onChange={(event) => setDraft({ ...draft, target_duration_ms: Number(event.target.value) * 1000 })} /></label></div><label>Audience<input aria-label="Audience" value={draft.audience ?? ''} onChange={(event) => setDraft({ ...draft, audience: event.target.value })} placeholder="Research analysts" /></label><label>Style profile<input value={draft.style_profile ?? ''} onChange={(event) => setDraft({ ...draft, style_profile: event.target.value })} /></label><button className="video-primary-button" type="submit" disabled={creating}>{creating ? 'Creating…' : 'Create project'}</button><p className="video-footnote">The first revision stores metadata only. Link a retained event before drafting narration.</p></form>
+      <form className="video-card video-form" onSubmit={submit}><div className="video-card-head"><div><p className="eyebrow">New project</p><h2>Start a reviewable cut</h2></div><Plus size={18} /></div><label>Project title<input aria-label="Project title" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Policy outlook commentary" required /></label><div className="video-form-grid"><label>Platform<select value={draft.target_platform} onChange={(event) => setDraft({ ...draft, target_platform: event.target.value })}><option value="youtube">YouTube</option><option value="shorts">Shorts</option><option value="internal_review">Internal review</option></select></label><label>Length (seconds)<input type="number" min="10" value={Math.round((draft.target_duration_ms ?? 90_000) / 1000)} onChange={(event) => setDraft({ ...draft, target_duration_ms: Number(event.target.value) * 1000 })} /></label></div><label>Audience<input aria-label="Audience" value={draft.audience ?? ''} onChange={(event) => setDraft({ ...draft, audience: event.target.value })} placeholder="Research analysts" /></label><label>Style profile<input value={draft.style_profile ?? ''} onChange={(event) => setDraft({ ...draft, style_profile: event.target.value })} /></label><button className="video-primary-button" type="submit" disabled={creating}>{creating ? 'Creating…' : 'Create project'}</button><p className="video-footnote">After creation, open the project, link a retained event, then choose which existing NIP claims will drive the storyboard. Video does not invent claims.</p></form>
     </div>
   </div>
 }
@@ -76,8 +82,13 @@ function EpisodeWorkspace({ project, capabilities, onBack, onMessage }: { projec
   const [evidence, setEvidence] = useState<VideoEvidenceRef[]>([])
   const [eventId, setEventId] = useState('')
   const [sourceEvent, setSourceEvent] = useState<VideoSourceEvent | null>(null)
+  const [claimOptions, setClaimOptions] = useState<VideoClaimOption[]>([])
+  const [selectedClaimIds, setSelectedClaimIds] = useState<string[]>([])
+  const [claimsLoading, setClaimsLoading] = useState(false)
+  const [claimsError, setClaimsError] = useState<string | null>(null)
   const [storyboard, setStoryboard] = useState<VideoStoryboardDocument | null>(null)
   const [saving, setSaving] = useState(false)
+  const [loadingSource, setLoadingSource] = useState(false)
   const [assets, setAssets] = useState<VideoAsset[]>([])
   const [workflows, setWorkflows] = useState<VideoWorkflow[]>([])
   const [rendering, setRendering] = useState(false)
@@ -96,12 +107,31 @@ function EpisodeWorkspace({ project, capabilities, onBack, onMessage }: { projec
     setSaving(true)
     const timestamp = now()
     const created: VideoEpisode = { episode_id: id('episode'), project_id: project.project_id, revision: 1, title: `${project.title} · Episode 1`, as_of: timestamp, disclosure: 'Candidate planning output; source evidence remains authoritative.', status: 'draft', created_at: timestamp, updated_at: timestamp }
-    try { await videoApi.createEpisode(created); setEpisode(created); onMessage('Episode created. Link a retained transcript event to build the slides storyboard.') } catch (error) { onMessage(error instanceof Error ? error.message : 'Episode creation failed.') } finally { setSaving(false) }
+    try { await videoApi.createEpisode(created); setEpisode(created); onMessage('Episode created. Link a retained event, then explicitly select its eligible claims to build the storyboard.') } catch (error) { onMessage(error instanceof Error ? error.message : 'Episode creation failed.') } finally { setSaving(false) }
+  }
+
+  const refreshClaims = async (event: VideoSourceEvent) => {
+    setClaimsLoading(true)
+    setClaimsError(null)
+    setClaimOptions([])
+    setSelectedClaimIds([])
+    try {
+      const options = claimsForEvent(event, await narrativeApi.listClaims())
+      setClaimOptions(options)
+      setSelectedClaimIds([])
+    } catch (error) {
+      setClaimOptions([])
+      setSelectedClaimIds([])
+      setClaimsError(error instanceof Error ? error.message : 'Retained NIP claims could not be loaded.')
+    } finally {
+      setClaimsLoading(false)
+    }
   }
 
   const addEvidence = async (event: FormEvent) => {
     event.preventDefault()
     if (!episode || !eventId.trim()) return
+    setLoadingSource(true)
     try {
       const source = await videoApi.getEvent(eventId.trim())
       if (!source.content_text?.trim()) throw new Error('The retained event exists but has no transcript text.')
@@ -111,25 +141,42 @@ function EpisodeWorkspace({ project, capabilities, onBack, onMessage }: { projec
       setSourceEvent(source)
       setEventId('')
       setStoryboard(null)
-      onMessage('Canonical event loaded and linked. The transcript stays in NIP; only a short cited excerpt and derived narration enter the storyboard.')
+      await refreshClaims(source)
+      onMessage('Canonical event linked. Review the retained claims and select which exact-span-backed claims should drive this storyboard.')
     } catch (error) {
       onMessage(error instanceof Error ? error.message : 'Event lookup or evidence link failed.')
+    } finally {
+      setLoadingSource(false)
     }
   }
 
   const saveStoryboard = async () => {
     if (!episode) return
-    if (!sourceEvent) { onMessage('Load a retained event transcript before building slides.json.'); return }
+    if (!sourceEvent) { onMessage('Load a retained event transcript before building the storyboard.'); return }
+    if (loadingSource || claimsLoading) { onMessage('Wait for the retained event and claim list to finish loading before building.'); return }
+    const selected = claimOptions.filter((option) => selectedClaimIds.includes(option.claim.claim_id) && option.evidence.length > 0)
+    if (!selected.length) { onMessage('Select at least one retained claim with a verified transcript span.'); return }
     setSaving(true)
     try {
-      const draft = buildTranscriptStoryboard(sourceEvent, project, episode, id, now())
+      const refs = selected.flatMap(({ claim, evidence: spans }) => spans.flatMap((span) => [
+        { evidence_kind: 'claim' as const, evidence_id: claim.claim_id, start_offset: span.start_offset, end_offset: span.end_offset, quote: span.quote },
+        { evidence_kind: 'event' as const, evidence_id: sourceEvent.event_id, start_offset: span.start_offset, end_offset: span.end_offset, quote: span.quote },
+      ]))
+      const uniqueRefs = [...new Map(refs.map((ref) => [evidenceKey(ref), ref])).values()]
+      const currentEvidence = await videoApi.listEvidence(episode.episode_id, episode.revision)
+      const currentKeys = new Set(currentEvidence.map(evidenceKey))
+      for (const ref of uniqueRefs) {
+        if (!currentKeys.has(evidenceKey(ref))) await videoApi.linkEvidence(episode.episode_id, episode.revision, ref)
+      }
+      setEvidence((items) => [...new Map([...items, ...currentEvidence, ...uniqueRefs].map((ref) => [evidenceKey(ref), ref])).values()])
+      const draft = buildSelectedClaimsStoryboard(sourceEvent, selected, project, episode, id, now())
       await videoApi.saveNarrative(draft.narrative)
       await videoApi.saveStoryboard(draft.storyboard)
       await Promise.all(draft.scenes.map((scene) => videoApi.saveScene(scene)))
       await Promise.all(draft.shots.map((shot) => videoApi.saveShot(shot)))
       await Promise.all(draft.visualSpecs.map((spec) => videoApi.saveVisualSpec(spec)))
       setStoryboard(draft.document)
-      onMessage('Transcript-derived slides.json saved as revisioned narrative, scenes, shots, and pinned visual specs.')
+      onMessage(`Storyboard saved from ${selected.length} explicitly selected retained claim${selected.length === 1 ? '' : 's'}, with exact claim/event evidence spans pinned to each visual spec.`)
     } catch (error) {
       onMessage(error instanceof Error ? error.message : 'Storyboard save failed.')
     } finally {
@@ -209,12 +256,28 @@ function EpisodeWorkspace({ project, capabilities, onBack, onMessage }: { projec
     {activeJob?.status === 'succeeded' && jobLineage.length ? <p className="video-footnote" data-testid="video-job-lineage">Final asset retains {jobLineage.length} upstream links: {jobLineage.filter((item) => item.upstream_kind === 'visual_spec').length} saved slide specs and {jobLineage.filter((item) => item.upstream_kind === 'event' || item.upstream_kind === 'claim').length} canonical event/claim sources.</p> : null}
     {episode ? <section className="video-card">
       <div className="video-card-head"><div><p className="eyebrow">Episode v{episode.revision}</p><h2>{episode.title}</h2></div><span className="video-chip">{episode.status}</span></div>
-      <div className="video-evidence-panel"><div><strong>Retained transcript source</strong><p>Load an immutable NIP event. Raw transcript text is not copied into the Video projection.</p></div><form onSubmit={addEvidence} className="video-inline-form"><input aria-label="Canonical event ID" placeholder="event-…" value={eventId} onChange={(event) => setEventId(event.target.value)} /><button className="video-secondary-button" type="submit">Load and link event</button></form>
+      <div className="video-evidence-panel"><div><strong>Retained transcript source</strong><p>Load an immutable NIP event. Raw transcript text is not copied into the Video projection.</p></div><form onSubmit={addEvidence} className="video-inline-form"><input aria-label="Canonical event ID" placeholder="event-…" value={eventId} onChange={(event) => setEventId(event.target.value)} /><button className="video-secondary-button" type="submit" disabled={loadingSource}>{loadingSource ? 'Loading…' : 'Load and link event'}</button></form>
         {sourceEvent ? <div className="video-evidence-row" data-testid="loaded-source-event"><FileCheck2 size={14} /><code>{sourceEvent.event_id}</code><span>{sourceEvent.content_text?.length ?? 0} transcript characters · hash {sourceEvent.content_hash.slice(0, 12)}</span></div> : null}
-        {evidence.map((ref) => <div className="video-evidence-row" key={`${ref.evidence_kind}-${ref.evidence_id}`}><FileCheck2 size={14} /><code>{ref.evidence_id}</code><span>{ref.evidence_kind} · validated</span></div>)}
+        {evidence.map((ref) => <div className="video-evidence-row" key={evidenceKey(ref)}><FileCheck2 size={14} /><code>{ref.evidence_id}</code><span>{ref.evidence_kind} · validated</span></div>)}
       </div>
-      <div className="video-card-head video-storyboard-head"><div><p className="eyebrow">Storyboard</p><h2>Transcript-driven slides.json</h2></div><div className="video-inline-actions"><button className="video-primary-button" type="button" onClick={() => void saveStoryboard()} disabled={saving || !sourceEvent}><Sparkles size={14} /> {saving ? 'Saving…' : storyboard ? 'Rebuild slides.json' : 'Build slides.json'}</button>{storyboard && downloadHref ? <a className="video-secondary-button" href={downloadHref} download={`${storyboard.storyboard_id}.slides.json`}>Download slides.json</a> : null}</div></div>
-      {storyboard ? <><div className="video-scene-grid">{storyboard.slides.map((slide, index) => <article className="video-scene-card" key={slide.slide_id} data-testid={`storyboard-slide-${index + 1}`}><span>0{index + 1}</span><strong>{slide.purpose}</strong><p>{slide.scene.narration_text}</p><small>{Math.round((slide.scene.duration_ms ?? 0) / 1000)}s · {slide.shots.length} shot · audio cue {slide.audio_cue.status}</small></article>)}</div><details className="video-storyboard-json"><summary>Inspect slides.json · scenes, shots, audio cues, and evidence</summary><pre data-testid="storyboard-json">{storyboardJson}</pre></details></> : <p className="video-footnote">Load an event transcript to build three reviewable slides with a short cited excerpt and a neutral evidence caveat.</p>}
+      {sourceEvent ? <section className="video-claim-panel" aria-labelledby="video-claim-heading" data-testid="video-claim-picker">
+        <div className="video-claim-toolbar"><div><p className="eyebrow">Step 2 · editorial selection</p><h3 id="video-claim-heading">Which retained claims belong in this cut?</h3><p>Claims are extracted analyses, not verbatim quotations. Exact-span checks prove the quote and offsets match the transcript; they do not prove the quote supports the claim. Review support before rendering.</p></div><button className="video-secondary-button" type="button" onClick={() => void refreshClaims(sourceEvent)} disabled={claimsLoading}><RefreshCw size={13} className={claimsLoading ? 'animate-spin' : ''} /> Refresh claims</button></div>
+        {claimsError ? <p className="video-claim-warning" role="alert">{claimsError}</p> : null}
+        {claimsLoading ? <p className="video-footnote">Loading claims retained in NIP…</p> : claimOptions.length ? <div className="video-claim-list">{claimOptions.map(({ claim, evidence: spans, rejectedEvidenceCount }) => {
+          const selectedClaim = selectedClaimIds.includes(claim.claim_id)
+          return <label className={`video-claim-option${selectedClaim ? ' is-selected' : ''}${!spans.length ? ' is-ineligible' : ''}`} key={claim.claim_id} data-testid={`video-claim-option-${claim.claim_id}`}>
+            <input type="checkbox" aria-label={`Select claim: ${claim.claim_text}`} data-testid={`video-claim-select-${claim.claim_id}`} checked={selectedClaim} disabled={!spans.length || claimsLoading || loadingSource} onChange={() => setSelectedClaimIds((current) => selectedClaim ? current.filter((claimId) => claimId !== claim.claim_id) : [...current, claim.claim_id])} />
+            <span className="video-claim-content"><strong>{claim.claim_text}</strong><small>Claim · {claim.speaker_or_author ?? 'speaker not recorded'} · {claim.provider}/{claim.model} · confidence {Math.round(claim.confidence_millis / 10)}% · {claim.claim_id}</small>
+              {spans.map((span, index) => <span className="video-claim-evidence" key={`${span.start_offset}-${span.end_offset}-${index}`}><q>{span.quote}</q><small>Exact source span [{span.start_offset}, {span.end_offset}) · Unicode characters</small></span>)}
+              {rejectedEvidenceCount > 0 ? <small className="video-claim-warning">{rejectedEvidenceCount} stored span{rejectedEvidenceCount === 1 ? '' : 's'} did not exactly match the retained transcript and cannot support this storyboard.</small> : null}
+              {!spans.length ? <small className="video-claim-warning">Not selectable: this claim has no verified exact source span for the loaded event.</small> : null}
+            </span>
+          </label>
+        })}</div> : <p className="video-claim-empty">No retained claims cite this event. Extract and review claims in NIP Narrative, then refresh here. Video will not invent claims or substitute a generic outline.</p>}
+        <p className="video-footnote">{selectedClaimIds.filter((claimId) => claimOptions.some((option) => option.claim.claim_id === claimId && option.evidence.length > 0)).length} claim(s) selected · selection order follows the retained claim list.</p>
+      </section> : null}
+      <div className="video-card-head video-storyboard-head"><div><p className="eyebrow">Storyboard</p><h2>Selected-claim slides.json</h2></div><div className="video-inline-actions"><button className="video-primary-button" type="button" onClick={() => void saveStoryboard()} disabled={saving || loadingSource || claimsLoading || !sourceEvent || selectedClaimIds.length === 0}><Sparkles size={14} /> {saving ? 'Saving…' : `Build from selected claims (${selectedClaimIds.length})`}</button>{storyboard && downloadHref ? <a className="video-secondary-button" href={downloadHref} download={`${storyboard.storyboard_id}.slides.json`}>Download slides.json</a> : null}</div></div>
+      {storyboard ? <><div className="video-scene-grid">{storyboard.slides.map((slide, index) => <article className="video-scene-card" key={slide.slide_id} data-testid={`storyboard-slide-${index + 1}`}><span>0{index + 1}</span><strong>{slide.purpose}</strong><p>{slide.scene.narration_text}</p><small>{Math.round((slide.scene.duration_ms ?? 0) / 1000)}s · {slide.shots.length} shot · audio cue {slide.audio_cue.status}</small></article>)}</div><details className="video-storyboard-json"><summary>Inspect slides.json · scenes, shots, audio cues, and evidence</summary><pre data-testid="storyboard-json">{storyboardJson}</pre></details></> : <p className="video-footnote">{sourceEvent ? 'Select one or more eligible claims above to build the storyboard. No event-only placeholder beats are added.' : 'Load a retained event, review its stored claims, and explicitly select which claims should appear in the storyboard.'}</p>}
       <p className="video-footnote">Audio cue scripts are in the storyboard, but TTS is {capabilities?.tts?.replaceAll('_', ' ') ?? 'not configured'}; the current LinkZag MP4 is silent.</p>
       <div className="video-card-head video-storyboard-head"><div><p className="eyebrow">LinkZag renderer</p><h2>Commentary video capture</h2></div><div className="video-render-controls"><label className="video-render-mode">Capture mode<select aria-label="Capture mode" data-testid="video-capture-mode" value={captureMode} onChange={(event) => setCaptureMode(event.target.value as 'flash' | 'full')} disabled={rendering}><option value="flash">Flash · real-time preview (Canvas)</option><option value="full">Full · deterministic screenshots (SVG)</option></select></label><button className="video-secondary-button" type="button" onClick={() => void renderLinkZag()} disabled={rendering || !storyboard}><Clapperboard size={14} /> {rendering ? 'Rendering…' : 'Render slides · silent MP4'}</button></div></div>
       <p className="video-footnote">Flash is the speed-first default and may drop frames on a slow CPU. Choose Full when you need deterministic frame-by-frame capture or Flash motion/text quality is not acceptable.</p>

@@ -38,6 +38,8 @@ export const test = base.extend<Fixtures>({
   stubEngines: [true, { option: true }],
   demo: async ({ page }, use, testInfo) => {
     const director = createDemo(page)
+    // Playwright's fixture callback `use` is not a React hook.
+    // oxlint-disable-next-line react-hooks/rules-of-hooks
     await use(director)
     await director.clear()
 

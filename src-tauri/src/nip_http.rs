@@ -496,6 +496,11 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
         "NIP_PYTHON_BIN",
         "NIP_FFMPEG_BIN",
         "NIP_FFPROBE_BIN",
+        // These NIP-owned settings contain only a provider selection, loopback
+        // URL, and model ID. Direct-local mode has no API-key field.
+        "NIP_CLAIM_PROVIDER",
+        "NIP_LOCAL_LLM_URL",
+        "NIP_LOCAL_LLM_MODEL",
     ];
     for key in tooling_keys {
         if env.iter().any(|(existing, _)| existing == key) {

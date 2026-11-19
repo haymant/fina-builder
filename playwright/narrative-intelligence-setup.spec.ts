@@ -35,7 +35,7 @@ const claim = {
   evidence: [{ event_id: event.event_id, quote: 'policy to remain restrictive until inflation cools', start_offset: 34, end_offset: 85 }],
 }
 
-async function stubSetupJourney(page: Page) {
+async function stubSetupJourney(page: Page, options: { directLocal?: boolean } = {}) {
   const state = {
     subscribed: false,
     transcribed: false,
@@ -43,6 +43,7 @@ async function stubSetupJourney(page: Page) {
     claims: [] as Array<typeof claim>,
   }
 
+  // Stub only NIP: RIGA has a separate transport and must not receive NIP fixture payloads.
   await page.route('**/nip/mcp', async (route) => {
     const body = route.request().postDataJSON() as { id?: number; method?: string; params?: { name?: string } }
     if (body.method === 'notifications/initialized') {
@@ -76,21 +77,55 @@ async function stubSetupJourney(page: Page) {
         discovered_at: '2026-11-16T09:00:00Z',
         state: state.transcribed ? 'transcribed' : 'awaiting_local_transcription',
       }
-      const provider = {
-        configured: true,
-        bridge_state: 'ready',
-        provider_kind: 'remote',
-        provider_id: 'riga-fixture-provider',
-        model: 'fixture-claim-model',
-        reasoning_effort: 'low',
-        provider_api: 'chat',
-        remote: true,
-        consent: state.consent,
-        consent_recorded_at: state.consent === 'granted' ? '2026-11-16T09:02:00Z' : null,
-        disclosure: 'Transcript text and the claim-extraction prompt will be sent to riga-fixture-provider (fixture-claim-model) for remote claim extraction.',
-        extraction_state: state.consent === 'granted' ? 'available' : 'consent_required',
-        warnings: state.consent === 'granted' ? [] : ['remote_consent_missing'],
+      const completedJob = {
+        job_id: 'job-setup-transcription', source_id: episode.source_id, source_native_id: episode.source_native_id,
+        canonical_url: episode.canonical_url, title: episode.title, state: 'transcribed', step: 'complete',
+        detail: 'Fixture transcript committed.', error_code: null, error_message: null, audio_bytes: 128,
+        audio_content_type: 'audio/mpeg', audio_path: '/tmp/fixture.mp3', audio_url_path: null,
+        audio_duration_seconds: 60, chunks_total: 1, chunks_completed: 1,
+        transcript_characters: event.content_text.length, transcript_preview: event.content_text,
+        transcript_path: '/tmp/fixture-transcript.txt', event_id: event.event_id, warnings: [],
+        started_at: '2026-11-16T09:01:00Z', updated_at: '2026-11-16T09:02:00Z',
+        finished_at: '2026-11-16T09:02:00Z', events: [],
       }
+      const asrStatus = {
+        ready: true, configured: true, comfyui_url: 'http://127.0.0.1:8188', workspace: '/tmp/comfy',
+        workspace_present: true, render_script: '/tmp/comfy/render.py', render_script_present: true,
+        repo_url: null, chunk_seconds: 45, python: 'python3', python_present: true, ffmpeg_present: true,
+        server_reachable: true, server_device: 'local', asr_nodes_present: true, pack_commit: 'fixture',
+        blockers: [], next_actions: [],
+      }
+      const provider = options.directLocal
+        ? {
+            configured: true,
+            bridge_state: 'ready',
+            provider_kind: 'local',
+            provider_id: 'direct-local',
+            model: 'fixture-local-model',
+            reasoning_effort: null,
+            provider_api: 'chat_completions',
+            remote: false,
+            consent: 'not_required',
+            consent_recorded_at: null,
+            disclosure: 'Transcript text stays on the machine; direct local extraction has no RIGA or remote fallback.',
+            extraction_state: 'available',
+            warnings: [],
+          }
+        : {
+            configured: true,
+            bridge_state: 'ready',
+            provider_kind: 'remote',
+            provider_id: 'riga-fixture-provider',
+            model: 'fixture-claim-model',
+            reasoning_effort: 'low',
+            provider_api: 'chat',
+            remote: true,
+            consent: state.consent,
+            consent_recorded_at: state.consent === 'granted' ? '2026-11-16T09:02:00Z' : null,
+            disclosure: 'Transcript text and the claim-extraction prompt will be sent to riga-fixture-provider (fixture-claim-model) for remote claim extraction.',
+            extraction_state: state.consent === 'granted' ? 'available' : 'consent_required',
+            warnings: state.consent === 'granted' ? [] : ['remote_consent_missing'],
+          }
       const sourceRecord = {
         source_id: subscription.source_id,
         kind: 'podcast',
@@ -108,8 +143,10 @@ async function stubSetupJourney(page: Page) {
         event_count: state.transcribed ? 1 : 0,
         episode_count: 1,
       }
-      const structuredContent = name === 'health'
-        ? { service: 'nip-engine', api_version: 1, readiness: 'ready', schema_version: 9 }
+      const structuredContent = name === 'capabilities'
+        ? { service: 'nip-engine', service_version: 'fixture', api_version: 1, schema_version: 9, features: { duckdb_store: true, podcast_rss_subscriptions: true, local_audio_transcription: true, claim_extraction: true, parquet_export: true, semantic_search: false } }
+        : name === 'health'
+          ? { service: 'nip-engine', api_version: 1, readiness: 'ready', schema_version: 9 }
         : name === 'list_podcast_subscriptions'
           ? state.subscribed ? [subscription] : []
           : name === 'list_sources'
@@ -124,18 +161,26 @@ async function stubSetupJourney(page: Page) {
                     ? (state.subscribed = false, { source_id: sourceRecord.source_id, deleted: true })
                 : name === 'list_podcast_episodes'
             ? state.subscribed ? [episode] : []
+            : name === 'list_episode_page'
+              ? { episodes: state.subscribed ? [episode] : [], total: state.subscribed ? 1 : 0, limit: 50, offset: 0, next_offset: null }
             : name === 'subscribe_podcast_feed'
               ? (state.subscribed = true, { source_id: subscription.source_id, state: 'active' })
-              : name === 'transcribe_podcast_episode'
+            : name === 'transcribe_podcast_episode'
                 ? (state.transcribed = true, { transcript_text: event.content_text, content_hash: event.content_hash })
+                : name === 'start_podcast_transcription'
+                  ? (state.transcribed = true, completedJob)
                 : name === 'search_events'
                   ? { events: state.transcribed ? [event] : [], next_cursor: null }
                   : name === 'list_claims'
                     ? state.claims
                     : name === 'nip_provider_status'
                       ? provider
+                      : name === 'nip_asr_status'
+                        ? asrStatus
                       : name === 'nip_grant_remote_consent'
                         ? (state.consent = 'granted', { action: 'granted', scope: 'remote_transcript_extraction' })
+                        : name === 'find_podcast_episode_event'
+                          ? { event: state.transcribed ? event : null }
                         : name === 'extract_claims_from_event'
                           ? (state.claims = [claim], state.claims)
                           : name === 'nip_resource_status'
@@ -146,8 +191,16 @@ async function stubSetupJourney(page: Page) {
                                 ? { as_of: '2026-11-17T12:00:00Z', formula_version: 'nip-signals-v1', coverage: 'unknown', current_week_start: '2026-11-09T00:00:00Z', current_week_end: '2026-11-16T00:00:00Z', signals: [] }
                                 : name === 'list_narrative_graph'
                                   ? null
-                                  : name === 'refresh_podcast_feeds'
-                                    ? { results: [] }
+                                  : name === 'list_podcast_transcription_jobs'
+                                    ? state.transcribed ? [completedJob] : []
+                                    : name === 'list_media_artifacts'
+                                      ? []
+                                      : name === 'rebuild_narrative_clusters'
+                                        ? []
+                                        : name === 'rebuild_narrative_graph'
+                                          ? null
+                                    : name === 'refresh_podcast_feeds'
+                                      ? { results: [] }
                                     : ['list_narrative_clusters', 'list_etf_mappings', 'list_editorial_candidates'].includes(name ?? '')
                                       ? []
                                       : {}
@@ -159,6 +212,23 @@ async function stubSetupJourney(page: Page) {
 }
 
 test.describe('Narrative Intelligence first-run setup', () => {
+  test('shows a ready direct-local provider without RIGA consent state', {
+    tag: [TAG.journey.narrativeSetup, TAG.feature.narrativeSetup, TAG.priority.p1],
+  }, async ({ page }) => {
+    await stubSetupJourney(page, { directLocal: true })
+    const workspace = new WorkspacePage(page)
+    await workspace.open()
+    await page.getByTestId('menu-narrative').click()
+    await page.getByTestId('menuitem-narrative-overview').click()
+
+    const checklist = page.getByTestId('nip-setup-checklist')
+    await expect(checklist).toContainText('fixture-local-model · direct local · extraction available')
+    await expect(checklist).not.toContainText('Consent needed')
+    await expect(page.getByText(/NIP calls this model directly/)).toBeVisible()
+    await expect(page.getByText(/Transcript text stays on the machine/)).toBeVisible()
+    await expect(page.getByText(/no RIGA or remote fallback/)).toBeVisible()
+  })
+
   test('shows the setup checklist and the exact next action', {
     tag: [TAG.journey.narrativeSetup, TAG.feature.narrativeSetup, TAG.priority.p0, TAG.smoke],
   }, async ({ page }) => {
@@ -205,13 +275,17 @@ test.describe('Narrative Intelligence first-run setup', () => {
     await expect(page.getByText('Transcript committed.', { exact: false })).toBeVisible({ timeout: 120_000 })
 
     await page.getByRole('button', { name: /Open retained transcript/ }).first().click()
+    const transcriptDialog = page.getByRole('dialog', { name: 'Retained transcript' })
+    await expect(transcriptDialog).toBeVisible()
+    await expect(transcriptDialog).toContainText(event.content_text)
+    await page.getByRole('button', { name: 'Show in event list' }).click()
     await expect(page.getByText(/Source-linked record/)).toBeVisible()
     await expect(page.getByTestId('event-consent')).toBeVisible()
     await page.getByTestId('event-consent-grant').click()
     await expect.poll(() => state.consent).toBe('granted')
     await expect(page.getByTestId('event-consent')).toHaveCount(0)
     await page.getByRole('button', { name: 'Extract claims' }).click()
-    await expect(page.getByText('1 claim committed with source evidence.')).toBeVisible()
+    await expect(page.locator('.event-detail').getByText('1 claim committed with source evidence.')).toBeVisible()
 
     await page.getByRole('tab', { name: 'Claim Explorer' }).click()
     await expect(page.getByRole('heading', { name: /Policy is expected to remain restrictive/ })).toBeVisible()

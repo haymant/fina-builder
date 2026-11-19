@@ -176,7 +176,7 @@ For external agents, keep one DuckDB writer. The desktop’s NIP sidecar is loop
 
 | Gap | Impact | Required response |
 |---|---|---|
-| Direct LLM extraction is not a NIP-owned provider; production claim extraction is RIGA-backed. | Scenario 1 fails without RIGA. | Add a host-side direct local/remote provider port with model binding and consent; keep RIGA as an optional adapter. |
+| A loopback-only, environment-configured direct local NIP claim provider now exists; packaged provider settings, remote profiles and direct media-model adapters remain open. | Scenario 1 can begin NIP claim extraction without RIGA, but the self-contained desktop/media journey is still incomplete. | Add desktop settings/model readiness, then consent-bound remote profiles and direct Comfy speech/image/video adapters; keep every unavailable capability explicit. |
 | Tauri bundles the NIP sidecar, not ComfyUI, model runtimes or weights. | “Self-contained AI desktop” is not yet true/offline. | Decide between managed optional runtime/model download and supported user-installed loopback runtime; publish per-capability offline status. |
 | Entities/typed claim relations/entity temporal features are draft only. | Entity radar/graph/timeline cannot yet meet the requested semantics. | Implement doc 65 P0/P1 schema/quality gates before entity feature claims. |
 | RIGA extraction uses a general autonomous run path and free-text JSON parsing. | Tool scope, privacy cleanup, exact provider binding and span correctness are not yet strong enough. | Build the constrained ephemeral extraction mode and negative tests before relying on it. |
@@ -253,12 +253,13 @@ For external agents, keep one DuckDB writer. The desktop’s NIP sidecar is loop
 
 ## Immediate next steps
 
-1. Keep the verified three-slide MP4 as an E2E smoke only; replace its fixed three-beat heuristic with a full prompt-driven commentary workflow over a growing, editable Fina storyboard.
-2. Write a capability/schema ADR from Rehab's storyboard and skills as a functional reference, defining Fina-native `StoryboardManifest`, `RenderPlan` and `VideoEditTimeline` records.
-3. Implement persisted storyboard readback and missing scene/shot evidence/audio-cue records; make compilation materialize and hash exact LinkZag scene/shot inputs.
-4. Implement real QA and EDL generation from saved records before adding more generative providers.
-5. In parallel, design the NIP extraction provider contract and the RIGA isolation/cleanup fix; scenarios 1 and 2 should be independently switchable, not coupled.
-6. Add the external-agent bridge and `fina-commentary-video` skill early. Its tool-only acceptance journey must prove Rehab-level prompt-to-commentary parity plus Fina's evidence-backed NIP, lineage and recovery strengths.
+1. **Implemented:** the Video Workspace lists retained claims for a linked event, shows claim text separately from exact transcript evidence, permits only exact-span-backed choices, and builds/persists from explicit selections only. With no eligible selection it does not substitute generic beats. Unit and browser journey verification pass.
+2. **First Mode 1 provider slice:** a direct local loopback-only NIP claim route is implemented behind host configuration, independent of RIGA. Complete its Rust contract/security tests and retain no-fallback, exact-model readiness and exact Unicode-span validation; this environment-configured route is not yet a packaged provider settings/runtime experience.
+3. Add a desktop settings flow for local provider selection/readiness, plus an explicit opt-in runtime/model installation story for supported platforms. Keep the local route usable without RIGA.
+4. Add consent-bound remote model profiles only after provider/profile/model/operation identity, host-held credentials, content-egress disclosure, revocation and negative tests are bound end to end.
+5. Expand the claim-driven draft into Fina's full storyboard → pinned RenderPlan → VideoEditTimeline/EDL path, with scene/shot/audio readback and complete review controls.
+6. Wire Comfy TTS, image and video workflows as separately capability-detected direct providers, with real readiness, managed outputs, license/provenance and QA; retain explicit unavailable/silent states.
+7. Preserve the Mode 3 external-agent route as a parity guardrail; broaden its verified fixture journey only when the same new Mode 1 operations are exposed through stable tools.
 
 ## Existing references
 

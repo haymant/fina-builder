@@ -2,10 +2,12 @@ use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
+use std::net::IpAddr;
 use std::path::{Component, Path, PathBuf};
 
 use crate::asr::LoopbackUrl;
 use thiserror::Error;
+use url::Url;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ConfigError {
@@ -35,6 +37,37 @@ pub enum ConfigError {
     MissingRigaBridgeToken,
     #[error("NIP_RIGA_BRIDGE_TOKEN requires NIP_RIGA_BRIDGE_URL")]
     RigaBridgeTokenWithoutUrl,
+    #[error("NIP_CLAIM_PROVIDER must be auto, direct_local, or riga")]
+    InvalidClaimProvider,
+    #[error("NIP_LOCAL_LLM_URL must use a literal HTTP(S) loopback IP without credentials")]
+    InvalidLocalLlmUrl,
+    #[error("NIP_LOCAL_LLM_MODEL must be a non-empty model identifier without control characters")]
+    InvalidLocalLlmModel,
+    #[error("NIP_LOCAL_LLM_URL and NIP_LOCAL_LLM_MODEL must be configured together")]
+    IncompleteLocalLlmConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimProviderMode {
+    Auto,
+    DirectLocal,
+    Riga,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalLlmConfig {
+    base_url: LoopbackUrl,
+    model: String,
+}
+
+impl LocalLlmConfig {
+    pub fn base_url(&self) -> &str {
+        self.base_url.as_str()
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
 }
 
 /// Loopback provider bridge credentials. `Debug` redacts the bearer token so a
@@ -109,6 +142,8 @@ pub struct NipConfig {
     comfyui_url: Option<LoopbackUrl>,
     comfy: ComfyWorkspaceConfig,
     riga_bridge: Option<RigaBridgeConfig>,
+    claim_provider_mode: ClaimProviderMode,
+    local_llm: Option<LocalLlmConfig>,
 }
 
 impl NipConfig {
@@ -127,6 +162,9 @@ impl NipConfig {
             "NIP_ASR_CHUNK_SECONDS",
             "NIP_RIGA_BRIDGE_URL",
             "NIP_RIGA_BRIDGE_TOKEN",
+            "NIP_CLAIM_PROVIDER",
+            "NIP_LOCAL_LLM_URL",
+            "NIP_LOCAL_LLM_MODEL",
         ]
         .into_iter()
         .filter_map(|key| env::var(key).ok().map(|value| (key.to_owned(), value)))
@@ -162,6 +200,8 @@ impl NipConfig {
         let comfy =
             resolve_comfy_workspace(values, &repo_root, app_data_root.as_deref(), debug_build)?;
         let riga_bridge = resolve_riga_bridge(values)?;
+        let claim_provider_mode = resolve_claim_provider_mode(values)?;
+        let local_llm = resolve_local_llm(values)?;
 
         let configured_data = configured_path(values, "NIP_DATA_DIR")?;
         if test_mode && configured_data.is_none() {
@@ -227,6 +267,8 @@ impl NipConfig {
             comfyui_url,
             comfy,
             riga_bridge,
+            claim_provider_mode,
+            local_llm,
         })
     }
 
@@ -283,6 +325,28 @@ impl NipConfig {
 
     pub fn riga_bridge(&self) -> Option<&RigaBridgeConfig> {
         self.riga_bridge.as_ref()
+    }
+
+    pub fn local_llm(&self) -> Option<&LocalLlmConfig> {
+        self.local_llm.as_ref()
+    }
+
+    /// An explicitly configured local endpoint wins in `auto`; if it is
+    /// unavailable NIP blocks rather than falling through to RIGA.
+    pub fn active_claim_provider(&self) -> ClaimProviderMode {
+        match self.claim_provider_mode {
+            ClaimProviderMode::Auto if self.local_llm.is_some() => ClaimProviderMode::DirectLocal,
+            ClaimProviderMode::Auto => ClaimProviderMode::Riga,
+            mode => mode,
+        }
+    }
+
+    pub fn claim_extraction_configured(&self) -> bool {
+        match self.active_claim_provider() {
+            ClaimProviderMode::DirectLocal => self.local_llm.is_some(),
+            ClaimProviderMode::Riga => self.riga_bridge.is_some(),
+            ClaimProviderMode::Auto => false,
+        }
     }
 }
 
@@ -362,6 +426,63 @@ fn resolve_riga_bridge(
             token: token.to_owned(),
         })),
     }
+}
+
+fn resolve_claim_provider_mode(
+    values: &BTreeMap<String, String>,
+) -> Result<ClaimProviderMode, ConfigError> {
+    match values
+        .get("NIP_CLAIM_PROVIDER")
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        None | Some("") | Some("auto") => Ok(ClaimProviderMode::Auto),
+        Some("direct_local") => Ok(ClaimProviderMode::DirectLocal),
+        Some("riga") => Ok(ClaimProviderMode::Riga),
+        _ => Err(ConfigError::InvalidClaimProvider),
+    }
+}
+
+fn resolve_local_llm(
+    values: &BTreeMap<String, String>,
+) -> Result<Option<LocalLlmConfig>, ConfigError> {
+    let url = values
+        .get("NIP_LOCAL_LLM_URL")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    let model = values
+        .get("NIP_LOCAL_LLM_MODEL")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    match (url, model) {
+        (None, None) => Ok(None),
+        (Some(url), Some(model)) => {
+            if model.len() > 256 || model.chars().any(char::is_control) {
+                return Err(ConfigError::InvalidLocalLlmModel);
+            }
+            Ok(Some(LocalLlmConfig {
+                base_url: parse_literal_loopback_url(url)?,
+                model: model.to_owned(),
+            }))
+        }
+        _ => Err(ConfigError::IncompleteLocalLlmConfig),
+    }
+}
+
+fn parse_literal_loopback_url(value: &str) -> Result<LoopbackUrl, ConfigError> {
+    let parsed = Url::parse(value).map_err(|_| ConfigError::InvalidLocalLlmUrl)?;
+    let host = parsed
+        .host_str()
+        .ok_or(ConfigError::InvalidLocalLlmUrl)?
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    let ip = host
+        .parse::<IpAddr>()
+        .map_err(|_| ConfigError::InvalidLocalLlmUrl)?;
+    if !ip.is_loopback() {
+        return Err(ConfigError::InvalidLocalLlmUrl);
+    }
+    LoopbackUrl::parse(value).map_err(|_| ConfigError::InvalidLocalLlmUrl)
 }
 
 fn configured_path(
@@ -712,6 +833,109 @@ mod tests {
             .unwrap_err(),
             ConfigError::InvalidComfyUiUrl
         );
+    }
+
+    #[test]
+    fn direct_local_model_is_loopback_only_and_selected_without_riga() {
+        let temp = tempdir().unwrap();
+        let config = NipConfig::resolve(
+            &env(&[
+                ("NIP_LOCAL_LLM_URL", "http://127.0.0.1:1234/v1"),
+                ("NIP_LOCAL_LLM_MODEL", "qwen-local"),
+            ]),
+            temp.path(),
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            config.active_claim_provider(),
+            ClaimProviderMode::DirectLocal
+        );
+        assert!(config.claim_extraction_configured());
+        assert_eq!(config.local_llm().unwrap().model(), "qwen-local");
+        assert_eq!(
+            config.local_llm().unwrap().base_url(),
+            "http://127.0.0.1:1234/v1"
+        );
+    }
+
+    #[test]
+    fn explicit_riga_selection_overrides_configured_local_model() {
+        let temp = tempdir().unwrap();
+        let config = NipConfig::resolve(
+            &env(&[
+                ("NIP_CLAIM_PROVIDER", "riga"),
+                ("NIP_LOCAL_LLM_URL", "http://127.0.0.1:1234/v1"),
+                ("NIP_LOCAL_LLM_MODEL", "qwen-local"),
+                ("NIP_RIGA_BRIDGE_URL", "http://127.0.0.1:49152"),
+                ("NIP_RIGA_BRIDGE_TOKEN", "fixture-bearer-token"),
+            ]),
+            temp.path(),
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(config.active_claim_provider(), ClaimProviderMode::Riga);
+    }
+
+    #[test]
+    fn direct_local_requires_a_complete_loopback_model_configuration() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        assert_eq!(
+            NipConfig::resolve(
+                &env(&[("NIP_LOCAL_LLM_URL", "http://127.0.0.1:1234/v1")]),
+                root,
+                None,
+                true,
+            )
+            .unwrap_err(),
+            ConfigError::IncompleteLocalLlmConfig
+        );
+        assert_eq!(
+            NipConfig::resolve(
+                &env(&[
+                    ("NIP_LOCAL_LLM_URL", "https://models.example/v1"),
+                    ("NIP_LOCAL_LLM_MODEL", "remote-model"),
+                ]),
+                root,
+                None,
+                true,
+            )
+            .unwrap_err(),
+            ConfigError::InvalidLocalLlmUrl
+        );
+        assert_eq!(
+            NipConfig::resolve(
+                &env(&[
+                    ("NIP_LOCAL_LLM_URL", "http://localhost:1234/v1"),
+                    ("NIP_LOCAL_LLM_MODEL", "local-model"),
+                ]),
+                root,
+                None,
+                true,
+            )
+            .unwrap_err(),
+            ConfigError::InvalidLocalLlmUrl
+        );
+        assert_eq!(
+            NipConfig::resolve(&env(&[("NIP_CLAIM_PROVIDER", "other")]), root, None, true)
+                .unwrap_err(),
+            ConfigError::InvalidClaimProvider
+        );
+        let forced = NipConfig::resolve(
+            &env(&[("NIP_CLAIM_PROVIDER", "direct_local")]),
+            root,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            forced.active_claim_provider(),
+            ClaimProviderMode::DirectLocal
+        );
+        assert!(!forced.claim_extraction_configured());
     }
 
     #[test]

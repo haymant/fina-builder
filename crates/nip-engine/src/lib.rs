@@ -3,6 +3,7 @@ pub mod comfy;
 pub mod comfy_discovery;
 pub mod config;
 pub mod jobs;
+pub mod local_model;
 pub mod media;
 pub mod podcast;
 pub mod provider;
@@ -40,7 +41,9 @@ use std::{
 use thiserror::Error;
 
 use asr::{AsrError, AsrProvider, AsrRequest, AsrResult};
+use config::ClaimProviderMode;
 pub use config::{ConfigError, NipConfig};
+use local_model::{LocalModelError, LocalOpenAiClaimProvider};
 use podcast::{
     parse_rss_feed, scheduled_next_poll, validate_feed_url, AudioClient, FeedClient, FeedRequest,
     FeedValidationError,
@@ -121,15 +124,27 @@ impl ClaimExtractionProvider for DeterministicFakeClaimProvider {
 /// The provider call itself happens with the lock released.
 pub struct PreparedExtraction {
     event: EventRecord,
-    provider: RigaBridgeClaimProvider,
-    status: RigaBridgeProviderStatus,
+    provider: PreparedClaimProvider,
+}
+
+enum PreparedClaimProvider {
+    Riga {
+        provider: RigaBridgeClaimProvider,
+        status: RigaBridgeProviderStatus,
+    },
+    DirectLocal(LocalOpenAiClaimProvider),
 }
 
 impl PreparedExtraction {
     /// Run the provider request. Drops neither the consent binding nor the
     /// event: claims are validated against the same status snapshot.
     pub fn extract(&self) -> Result<Vec<ClaimRecord>, NipError> {
-        self.provider.extract_with_status(&self.event, &self.status)
+        match &self.provider {
+            PreparedClaimProvider::Riga { provider, status } => {
+                provider.extract_with_status(&self.event, status)
+            }
+            PreparedClaimProvider::DirectLocal(provider) => provider.extract(&self.event),
+        }
     }
 }
 
@@ -171,7 +186,7 @@ pub enum NipError {
     SemanticUnavailable,
     #[error("event was not found in the local ledger")]
     EventNotFound,
-    #[error("the configured RIGA provider is unavailable")]
+    #[error("the selected claim-extraction provider is unavailable")]
     ProviderUnavailable,
     #[error("claim extraction failed: {0}")]
     ExtractionRejected(String),
@@ -237,7 +252,7 @@ impl NipService {
                 duckdb_store: true,
                 podcast_rss_subscriptions: true,
                 local_audio_transcription: self.config.local_asr_available(),
-                claim_extraction: self.config.riga_bridge().is_some(),
+                claim_extraction: self.config.claim_extraction_configured(),
                 parquet_export: true,
                 semantic_search: true,
             },
@@ -1163,9 +1178,12 @@ impl NipService {
     }
 
     /// Safe provider/consent view for the workspace. A missing or unreachable
-    /// bridge is reported explicitly; NIP never substitutes a different model or
-    /// falls back to the deterministic fake provider.
+    /// provider is reported explicitly; NIP never substitutes a different model
+    /// or falls back to the deterministic fake provider.
     pub fn provider_status(&self) -> Result<ProviderStatus, NipError> {
+        if self.config.active_claim_provider() == ClaimProviderMode::DirectLocal {
+            return Ok(self.direct_local_provider_status());
+        }
         let Some(bridge) = self.bridge_provider() else {
             return Ok(ProviderStatus {
                 configured: false,
@@ -1206,6 +1224,58 @@ impl NipService {
             }
         };
         self.status_from_bridge(status)
+    }
+
+    fn direct_local_provider_status(&self) -> ProviderStatus {
+        let Some(config) = self.config.local_llm() else {
+            return ProviderStatus {
+                configured: false,
+                bridge_state: "not_configured".into(),
+                provider_kind: Some("local".into()),
+                provider_id: Some("direct-local".into()),
+                model: None,
+                reasoning_effort: None,
+                provider_api: Some("chat_completions".into()),
+                provider_type: Some("open_ai_compatible_local".into()),
+                remote: false,
+                consent: "not_required".into(),
+                consent_recorded_at: None,
+                disclosure: None,
+                extraction_state: "unavailable".into(),
+                warnings: vec!["direct_local_model_not_configured".into()],
+            };
+        };
+        let provider = LocalOpenAiClaimProvider::new(config);
+        let (state, warnings) = match provider.check_model() {
+            Ok(()) => ("available", Vec::new()),
+            Err(LocalModelError::ModelNotFound) => {
+                ("unavailable", vec!["direct_local_model_not_listed".into()])
+            }
+            Err(LocalModelError::Unavailable) => {
+                ("unavailable", vec!["direct_local_model_unavailable".into()])
+            }
+        };
+        ProviderStatus {
+            configured: true,
+            bridge_state: if state == "available" {
+                "ready"
+            } else {
+                "unavailable"
+            }
+            .into(),
+            provider_kind: Some("local".into()),
+            provider_id: Some("direct-local".into()),
+            model: Some(config.model().to_owned()),
+            reasoning_effort: None,
+            provider_api: Some("chat_completions".into()),
+            provider_type: Some("open_ai_compatible_local".into()),
+            remote: false,
+            consent: "not_required".into(),
+            consent_recorded_at: None,
+            disclosure: None,
+            extraction_state: state.into(),
+            warnings,
+        }
     }
 
     fn status_from_bridge(
@@ -1284,6 +1354,9 @@ impl NipService {
         reason: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<ProviderConsent, NipError> {
+        if self.config.active_claim_provider() != ClaimProviderMode::Riga {
+            return Err(NipError::RemoteProviderRequired);
+        }
         let actor = actor.trim();
         if actor.is_empty() {
             return Err(NipError::InvalidConsentRequest);
@@ -1338,6 +1411,9 @@ impl NipService {
         reason: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<ProviderConsent, NipError> {
+        if self.config.active_claim_provider() != ClaimProviderMode::Riga {
+            return Err(NipError::RemoteProviderRequired);
+        }
         let actor = actor.trim();
         if actor.is_empty() {
             return Err(NipError::InvalidConsentRequest);
@@ -1395,6 +1471,20 @@ impl NipService {
         event_id: &str,
     ) -> Result<PreparedExtraction, NipError> {
         let event = self.store.event(event_id)?.ok_or(NipError::EventNotFound)?;
+        if self.config.active_claim_provider() == ClaimProviderMode::DirectLocal {
+            let config = self
+                .config
+                .local_llm()
+                .ok_or(NipError::ProviderUnavailable)?;
+            let provider = LocalOpenAiClaimProvider::new(config);
+            provider
+                .check_model()
+                .map_err(|_| NipError::ProviderUnavailable)?;
+            return Ok(PreparedExtraction {
+                event,
+                provider: PreparedClaimProvider::DirectLocal(provider),
+            });
+        }
         let provider = self
             .bridge_provider()
             .ok_or(NipError::ProviderUnavailable)?;
@@ -1418,8 +1508,7 @@ impl NipService {
         }
         Ok(PreparedExtraction {
             event,
-            provider,
-            status,
+            provider: PreparedClaimProvider::Riga { provider, status },
         })
     }
 
@@ -3331,6 +3420,57 @@ mod tests {
                 "2026-11-17T09:00:00Z".parse().unwrap(),
             )
             .unwrap()
+    }
+
+    #[test]
+    fn direct_local_selection_never_falls_back_to_riga() {
+        let temp = tempdir().unwrap();
+        let (fixture, bridge_url) = start_bridge_fixture(remote_status("provider-a", "model-a"));
+        let closed_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let local_port = closed_listener.local_addr().unwrap().port();
+        drop(closed_listener);
+        let config = NipConfig::resolve(
+            &BTreeMap::from([
+                (
+                    "NIP_DATA_DIR".to_owned(),
+                    temp.path().join("data").to_string_lossy().into_owned(),
+                ),
+                ("NIP_CLAIM_PROVIDER".into(), "direct_local".into()),
+                (
+                    "NIP_LOCAL_LLM_URL".into(),
+                    format!("http://127.0.0.1:{local_port}/v1"),
+                ),
+                ("NIP_LOCAL_LLM_MODEL".into(), "local-model".into()),
+                ("NIP_RIGA_BRIDGE_URL".into(), bridge_url),
+                ("NIP_RIGA_BRIDGE_TOKEN".into(), fixture.token.clone()),
+            ]),
+            temp.path(),
+            None,
+            true,
+        )
+        .unwrap();
+        let mut service = NipService::open(config).unwrap();
+        let event = import_bridge_event(&mut service);
+
+        let status = service.provider_status().unwrap();
+        assert_eq!(status.provider_id.as_deref(), Some("direct-local"));
+        assert_eq!(status.model.as_deref(), Some("local-model"));
+        assert_eq!(status.extraction_state, "unavailable");
+        assert!(status
+            .warnings
+            .contains(&"direct_local_model_unavailable".into()));
+        assert_eq!(fixture.status_requests.load(Ordering::Relaxed), 0);
+        assert!(matches!(
+            service.grant_remote_consent("local-user", None, Utc::now()),
+            Err(NipError::RemoteProviderRequired)
+        ));
+        assert!(matches!(
+            service.extract_claims_from_event(event.event_id.as_str()),
+            Err(NipError::ProviderUnavailable)
+        ));
+        assert_eq!(fixture.status_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(fixture.extraction_requests.load(Ordering::Relaxed), 0);
+        assert!(service.claims().unwrap().is_empty());
     }
 
     #[test]

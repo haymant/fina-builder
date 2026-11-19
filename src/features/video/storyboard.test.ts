@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { buildTranscriptStoryboard } from './storyboard'
+import { claimsForEvent } from './claim-selection'
+import { buildSelectedClaimsStoryboard, buildTranscriptStoryboard } from './storyboard'
+import type { NipClaim } from '../narrative/types'
 import type { VideoEpisode, VideoProject, VideoSourceEvent } from './types'
 
 const timestamp = '2026-11-19T00:00:00.000Z'
@@ -23,6 +25,22 @@ const episode: VideoEpisode = {
 function idFactory() {
   let value = 0
   return (prefix: string) => `${prefix}-${++value}`
+}
+
+const selectedClaimText = 'The fixture research team expects policy to remain restrictive.'
+const selectedQuote = 'expects policy to remain restrictive'
+const selectedStart = Array.from(event.content_text ?? '').join('').indexOf(selectedQuote)
+const selectedClaim: NipClaim = {
+  claim_id: 'claim-policy-1',
+  claim_text: selectedClaimText,
+  speaker_or_author: 'fixture research team',
+  confidence_millis: 900,
+  extraction_run_id: 'claim-run-1',
+  provider: 'fixture-only',
+  model: 'fixture-model',
+  prompt_version: 'fixture-v1',
+  extracted_at: timestamp,
+  evidence: [{ event_id: event.event_id, quote: selectedQuote, start_offset: selectedStart, end_offset: selectedStart + Array.from(selectedQuote).length }],
 }
 
 describe('buildTranscriptStoryboard', () => {
@@ -58,5 +76,34 @@ describe('buildTranscriptStoryboard', () => {
   it('rejects an event without transcript text instead of fabricating narration', () => {
     expect(() => buildTranscriptStoryboard({ ...event, content_text: null }, project, episode, idFactory(), timestamp))
       .toThrow('no transcript text')
+  })
+})
+
+describe('buildSelectedClaimsStoryboard', () => {
+  it('creates slides only for explicit selections and carries exact claim and event spans', () => {
+    const unrelatedClaim: NipClaim = { ...selectedClaim, claim_id: 'claim-unselected', claim_text: 'This claim was not selected.' }
+    const options = claimsForEvent(event, [selectedClaim, unrelatedClaim])
+    const selected = options.filter((option) => option.claim.claim_id === selectedClaim.claim_id)
+    const draft = buildSelectedClaimsStoryboard(event, selected, project, episode, idFactory(), timestamp)
+
+    expect(draft.document.slides).toHaveLength(1)
+    expect(draft.document.slides[0].scene.narration_text).toContain(selectedClaimText)
+    expect(draft.document.slides[0].scene.narration_text).not.toContain('This claim was not selected')
+    expect(draft.document.slides[0].evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ evidence_kind: 'claim', evidence_id: selectedClaim.claim_id, start_offset: selectedStart, end_offset: selectedStart + Array.from(selectedQuote).length, quote: selectedQuote }),
+      expect.objectContaining({ evidence_kind: 'event', evidence_id: event.event_id, start_offset: selectedStart, end_offset: selectedStart + Array.from(selectedQuote).length, quote: selectedQuote }),
+    ]))
+    expect(draft.visualSpecs[0].sources.map((source) => [source.source_kind, source.source_id])).toEqual([
+      ['claim', selectedClaim.claim_id],
+      ['event', event.event_id],
+    ])
+    expect(draft.visualSpecs[0].payload).toMatchObject({ kind: 'evidence_card', disclosure: 'Exact quote matched; claim support unverified.' })
+  })
+
+  it('rejects empty selection or an evidence span that no longer matches the retained event', () => {
+    expect(() => buildSelectedClaimsStoryboard(event, [], project, episode, idFactory(), timestamp))
+      .toThrow('Select at least one retained claim')
+    expect(() => buildSelectedClaimsStoryboard(event, [{ claim: selectedClaim, evidence: [{ ...selectedClaim.evidence[0], quote: 'not the source' }] }], project, episode, idFactory(), timestamp))
+      .toThrow('no exact matching transcript span')
   })
 })
