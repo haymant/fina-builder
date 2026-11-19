@@ -26,6 +26,15 @@ describe('DirectLocalSettingsPanel', () => {
     expect(invokeMock).toHaveBeenCalledWith('nip_get_local_model_settings')
   })
 
+  it('handles an unconfigured first run where the host returns null URL and model', async () => {
+    invokeMock.mockResolvedValue({ baseUrl: null, model: null, saved: false, envOverride: false })
+    render(<DirectLocalSettingsPanel status={null} />)
+    expect(await screen.findByLabelText('Model server URL')).toHaveValue('')
+    expect(screen.getByLabelText('Exact model ID')).toHaveValue('')
+    expect(screen.getByRole('button', { name: 'Check model' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Save for next launch' })).toBeDisabled()
+  })
+
   it('checks readiness by probing the selected model and shows ready status', async () => {
     invokeMock.mockImplementation((command: string) => command === 'nip_get_local_model_settings'
       ? Promise.resolve(savedSettings)

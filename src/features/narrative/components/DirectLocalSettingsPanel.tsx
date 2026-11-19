@@ -6,8 +6,8 @@ import { PanelCard } from '../../shared/components/PanelCard'
 import type { NipProviderStatus } from '../types'
 
 type LocalModelSettings = {
-  baseUrl: string
-  model: string
+  baseUrl: string | null
+  model: string | null
   saved: boolean
   envOverride: boolean
 }
@@ -60,8 +60,8 @@ export function DirectLocalSettingsPanel({ status }: { status: NipProviderStatus
       .then((loaded) => {
         if (!active) return
         setSettings(loaded)
-        setBaseUrl(loaded.baseUrl)
-        setModel(loaded.model)
+        setBaseUrl(loaded.baseUrl ?? '')
+        setModel(loaded.model ?? '')
       })
       .catch((reason: unknown) => {
         if (!active) return
