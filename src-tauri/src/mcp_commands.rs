@@ -244,6 +244,18 @@ pub fn engine_env(app: &AppHandle) -> Vec<(String, String)> {
             collected.push((key, value));
         }
     }
+    // Match `dev:http`: a clean desktop checkout may not have a `.env` yet,
+    // but TAC and the qlib R&D service still require an explicit lake root.
+    // Keep credentials/configuration host-owned while making the disposable
+    // workspace lake deterministic for local development.
+    if std::env::var_os("TAC_LAKE_DIR").is_none()
+        && !collected.iter().any(|(key, _)| key == "TAC_LAKE_DIR")
+    {
+        collected.push((
+            "TAC_LAKE_DIR".to_string(),
+            workspace.join(".lake").to_string_lossy().into_owned(),
+        ));
+    }
     collected
 }
 

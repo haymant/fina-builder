@@ -68,6 +68,7 @@ sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 export PATH="$HOME/.cargo/bin:$PATH"
 rustup toolchain install 1.99.0 --profile minimal
+git submodule update --init --recursive
 npm ci
 ./scripts/ci/install-tauri-linux-deps.sh       # optional for browser-only work
 uv sync --project modules/tac-qlib --locked    # optional for RD/book sidecars
@@ -151,9 +152,17 @@ Configuration: `VITE_RIGA_UPSTREAM` / `VITE_TAC_UPSTREAM` override the proxy tar
 ### 2. Desktop mode (Tauri IPC + stdio engines)
 
 ```bash
+git submodule update --init --recursive
 npm run tauri:dev      # window with IPC; starts trade-repo MCP + Vite and spawns engines over stdio
 npm run tauri:build    # native bundles for the current platform
 ```
+
+`git pull` updates the parent repository but does not populate or update gitlink submodules.
+The Trading 2ⁿd MCP sidecar is built from the checked-out `modules/tac-engine` submodule and
+the RIGA sidecar from `modules/riga-flow`; they are compiled locally rather than committed as
+binaries. `npm run tauri:dev` builds them before starting the desktop app. If either submodule
+is missing, startup now stops with an instruction to run the recursive submodule command
+instead of allowing a later opaque “MCP connection closed” error.
 
 The shell resolves `riga-mcp` / `tac-engine` from `RIGA_MCP_BIN` / `TAC_ENGINE_BIN`, else the
 submodule default path (`modules/<dir>/target/{release,debug}`), else a bundled sidecar. It
@@ -165,6 +174,10 @@ UI, logs or persisted state.
 The TAC desktop sidecar still uses the same stdio transport and full Alpaca tool set when both
 API keys are configured. If both are omitted, it starts in the same Yahoo daily-stock/FX fallback
 mode as web mode; account/order tools are omitted, and Alpaca-only market data remains unavailable.
+When `TAC_LAKE_DIR` is not set, desktop mode passes the disposable workspace default
+`<checkout>/.lake` to TAC and R&D, matching web mode. R&D is launched by the tracked
+`scripts/tac-qlib-rd-mcp` wrapper, which runs `uv sync --project modules/tac-qlib --locked`
+and starts `modules/tac-qlib/tac_qlib/rd_server.py`; install `uv` before opening the desktop app.
 
 ### Sidecar catalog and setup
 

@@ -5,7 +5,9 @@
 # relative path** (`modules/<dir>/target/release/<bin>`, §3.10), which the Rust
 # resolver checks first. Staging into `src-tauri/binaries/` is a convenience for
 # packaged builds only, so this script is **best-effort**: a missing submodule or
-# a build failure logs a warning and exits 0, never breaking `tauri dev`.
+# a missing submodule or build failure must fail early with an actionable setup
+# error rather than allowing Tauri to start and later report an opaque MCP
+# connection-closed error.
 #
 #   bash scripts/build-engine-sidecar.sh riga-flow riga-mcp RIGA_MCP_BIN
 set -uo pipefail
@@ -19,8 +21,8 @@ env_var="${3:?usage: build-engine-sidecar.sh <submodule-dir> <bin> <env-var>}"
 
 manifest="modules/$dir/Cargo.toml"
 if [[ ! -f "$manifest" ]]; then
-  echo "$bin sidecar: submodule modules/$dir not present; skipping (set $env_var to override)" >&2
-  exit 0
+  echo "$bin sidecar: required submodule modules/$dir is not initialized. Run: git submodule update --init --recursive" >&2
+  exit 1
 fi
 
 triple="$(rustc -vV | sed -n 's/^host: //p')"
@@ -29,8 +31,8 @@ if [[ "$triple" == *windows* ]]; then exe_suffix=".exe"; out="$bin.exe"; fi
 
 echo "$bin sidecar: building modules/$dir for $triple"
 if ! cargo build --release --manifest-path "$manifest" --bin "$bin"; then
-  echo "$bin sidecar: build failed; the submodule default path will be used at runtime" >&2
-  exit 0
+  echo "$bin sidecar: build failed; install the pinned Rust toolchain and retry" >&2
+  exit 1
 fi
 
 src="modules/$dir/target/release/$out"

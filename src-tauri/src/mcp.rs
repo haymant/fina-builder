@@ -64,7 +64,11 @@ impl McpProcess {
             .envs(env.iter().map(|(key, value)| (key.clone(), value.clone())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            // Keep launcher/sidecar diagnostics visible during desktop
+            // development. Without this, a missing `uv`, Python dependency,
+            // or lake configuration collapses into only "MCP connection
+            // closed" at the renderer boundary.
+            .stderr(Stdio::inherit())
             .spawn()
             .map_err(|e| format!("Could not start {binary}: {e}"))?;
         let stdin = child
