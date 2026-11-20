@@ -24,17 +24,17 @@ async function installRdFixture(page: Page) {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ jsonrpc: '2.0', id: body.id, result: {} }) })
   })
 }
-test('loads read-only R&D experiment to run result workflow through browser MCP transport', { tag: [TAG.journey.rdReadOnly, TAG.feature.rd] }, async ({ page, workspace }) => {
+test('loads R&D experiment to run result workflow through browser MCP transport', { tag: [TAG.journey.rdReadOnly, TAG.feature.rd] }, async ({ page, workspace }) => {
   await installRdFixture(page)
   await page.getByTestId('menu-rd').click()
   await page.getByTestId('menuitem-rd-experiments').click()
   await expect(page.getByTestId('rd-workspace')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Experiments', exact: true, level: 1 })).toBeVisible()
-  await expect(page.getByText('Fixture alpha signal')).toBeVisible()
+  await expect(page.getByRole('button', { name: /Fixture alpha signal/ })).toBeVisible()
   await expect(workspace.breadcrumb).toContainText('R&D')
   await page.getByText('baseline').click()
   await expect(page.getByRole('heading', { name: 'Experiments', exact: true, level: 1 })).toBeVisible()
-  await expect(page.getByText('This view is read-only; training, deletion, notes mutation, and artifact writes are not enabled.')).toBeVisible()
+  await expect(page.getByText(/Schedules are currently unsupported/)).toBeVisible()
   await page.getByTestId('menu-rd').click()
   await page.getByTestId('menuitem-rd-results').click()
   await page.reload()

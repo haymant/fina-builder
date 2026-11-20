@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { validateRdToolCall, validateRiskcubeToolCall } from '../../../scripts/lib/mcpAllowlist.mjs'
+import { validateRdToolCall, validateRiskcubeToolCall, validateTacToolCall } from '../../../scripts/lib/mcpAllowlist.mjs'
 
 describe('browser MCP host allowlists', () => {
   it('accepts only the named R&D read operations and identifiers', () => {
@@ -8,6 +8,14 @@ describe('browser MCP host allowlists', () => {
     expect(() => validateRdToolCall({ name: 'rd_exp_result', arguments: { path: '/tmp/x' } })).toThrow(/argument is not allowed: path/)
     expect(() => validateRdToolCall({ name: 'rd_exp_result', arguments: { tracking_store: '/tmp/mlruns' } })).toThrow(/argument is not allowed: tracking_store/)
     expect(() => validateRdToolCall({ name: 'delete_experiment', arguments: {} })).toThrow(/tool is not allowed/)
+  })
+
+  it('accepts bounded writes and rejects path/precision escape hatches', () => {
+    expect(() => validateTacToolCall({ name: 'place_order', arguments: { symbol: 'AAPL', side: 'buy', type: 'market', time_in_force: 'day', qty: '1.000000000000000001' } })).not.toThrow()
+    expect(() => validateTacToolCall({ name: 'place_order', arguments: { symbol: 'AAPL', side: 'buy', type: 'market', time_in_force: 'day', qty: 1, path: '/tmp' } })).toThrow(/argument is not allowed/)
+    expect(() => validateTacToolCall({ name: 'place_order', arguments: { symbol: 'AAPL', side: 'buy', type: 'market', time_in_force: 'day', qty: '1', notional: '2' } })).toThrow(/exactly one/)
+    expect(() => validateRdToolCall({ name: 'rd_trace_start', arguments: { rational: 'test hypothesis', path: '/tmp' } })).toThrow(/argument is not allowed/)
+    expect(() => validateRdToolCall({ name: 'rd_train', arguments: { out_dir: '/tmp' } })).toThrow(/argument is not allowed/)
   })
 
   it('accepts bounded semantic RiskCube queries and rejects SQL/path escape hatches', () => {

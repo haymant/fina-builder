@@ -41,4 +41,13 @@ describe('Trading 2nd API transport boundary', () => {
     setTacTransport({ callTool: async () => { throw new TacUnavailableError('TAC credentials are not configured') } })
     await expect(trading2Api.getAccount()).rejects.toMatchObject<Partial<Trading2Error>>({ kind: 'unavailable', tool: 'get_account' })
   })
+
+  it('submits and cancels using named TAC operations without floating-point conversion', async () => {
+    const callTool = vi.fn(async (name: string) => name === 'place_order' ? { id: 'o1', symbol: 'AAPL', qty: '1.000000000000000001', status: 'accepted' } : { id: 'o1', symbol: 'AAPL', status: 'canceled' })
+    setTacTransport({ callTool: callTool as unknown as <T>(name: string, args?: unknown) => Promise<T> })
+    await trading2Api.placeOrder({ symbol: 'aapl', side: 'buy', type: 'market', timeInForce: 'day', qty: '1.000000000000000001' })
+    await trading2Api.cancelOrder('o1')
+    expect(callTool).toHaveBeenNthCalledWith(1, 'place_order', expect.objectContaining({ symbol: 'AAPL', qty: '1.000000000000000001' }))
+    expect(callTool).toHaveBeenNthCalledWith(2, 'cancel_order', { order_id: 'o1' })
+  })
 })

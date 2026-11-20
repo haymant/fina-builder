@@ -77,7 +77,7 @@ async function installTacFixture(page: Page) {
   })
 }
 
-test('loads read-only Trading 2nd account workflow through browser MCP transport', {
+test('loads Trading 2nd account workflow through browser MCP transport', {
   tag: [TAG.journey.trading2ReadOnly, TAG.feature.trading2],
 }, async ({ page, workspace }) => {
   await installTacFixture(page)
@@ -85,11 +85,11 @@ test('loads read-only Trading 2nd account workflow through browser MCP transport
   await page.getByTestId('menuitem-trading2-overview').click()
 
   await expect(page.getByTestId('trading2-workspace')).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Trading 2ⁿᵈ overview' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Trading 2ⁿd overview' })).toBeVisible()
   await expect(page.getByText('125,000.50', { exact: false })).toBeVisible()
   await expect(page.getByText('AAPL')).toBeVisible()
   await expect(page.getByText('NVDA')).toBeVisible()
-  await expect(page.getByText('Mutations are intentionally not enabled in this slice.')).toBeVisible()
+  await expect(page.getByText('Named TAC order writes require immediate confirmation; credentials and paper/live mode remain host-controlled.')).toBeVisible()
   await expect(workspace.breadcrumb).toContainText('Trading 2ⁿᵈ')
 
   await page.getByTestId('menu-trading2').click()

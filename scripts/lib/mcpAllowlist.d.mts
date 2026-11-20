@@ -4,4 +4,5 @@ export interface McpToolParams {
 }
 
 export function validateRdToolCall(params?: McpToolParams): void
+export function validateTacToolCall(params?: McpToolParams): void
 export function validateRiskcubeToolCall(params?: McpToolParams): void

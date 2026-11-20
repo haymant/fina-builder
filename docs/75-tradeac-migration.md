@@ -442,3 +442,10 @@ npm run tauri:build
 7. Do not expose a feature in navigation until its primary workflow, setup state, and failure states have tests.
 8. Prefer existing fina-builder transport, MCP, storage, theme, navigation, and test conventions over introducing a parallel framework.
 9. Any change to database ownership, OLAP engine choice, Python packaging, or broker side-effect policy requires an ADR or an update to this document before implementation.
+
+
+## 7. Write-capability slice (2026-11-20)
+
+The first write slice is implemented in `fina-builder` only. Trading 2ⁿd uses the canonical TAC tools `place_order`, `get_order`, and `cancel_order` from the pinned `modules/tac-engine` source (`89fb0c89e19e72c05131f8b1022016a9098e254f`; definitions in `src/server.rs` and `src/params.rs`). The browser bridge and Tauri host enforce exact mutation argument allowlists and bounded order validation. The UI performs immediate exact-action confirmation and refreshes the acknowledgement through `list_orders`/`get_order`; it does not retry ambiguous mutations.
+
+R&D uses the tracked `modules/tac-qlib` service tools `rd_trace_start`, `rd_trace_get`, `rd_trace_list`, and `rd_train` (registration in `tac_qlib/trace.py` and `tac_qlib/rd_server.py`). Experiment creation and run dispatch are confirmed durable/compute actions. Paths such as `out_dir`, `lake_root`, `model_path`, `mlruns_dir`, tracking-store URIs, database URLs, and credentials are not renderer-selectable. Schedule writes remain unsupported because no canonical scheduler owner/lifecycle has been selected; no fake schedule success is rendered. TradeAC remains an unchanged read-only reference.

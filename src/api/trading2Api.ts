@@ -1,6 +1,6 @@
 import { TacUnavailableError, tac } from './tacTransport'
 
-export type Trading2ErrorKind = 'unavailable' | 'backend' | 'validation'
+export type Trading2ErrorKind = 'unavailable' | 'backend' | 'validation' | 'timeout' | 'ambiguous' | 'conflict' | 'not-found'
 
 export class Trading2Error extends Error {
   readonly kind: Trading2ErrorKind
@@ -53,6 +53,18 @@ export interface Trading2Order {
   status?: string
   submittedAt?: string
   raw: Record<string, unknown>
+}
+
+export type Trading2OrderInput = {
+  symbol: string
+  side: 'buy' | 'sell'
+  type: 'market' | 'limit' | 'stop' | 'stop_limit' | 'trailing_stop'
+  timeInForce: 'day' | 'gtc' | 'opg' | 'cls' | 'ioc' | 'fok'
+  qty?: string
+  notional?: string
+  limitPrice?: string
+  stopPrice?: string
+  clientOrderId?: string
 }
 
 export interface Trading2NewsItem {
@@ -109,6 +121,10 @@ function errorFor(tool: string, error: unknown): Trading2Error {
   const lower = message.toLowerCase()
   const kind: Trading2ErrorKind = lower.includes('credential') || lower.includes('alpaca') || lower.includes('not configured')
     ? 'unavailable'
+    : lower.includes('timeout') || lower.includes('timed out') ? 'timeout'
+    : lower.includes('not found') ? 'not-found'
+    : lower.includes('already') || lower.includes('conflict') ? 'conflict'
+    : lower.includes('ambiguous') ? 'ambiguous'
     : 'backend'
   return new Trading2Error(message, kind, tool)
 }
@@ -205,6 +221,14 @@ export const trading2Api = {
   listOrders: async (status = 'open') => normalizeOrders(await call('list_orders', { status })),
   getNews: async (symbols?: string[]) => normalizeNews(await call('get_news', symbols?.length ? { symbols: symbols.join(','), limit: 25 } : { limit: 25 })),
   getWatchlist: async () => normalizeWatchlist(await call('get_lake_watchlist')),
+  placeOrder: async (input: Trading2OrderInput) => normalizeOrders([await call('place_order', {
+    symbol: input.symbol.trim().toUpperCase(), side: input.side, type: input.type, time_in_force: input.timeInForce,
+    ...(input.qty ? { qty: input.qty } : {}), ...(input.notional ? { notional: input.notional } : {}),
+    ...(input.limitPrice ? { limit_price: input.limitPrice } : {}), ...(input.stopPrice ? { stop_price: input.stopPrice } : {}),
+    ...(input.clientOrderId ? { client_order_id: input.clientOrderId } : {}),
+  })])[0],
+  getOrder: async (orderId: string) => normalizeOrders([await call('get_order', { order_id: orderId })])[0],
+  cancelOrder: async (orderId: string) => normalizeOrders([await call('cancel_order', { order_id: orderId })])[0],
   loadSnapshot: async (): Promise<Trading2Snapshot> => {
     const results = await Promise.allSettled([
       trading2Api.getAccount(),

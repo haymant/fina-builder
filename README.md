@@ -490,3 +490,12 @@ See [playwright/README.md](./playwright/README.md) for browser-suite setup, reco
   `src/features/riga/instrument/` (schema, adapters, `toRequest`).
 - **Workspace state:** `src/store/` (dashboards in `explorerStore.ts`, the instrument in
   `instrumentStore.ts`). It persists to `localStorage` under the existing `fina-*` keys.
+
+
+### Trading 2ⁿd and R&D writes
+
+The current write slice is capability-first and host-authorized. Trading 2ⁿd exposes named TAC `place_order`, `get_order`, and `cancel_order` operations. Order fields are validated at both the browser bridge and Tauri host boundary, decimal quantities/prices remain strings, and the UI confirms the exact symbol, side, quantity, type, price, time-in-force, and host-controlled account/environment immediately before dispatch. After a mutation, the UI refreshes through the read API; it does not optimistically fabricate broker state. No automatic retry is performed after an ambiguous broker result.
+
+R&D exposes the tracked `rd_trace_start`, `rd_trace_get`, `rd_trace_list`, and `rd_train` operations through the named qlib service. Experiment creation and run dispatch require immediate confirmation; qlib/MLflow artifacts and model files remain owned by the service and are not copied into fina-builder. Renderer arguments cannot select a path, URI, tracking store, executable, database, or credentials. Scheduler create/update/enable/pause/resume remains explicitly unsupported until a canonical scheduler owner and lifecycle are selected.
+
+The default tests use fixtures/stubs only. Passing fixture journeys does not imply live broker or production R&D readiness: host credentials, paper/live configuration, lake, MLflow/tracking store, and service availability remain runtime prerequisites.

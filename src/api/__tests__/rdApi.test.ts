@@ -12,10 +12,20 @@ describe('R&D API read-only boundary', () => {
     expect(callTool).toHaveBeenNthCalledWith(2, 'rd_exp_get_experiment', { experiment_id: '7' })
     expect(callTool).toHaveBeenNthCalledWith(3, 'rd_exp_result', { run_id: 'r1', experiment_id: '7' })
   })
-  it('exposes no mutation methods', () => {
+  it('exposes only named supported mutation methods', () => {
     const api = createRdApi({ callTool: vi.fn() })
+    expect(api).toHaveProperty('createExperiment')
+    expect(api).toHaveProperty('createRun')
     expect(api).not.toHaveProperty('deleteExperiment')
     expect(api).not.toHaveProperty('setNotes')
+  })
+  it('sends safe experiment and run payloads', async () => {
+    const callTool = vi.fn(async (name: string) => name === 'rd_trace_start' ? { experiment_id: 9 } : { status: 'started', background: true })
+    const api = createRdApi({ callTool })
+    await api.createExperiment({ rational: 'test hypothesis', experimentName: 'alpha' })
+    await api.createRun({ experimentName: 'alpha', trainStart: '2025-01-01', trainEnd: '2025-12-31', wait: false })
+    expect(callTool).toHaveBeenNthCalledWith(1, 'rd_trace_start', { rational: 'test hypothesis', experiment_name: 'alpha' })
+    expect(callTool).toHaveBeenNthCalledWith(2, 'rd_train', expect.objectContaining({ experiment_name: 'alpha', train_start: '2025-01-01', train_end: '2025-12-31', wait: false }))
   })
   it('maps missing sidecar failures to unavailable', async () => {
     const api = createRdApi({ callTool: async () => { throw new Error('TAC_LAKE_DIR is not set') } })

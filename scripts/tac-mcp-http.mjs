@@ -16,6 +16,7 @@ import { existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createStdioClient } from './lib/mcpStdio.mjs'
+import { validateTacToolCall } from './lib/mcpAllowlist.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const binary = process.env.TAC_ENGINE_BIN ?? resolve(root, 'modules/tac-engine/target/release/tac-engine')
@@ -73,6 +74,7 @@ const server = createServer(async (req, res) => {
     return
   }
   try {
+    if (message.method === 'tools/call') validateTacToolCall(message.params)
     const reply = await client.call(message)
     res.setHeader('Mcp-Session-Id', 'tac-bridge')
     if (reply === null) {

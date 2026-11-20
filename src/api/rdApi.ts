@@ -63,6 +63,8 @@ export interface RdResult {
   explanation: Record<string, unknown>
   warnings: string[]
 }
+export interface RdExperimentDraft { rational: string; details?: string; experimentName?: string; evolvedFrom?: string }
+export interface RdRunConfig { experimentName: string; trainStart: string; trainEnd: string; validStart?: string; validEnd?: string; testStart?: string; testEnd?: string; universe?: string; market?: string; freq?: string; wait?: boolean }
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 const array = (value: unknown, key: string): unknown[] => Array.isArray(value) ? value : Array.isArray(record(value)[key]) ? record(value)[key] as unknown[] : []
 const text = (value: unknown): string | null => value === null || value === undefined ? null : String(value)
@@ -93,10 +95,10 @@ function errorFor(tool: string, cause: unknown): RdApiError {
   const redacted = message.replace(/([a-z][a-z0-9+.-]*:\/\/)([^\s/@]+):([^\s/@]+)@/ig, '$1[REDACTED]@').replace(/(password|secret|token|api[_-]?key)\s*[=:]\s*[^\s,;]+/ig, '$1=[REDACTED]')
   return new RdApiError(redacted, kind, tool)
 }
-const READ_ONLY_TOOLS = new Set(['rd_exp_list', 'rd_exp_get_experiment', 'rd_exp_get_run', 'rd_exp_input', 'rd_exp_result', 'rd_exp_model', 'rd_exp_lineage'])
+const ALLOWED_TOOLS = new Set(['rd_exp_list', 'rd_exp_get_experiment', 'rd_exp_get_run', 'rd_exp_input', 'rd_exp_result', 'rd_exp_model', 'rd_exp_lineage', 'rd_trace_start', 'rd_trace_get', 'rd_trace_list', 'rd_train'])
 export function createRdApi(transport: RdTransport) {
   async function call<T>(tool: string, args: Record<string, unknown> = {}): Promise<T> {
-    if (!READ_ONLY_TOOLS.has(tool)) throw new RdApiError(`R&D tool is not allowed: ${tool}`, 'validation', tool)
+    if (!ALLOWED_TOOLS.has(tool)) throw new RdApiError(`R&D tool is not allowed: ${tool}`, 'validation', tool)
     try { return await transport.callTool(tool, args) as T } catch (cause) { throw errorFor(tool, cause) }
   }
   return {
@@ -105,6 +107,10 @@ export function createRdApi(transport: RdTransport) {
     async getRun(runId: string, experimentId?: string): Promise<RdRunDetail> { return normalizeRun(await call('rd_exp_get_run', { run_id: runId, ...(experimentId ? { experiment_id: experimentId } : {}) })) },
     async getResult(runId: string, experimentId?: string): Promise<RdResult> { const raw = record(await call('rd_exp_result', { run_id: runId, ...(experimentId ? { experiment_id: experimentId } : {}) })); return { runId: text(raw.run_id ?? raw.runId) ?? runId, experimentId: text(raw.experiment_id ?? raw.experimentId) ?? experimentId ?? '', metrics: record(raw.metrics), headline: record(raw.headline), icSeries: array(raw.ic_series ?? raw.icSeries, '').map(record), groupReturns: record(raw.group_returns ?? raw.groupReturns), backtest: record(raw.backtest), explanation: record(raw.explanation), warnings: array(raw.warnings, '').map(String) } },
     async getInput(runId: string, experimentId?: string): Promise<Record<string, unknown>> { return record(await call('rd_exp_input', { run_id: runId, ...(experimentId ? { experiment_id: experimentId } : {}) })) },
+    async createExperiment(draft: RdExperimentDraft): Promise<Record<string, unknown>> { return record(await call('rd_trace_start', { rational: draft.rational, ...(draft.details ? { details: draft.details } : {}), ...(draft.experimentName ? { experiment_name: draft.experimentName } : {}), ...(draft.evolvedFrom ? { evolved_from: draft.evolvedFrom } : {}) })) },
+    async getTraceExperiment(experimentId: string): Promise<Record<string, unknown>> { return record(await call('rd_trace_get', { experiment_id: experimentId })) },
+    async listTraceExperiments(limit = 20): Promise<Record<string, unknown>[]> { return array(await call('rd_trace_list', { limit }), 'experiments').map(record) },
+    async createRun(config: RdRunConfig): Promise<Record<string, unknown>> { return record(await call('rd_train', { experiment_name: config.experimentName, train_start: config.trainStart, train_end: config.trainEnd, wait: config.wait ?? false, ...(config.validStart ? { valid_start: config.validStart } : {}), ...(config.validEnd ? { valid_end: config.validEnd } : {}), ...(config.testStart ? { test_start: config.testStart } : {}), ...(config.testEnd ? { test_end: config.testEnd } : {}), ...(config.universe ? { universe: config.universe } : {}), ...(config.market ? { market: config.market } : {}), ...(config.freq ? { freq: config.freq } : {}) })) },
   }
 }
 export function rdBaseUrl(): string { return (import.meta.env.VITE_RD_MCP_URL as string | undefined) ?? '/rd' }

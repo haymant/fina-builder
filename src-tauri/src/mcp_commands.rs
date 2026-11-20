@@ -136,14 +136,20 @@ pub fn get_tac_qlib_book_path(app: AppHandle) -> Result<String, String> {
 #[tauri::command]
 pub fn get_tac_qlib_rd_path(app: AppHandle) -> Result<String, String> {
     if let Ok(explicit) = std::env::var("TAC_QLIB_RD_BIN") {
-        if std::path::Path::new(&explicit).is_file() { return Ok(explicit); }
+        if std::path::Path::new(&explicit).is_file() {
+            return Ok(explicit);
+        }
     }
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace = manifest.join("..");
     let mut candidates = vec![workspace.join("scripts").join("tac-qlib-rd-mcp")];
-    if let Ok(dir) = app.path().resource_dir() { candidates.push(dir.join("tac-qlib-rd-mcp")); }
+    if let Ok(dir) = app.path().resource_dir() {
+        candidates.push(dir.join("tac-qlib-rd-mcp"));
+    }
     for candidate in candidates {
-        if candidate.is_file() { return Ok(candidate.to_string_lossy().into_owned()); }
+        if candidate.is_file() {
+            return Ok(candidate.to_string_lossy().into_owned());
+        }
     }
     Err("tac-qlib R&D launcher not found. Run from a fina-builder checkout with scripts/tac-qlib-rd-mcp and uv installed, or set TAC_QLIB_RD_BIN.".into())
 }
@@ -385,6 +391,7 @@ pub async fn tac_mcp_call_tool(
     let binary = get_tac_engine_path(app)?;
     let mcp = state.runtime.clone();
     let arguments = arguments.unwrap_or_else(|| json!({}));
+    validate_tac_tool_call(&name, &arguments)?;
     tauri::async_runtime::spawn_blocking(move || mcp.call_tool("tac", &binary, &name, arguments))
         .await
         .map_err(|e| format!("MCP worker failed: {e}"))?
@@ -433,34 +440,194 @@ pub fn book_mcp_reset(state: State<'_, McpState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn rd_mcp_list_tools(app: AppHandle, state: State<'_, McpState>) -> Result<Value, String> {
+pub async fn rd_mcp_list_tools(
+    app: AppHandle,
+    state: State<'_, McpState>,
+) -> Result<Value, String> {
     let binary = get_tac_qlib_rd_path(app)?;
     let mcp = state.runtime.clone();
-    tauri::async_runtime::spawn_blocking(move || { let (server, version, tools) = mcp.list_tools("rd", &binary)?; Ok::<Value, String>(json!({ "server": server, "version": version, "tools": tools })) }).await.map_err(|e| format!("MCP worker failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        let (server, version, tools) = mcp.list_tools("rd", &binary)?;
+        Ok::<Value, String>(json!({ "server": server, "version": version, "tools": tools }))
+    })
+    .await
+    .map_err(|e| format!("MCP worker failed: {e}"))?
 }
 
 #[tauri::command]
-pub async fn rd_mcp_call_tool(app: AppHandle, state: State<'_, McpState>, name: String, arguments: Option<Value>) -> Result<crate::mcp::McpCallResult, String> {
+pub async fn rd_mcp_call_tool(
+    app: AppHandle,
+    state: State<'_, McpState>,
+    name: String,
+    arguments: Option<Value>,
+) -> Result<crate::mcp::McpCallResult, String> {
     let binary = get_tac_qlib_rd_path(app)?;
     let mcp = state.runtime.clone();
     let arguments = arguments.unwrap_or_else(|| json!({}));
     validate_rd_tool_call(&name, &arguments)?;
-    tauri::async_runtime::spawn_blocking(move || mcp.call_tool("rd", &binary, &name, arguments)).await.map_err(|e| format!("MCP worker failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || mcp.call_tool("rd", &binary, &name, arguments))
+        .await
+        .map_err(|e| format!("MCP worker failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn rd_mcp_reset(state: State<'_, McpState>) -> Result<(), String> { state.runtime.try_reset("rd"); Ok(()) }
+pub fn rd_mcp_reset(state: State<'_, McpState>) -> Result<(), String> {
+    state.runtime.try_reset("rd");
+    Ok(())
+}
 
 pub fn validate_rd_tool_call(name: &str, arguments: &Value) -> Result<(), String> {
     let allowed: &[&str] = match name {
         "rd_exp_list" => &[],
         "rd_exp_get_experiment" => &["experiment_id"],
-        "rd_exp_get_run" | "rd_exp_input" | "rd_exp_result" | "rd_exp_model" | "rd_exp_lineage" => &["run_id", "experiment_id"],
+        "rd_exp_get_run" | "rd_exp_input" | "rd_exp_result" | "rd_exp_model" | "rd_exp_lineage" => {
+            &["run_id", "experiment_id"]
+        }
+        "rd_trace_start" => &["rational", "details", "experiment_name", "evolved_from"],
+        "rd_trace_get" => &["experiment_id"],
+        "rd_trace_list" => &["limit"],
+        "rd_train" => &[
+            "wait",
+            "market",
+            "universe",
+            "train_start",
+            "train_end",
+            "valid_start",
+            "valid_end",
+            "test_start",
+            "test_end",
+            "freq",
+            "features",
+            "label",
+            "learning_rate",
+            "num_leaves",
+            "num_boost_round",
+            "early_stopping_rounds",
+            "colsample_bytree",
+            "subsample",
+            "subsample_freq",
+            "reg_alpha",
+            "reg_lambda",
+            "seed",
+            "experiment_name",
+            "record_analysis",
+            "benchmark",
+            "topk",
+            "n_drop",
+            "account",
+            "risk_degree",
+            "open_cost",
+            "close_cost",
+            "min_cost",
+            "risk_limits",
+        ],
         _ => return Err(format!("R&D tool is not allowed: {name}")),
     };
-    let object = arguments.as_object().ok_or_else(|| "R&D arguments must be an object".to_string())?;
+    let object = arguments
+        .as_object()
+        .ok_or_else(|| "R&D arguments must be an object".to_string())?;
     if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
         return Err(format!("R&D argument is not allowed: {key}"));
+    }
+    Ok(())
+}
+
+fn validate_tac_tool_call(name: &str, arguments: &Value) -> Result<(), String> {
+    let allowed: &[&str] = match name {
+        "place_order" => &[
+            "symbol",
+            "side",
+            "type",
+            "time_in_force",
+            "qty",
+            "notional",
+            "limit_price",
+            "stop_price",
+            "trail_price",
+            "trail_percent",
+            "extended_hours",
+            "client_order_id",
+            "order_class",
+            "position_intent",
+        ],
+        "cancel_order" | "get_order" => &["order_id"],
+        _ => return Ok(()),
+    };
+    let object = arguments
+        .as_object()
+        .ok_or_else(|| "TAC arguments must be an object".to_string())?;
+    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(format!("TAC argument is not allowed: {key}"));
+    }
+    if name == "cancel_order" || name == "get_order" {
+        let id = object
+            .get("order_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "TAC order_id is required".to_string())?;
+        if id.is_empty()
+            || id.len() > 128
+            || !id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err("TAC order_id is invalid".into());
+        }
+        return Ok(());
+    }
+    let symbol = object
+        .get("symbol")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "TAC symbol is required".to_string())?;
+    if symbol.is_empty()
+        || symbol.len() > 16
+        || !symbol
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+    {
+        return Err("TAC symbol is invalid".into());
+    }
+    if !matches!(
+        object.get("side").and_then(Value::as_str),
+        Some("buy") | Some("sell")
+    ) {
+        return Err("TAC side must be buy or sell".into());
+    }
+    if !matches!(
+        object.get("type").and_then(Value::as_str),
+        Some("market") | Some("limit") | Some("stop") | Some("stop_limit") | Some("trailing_stop")
+    ) {
+        return Err("TAC order type is invalid".into());
+    }
+    if !matches!(
+        object.get("time_in_force").and_then(Value::as_str),
+        Some("day") | Some("gtc") | Some("opg") | Some("cls") | Some("ioc") | Some("fok")
+    ) {
+        return Err("TAC time_in_force is invalid".into());
+    }
+    if object.get("qty").is_some() == object.get("notional").is_some() {
+        return Err("TAC order requires exactly one of qty or notional".into());
+    }
+    for key in [
+        "qty",
+        "notional",
+        "limit_price",
+        "stop_price",
+        "trail_price",
+        "trail_percent",
+    ] {
+        if let Some(value) = object.get(key) {
+            let text = value
+                .as_str()
+                .ok_or_else(|| format!("TAC {key} must be a decimal string"))?;
+            if text.is_empty()
+                || text.len() > 32
+                || !text.chars().all(|c| c.is_ascii_digit() || c == '.')
+                || text.matches('.').count() > 1
+                || text.parse::<f64>().unwrap_or(0.0) <= 0.0
+            {
+                return Err(format!("TAC {key} must be a positive decimal string"));
+            }
+        }
     }
     Ok(())
 }
@@ -468,10 +635,19 @@ pub fn validate_rd_tool_call(name: &str, arguments: &Value) -> Result<(), String
 pub fn validate_riskcube_tool_call(name: &str, arguments: &Value) -> Result<(), String> {
     let allowed: &[&str] = match name {
         "riskcube_capabilities" | "risk_cube_partitions" => &[],
-        "olap_query" => &["scope", "dimensions", "measures", "aggregation", "filters", "limit"],
+        "olap_query" => &[
+            "scope",
+            "dimensions",
+            "measures",
+            "aggregation",
+            "filters",
+            "limit",
+        ],
         _ => return Err(format!("RiskCube tool is not allowed: {name}")),
     };
-    let object = arguments.as_object().ok_or_else(|| "RiskCube arguments must be an object".to_string())?;
+    let object = arguments
+        .as_object()
+        .ok_or_else(|| "RiskCube arguments must be an object".to_string())?;
     if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
         return Err(format!("RiskCube argument is not allowed: {key}"));
     }
@@ -495,16 +671,28 @@ pub fn resolve_riskcube_binary() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn riskcube_mcp_call_tool(_app: AppHandle, state: State<'_, McpState>, name: String, arguments: Option<Value>) -> Result<crate::mcp::McpCallResult, String> {
+pub async fn riskcube_mcp_call_tool(
+    _app: AppHandle,
+    state: State<'_, McpState>,
+    name: String,
+    arguments: Option<Value>,
+) -> Result<crate::mcp::McpCallResult, String> {
     let arguments = arguments.unwrap_or_else(|| json!({}));
     validate_riskcube_tool_call(&name, &arguments)?;
     let binary = resolve_riskcube_binary()?;
     let mcp = state.runtime.clone();
-    tauri::async_runtime::spawn_blocking(move || mcp.call_tool("riskcube", &binary, &name, arguments)).await.map_err(|e| format!("MCP worker failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        mcp.call_tool("riskcube", &binary, &name, arguments)
+    })
+    .await
+    .map_err(|e| format!("MCP worker failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn riskcube_mcp_reset(state: State<'_, McpState>) -> Result<(), String> { state.runtime.try_reset("riskcube"); Ok(()) }
+pub fn riskcube_mcp_reset(state: State<'_, McpState>) -> Result<(), String> {
+    state.runtime.try_reset("riskcube");
+    Ok(())
+}
 
 #[tauri::command]
 pub async fn nip_mcp_list_tools(state: State<'_, NipServiceState>) -> Result<Value, String> {
@@ -638,21 +826,40 @@ mod tests {
 
     #[test]
     fn rd_tool_validation_rejects_renderer_paths_and_mutations() {
-        assert!(validate_rd_tool_call("rd_exp_result", &json!({"run_id": "r1", "experiment_id": "e1"})).is_ok());
-        assert!(validate_rd_tool_call("rd_exp_result", &json!({"uri": "file:///tmp/mlruns"})).is_err());
+        assert!(validate_rd_tool_call(
+            "rd_exp_result",
+            &json!({"run_id": "r1", "experiment_id": "e1"})
+        )
+        .is_ok());
+        assert!(
+            validate_rd_tool_call("rd_exp_result", &json!({"uri": "file:///tmp/mlruns"})).is_err()
+        );
         assert!(validate_rd_tool_call("rd_exp_result", &json!({"path": "/tmp/mlruns"})).is_err());
-        assert!(validate_rd_tool_call("rd_exp_result", &json!({"tracking_store": "/tmp/mlruns"})).is_err());
+        assert!(
+            validate_rd_tool_call("rd_exp_result", &json!({"tracking_store": "/tmp/mlruns"}))
+                .is_err()
+        );
         assert!(validate_rd_tool_call("delete_experiment", &json!({})).is_err());
     }
 
     #[test]
     fn riskcube_tool_validation_rejects_sql_paths_and_unknown_tools() {
-        assert!(validate_riskcube_tool_call("olap_query", &json!({
-            "scope": {"partition_id": "p1"}, "dimensions": ["underlying"],
-            "measures": ["pv_amount"], "aggregation": "sum", "filters": [], "limit": 10
-        })).is_ok());
-        assert!(validate_riskcube_tool_call("olap_query", &json!({"sql": "select * from riskcube_cells"})).is_err());
-        assert!(validate_riskcube_tool_call("olap_query", &json!({"uri": "file:///tmp/cube"})).is_err());
+        assert!(validate_riskcube_tool_call(
+            "olap_query",
+            &json!({
+                "scope": {"partition_id": "p1"}, "dimensions": ["underlying"],
+                "measures": ["pv_amount"], "aggregation": "sum", "filters": [], "limit": 10
+            })
+        )
+        .is_ok());
+        assert!(validate_riskcube_tool_call(
+            "olap_query",
+            &json!({"sql": "select * from riskcube_cells"})
+        )
+        .is_err());
+        assert!(
+            validate_riskcube_tool_call("olap_query", &json!({"uri": "file:///tmp/cube"})).is_err()
+        );
         assert!(validate_riskcube_tool_call("riskcube_write", &json!({})).is_err());
     }
 
