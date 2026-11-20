@@ -212,6 +212,9 @@ mutations. No canonical OLAP/pricer sidecar is selected or bundled yet. Without
 not display fabricated cube data. The named browser bridge listens on `127.0.0.1:8797` by
 default (`RISKCUBE_MCP_HTTP_PORT` may change the local port), and Vite proxies `/riskcube` to it.
 Run the deterministic fixture journey with `npm run test:e2e:journey:riskcube`.
+There is intentionally no `modules/riskcube` Cargo submodule in this repository; desktop mode
+does not attempt to build one and reports setup as unavailable until an approved host-side
+`RISK_CUBE_MCP_BIN` is configured.
 
 The read-only R&D workspace is fixture-tested with an experiment → run → result journey:
 

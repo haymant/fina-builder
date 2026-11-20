@@ -466,12 +466,28 @@ pub fn validate_riskcube_tool_call(name: &str, arguments: &Value) -> Result<(), 
     Ok(())
 }
 
+/// RiskCube has no checked-in engine submodule until a canonical OLAP/pricer
+/// implementation is selected. Desktop mode therefore accepts only an
+/// explicit host-side binary override and must report setup as unavailable
+/// rather than suggesting a nonexistent `modules/riskcube` checkout.
+pub fn resolve_riskcube_binary() -> Result<String, String> {
+    match std::env::var("RISK_CUBE_MCP_BIN") {
+        Ok(path) if std::path::Path::new(&path).is_file() => Ok(path),
+        Ok(path) => Err(format!(
+            "RiskCube OLAP sidecar is unavailable: RISK_CUBE_MCP_BIN does not point to a file ({path}). Configure an approved canonical sidecar on the host."
+        )),
+        Err(_) => Err(
+            "RiskCube OLAP sidecar is unavailable: no approved canonical sidecar is configured. Set RISK_CUBE_MCP_BIN on the host; no RiskCube engine is bundled.".into()
+        ),
+    }
+}
+
 #[tauri::command]
-pub async fn riskcube_mcp_call_tool(app: AppHandle, state: State<'_, McpState>, name: String, arguments: Option<Value>) -> Result<crate::mcp::McpCallResult, String> {
-    let binary = resolve_engine_binary(Some(&app), "RISK_CUBE_MCP_BIN", "riskcube", "riskcube-mcp")?;
-    let mcp = state.runtime.clone();
+pub async fn riskcube_mcp_call_tool(_app: AppHandle, state: State<'_, McpState>, name: String, arguments: Option<Value>) -> Result<crate::mcp::McpCallResult, String> {
     let arguments = arguments.unwrap_or_else(|| json!({}));
     validate_riskcube_tool_call(&name, &arguments)?;
+    let binary = resolve_riskcube_binary()?;
+    let mcp = state.runtime.clone();
     tauri::async_runtime::spawn_blocking(move || mcp.call_tool("riskcube", &binary, &name, arguments)).await.map_err(|e| format!("MCP worker failed: {e}"))?
 }
 
@@ -626,5 +642,18 @@ mod tests {
         assert!(validate_riskcube_tool_call("olap_query", &json!({"sql": "select * from riskcube_cells"})).is_err());
         assert!(validate_riskcube_tool_call("olap_query", &json!({"uri": "file:///tmp/cube"})).is_err());
         assert!(validate_riskcube_tool_call("riskcube_write", &json!({})).is_err());
+    }
+
+    #[test]
+    fn riskcube_binary_resolution_reports_explicit_unavailable_setup() {
+        let previous = std::env::var_os("RISK_CUBE_MCP_BIN");
+        std::env::remove_var("RISK_CUBE_MCP_BIN");
+        let error = resolve_riskcube_binary().unwrap_err();
+        assert!(error.contains("no approved canonical sidecar is configured"));
+        assert!(!error.contains("modules/riskcube/Cargo.toml"));
+        match previous {
+            Some(value) => std::env::set_var("RISK_CUBE_MCP_BIN", value),
+            None => std::env::remove_var("RISK_CUBE_MCP_BIN"),
+        }
     }
 }
