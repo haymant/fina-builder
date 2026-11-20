@@ -1352,8 +1352,22 @@ def _model_dump(art_root: Path, exp_id, run_id: str, tree_id: int, max_depth: in
 # --------------------------------------------------------------------------- tools
 def rd_exp_list(uri: str = "") -> dict:
     """List all MLflow experiments with run counts, latest run headline IC metrics, and best-excess-return headline."""
-    store = _open_store(uri)
-
+    resolved_uri = (uri or _default_tracking_uri()).strip()
+    try:
+        store = _open_store(resolved_uri)
+    except FileNotFoundError as exc:
+        # A new local checkout may have a valid lake directory before any
+        # training has created the MLflow SQLite store. Read-only discovery
+        # should render an empty state; preserve other backend failures.
+        if resolved_uri.startswith("sqlite://"):
+            db, _ = _sqlite_paths(resolved_uri)
+            return {
+                "uri": uri,
+                "db": str(db),
+                "experiments": [],
+                "warnings": [f"R&D tracking store is not initialized yet: {exc}"],
+            }
+        raise
     exps = []
     for r in _rows(store, "SELECT experiment_id, name, artifact_location, lifecycle_stage, creation_time, last_update_time FROM experiments ORDER BY creation_time"):
         exp_id = r[0]
