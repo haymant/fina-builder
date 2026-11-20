@@ -16,6 +16,7 @@ const TAC_MUTATION_ARGS = new Map([
   ['place_order', ['symbol', 'side', 'type', 'time_in_force', 'qty', 'notional', 'limit_price', 'stop_price', 'trail_price', 'trail_percent', 'extended_hours', 'client_order_id', 'order_class', 'position_intent']],
   ['cancel_order', ['order_id']],
   ['get_order', ['order_id']],
+  ['add_watchlist_asset', ['watchlist_id', 'symbol']],
 ])
 
 const RISKCUBE_TOOL_ARGS = new Map([
@@ -58,6 +59,11 @@ export function validateTacToolCall(params) {
   if (invalid) throw new Error(`TAC argument is not allowed: ${invalid}`)
   if (name === 'cancel_order' || name === 'get_order') {
     if (typeof args.order_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(args.order_id)) throw new Error('TAC order_id is invalid')
+    return
+  }
+  if (name === 'add_watchlist_asset') {
+    if (typeof args.watchlist_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(args.watchlist_id)) throw new Error('TAC watchlist_id is invalid')
+    if (typeof args.symbol !== 'string' || !/^[A-Za-z][A-Za-z0-9._-]{0,15}$/.test(args.symbol)) throw new Error('TAC watchlist symbol is invalid')
     return
   }
   if (typeof args.symbol !== 'string' || !/^[A-Za-z][A-Za-z0-9._-]{0,15}$/.test(args.symbol)) throw new Error('TAC symbol is invalid')

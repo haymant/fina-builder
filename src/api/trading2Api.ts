@@ -115,10 +115,25 @@ export interface Trading2WatchlistItem {
   changePct?: number
 }
 
+export interface Trading2Watchlist {
+  id: string
+  name: string
+  symbols: string[]
+  raw: Record<string, unknown>
+}
+
 export interface Trading2Snapshot {
   account: Trading2Account | null
   positions: Trading2Position[]
   orders: Trading2Order[]
+}
+
+export interface Trading2PortfolioPoint {
+  timestamp?: string
+  equity?: number
+  profitLoss?: number
+  profitLossPct?: number
+  raw: Record<string, unknown>
 }
 
 const asRecord = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {})
@@ -270,8 +285,58 @@ export function normalizeWatchlist(value: unknown): Trading2WatchlistItem[] {
   })
 }
 
+export function normalizeWatchlists(value: unknown): Trading2Watchlist[] {
+  const direct = asRecord(value)
+  const items = asArray(value, 'watchlists', 'data')
+  if (!items.length && (direct.id || direct.watchlist_id || direct.watchlistId)) items.push(value)
+  return items.map((item) => {
+    const raw = asRecord(item)
+    const symbols = Array.isArray(raw.symbols)
+      ? raw.symbols.flatMap((symbol) => typeof symbol === 'string' ? [symbol.toUpperCase()] : [])
+      : Array.isArray(raw.assets)
+        ? raw.assets.flatMap((asset) => {
+          const assetRecord = asRecord(asset)
+          const symbol = stringValue(assetRecord, 'symbol', 'ticker')
+          return symbol ? [symbol.toUpperCase()] : []
+        })
+        : []
+    return {
+      id: stringValue(raw, 'id', 'watchlist_id', 'watchlistId') ?? '',
+      name: stringValue(raw, 'name') ?? 'Unnamed watchlist',
+      symbols,
+      raw,
+    }
+  }).filter((watchlist) => watchlist.id)
+}
+
+export function normalizeWatchlistRecord(value: unknown): Trading2Watchlist {
+  return normalizeWatchlists({ watchlists: [value] })[0] ?? { id: '', name: 'Unnamed watchlist', symbols: [], raw: asRecord(value) }
+}
+
+export function normalizePortfolioHistory(value: unknown): Trading2PortfolioPoint[] {
+  const raw = asRecord(value)
+  const rows = asArray(value, 'history', 'data', 'portfolio_history')
+  if (rows.length) return rows.map((item) => {
+    const row = asRecord(item)
+    return { timestamp: stringValue(row, 'timestamp', 'time', 'date'), equity: numberValue(row, 'equity'), profitLoss: numberValue(row, 'profit_loss', 'profitLoss'), profitLossPct: numberValue(row, 'profit_loss_pct', 'profitLossPct'), raw: row }
+  })
+  const timestamps = Array.isArray(raw.timestamp) ? raw.timestamp : []
+  const equities = Array.isArray(raw.equity) ? raw.equity : []
+  const profits = Array.isArray(raw.profit_loss) ? raw.profit_loss : []
+  const profitPcts = Array.isArray(raw.profit_loss_pct) ? raw.profit_loss_pct : []
+  const length = Math.max(timestamps.length, equities.length, profits.length, profitPcts.length)
+  return Array.from({ length }, (_, index) => ({
+    timestamp: typeof timestamps[index] === 'string' ? timestamps[index] : undefined,
+    equity: typeof equities[index] === 'number' ? equities[index] : Number(equities[index]),
+    profitLoss: typeof profits[index] === 'number' ? profits[index] : Number(profits[index]),
+    profitLossPct: typeof profitPcts[index] === 'number' ? profitPcts[index] : Number(profitPcts[index]),
+    raw,
+  })).map((row) => ({ ...row, equity: Number.isFinite(row.equity) ? row.equity : undefined, profitLoss: Number.isFinite(row.profitLoss) ? row.profitLoss : undefined, profitLossPct: Number.isFinite(row.profitLossPct) ? row.profitLossPct : undefined }))
+}
+
 export const trading2Api = {
   getAccount: async () => normalizeAccount(await call('get_account')),
+  getPortfolioHistory: async (period = '1M') => normalizePortfolioHistory(await call('get_portfolio_history', { period })),
   listPositions: async () => normalizePositions(await call('list_positions')),
   listOrders: async (status = 'open') => normalizeOrders(await call('list_orders', { status })),
   getNews: async (query?: Trading2NewsQuery | string[]) => {
@@ -280,7 +345,9 @@ export const trading2Api = {
       : { limit: 25, ...(query ?? {}) }
     return normalizeNews(await call('get_news', args))
   },
-  getWatchlist: async () => normalizeWatchlist(await call('get_lake_watchlist')),
+  listWatchlists: async () => normalizeWatchlists(await call('list_watchlists')),
+  getWatchlist: async (watchlistId: string) => normalizeWatchlistRecord(await call('get_watchlist', { watchlist_id: watchlistId })),
+  addWatchlistAsset: async (watchlistId: string, symbol: string) => normalizeWatchlistRecord(await call('add_watchlist_asset', { watchlist_id: watchlistId, symbol: symbol.trim().toUpperCase() })),
   placeOrder: async (input: Trading2OrderInput) => normalizeOrders([await call('place_order', {
     symbol: input.symbol.trim().toUpperCase(), side: input.side, type: input.type, time_in_force: input.timeInForce,
     ...(input.qty ? { qty: input.qty } : {}), ...(input.notional ? { notional: input.notional } : {}),
