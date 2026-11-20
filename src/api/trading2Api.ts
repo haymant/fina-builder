@@ -1,4 +1,5 @@
 import { TacUnavailableError, tac } from './tacTransport'
+import type { MacroBar, MacroCoverageRow } from '../features/trading2/macroCatalog'
 
 export type Trading2ErrorKind = 'unavailable' | 'backend' | 'validation' | 'timeout' | 'ambiguous' | 'conflict' | 'not-found'
 
@@ -139,6 +140,8 @@ export interface Trading2PortfolioPoint {
 export interface Trading2Bar { timestamp: string; open?: number; high?: number; low?: number; close?: number; volume?: number }
 export interface Trading2Quote { bid?: number; ask?: number; bidSize?: number; askSize?: number; last?: number; raw: Record<string, unknown> }
 export interface Trading2Option { symbol?: string; expiration?: string; strike?: number; type?: string; bid?: number; ask?: number; mid?: number; volume?: number; openInterest?: number; impliedVolatility?: number; raw: Record<string, unknown> }
+export interface Trading2FeatureRow { timestamp: string; raw: Record<string, unknown>; [key: string]: unknown }
+export interface Trading2MacroSymbol { symbol: string; source?: string; sourceId?: string; title?: string; frequency?: string; units?: string; enabled?: boolean; raw: Record<string, unknown> }
 
 const asRecord = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {})
 const asArray = (value: unknown, ...keys: string[]): unknown[] => {
@@ -353,6 +356,55 @@ export function normalizeOptions(value: unknown): Trading2Option[] {
   return items.map((item) => { const row = asRecord(item); const quote = asRecord(row.latestQuote ?? row.quote); const greeks = asRecord(row.greeks); const bid = numberValue(quote, 'bp', 'bid'); const ask = numberValue(quote, 'ap', 'ask'); return { symbol: stringValue(row, 'symbol', 'contract_symbol'), expiration: stringValue(row, 'expiration_date', 'expiration'), strike: numberValue(row, 'strike_price', 'strike'), type: stringValue(row, 'type', 'option_type'), bid, ask, mid: numberValue(row, 'mid') ?? (bid !== undefined && ask !== undefined ? (bid + ask) / 2 : undefined), volume: numberValue(row, 'volume'), openInterest: numberValue(row, 'open_interest', 'openInterest'), impliedVolatility: numberValue(row, 'implied_volatility', 'impliedVolatility') ?? numberValue(greeks, 'implied_volatility', 'impliedVolatility'), raw: row } })
 }
 
+export function normalizeFeatureRows(value: unknown): Trading2FeatureRow[] {
+  return asArray(value, 'features', 'data').map((item) => {
+    const raw = asRecord(item)
+    return { ...raw, timestamp: stringValue(raw, 't', 'timestamp', 'time') ?? '', raw }
+  }).filter((row) => row.timestamp)
+}
+
+export function normalizeMacroBars(value: unknown): MacroBar[] {
+  const raw = asRecord(value)
+  const rows = Array.isArray(value) ? value : Array.isArray(raw.bars) ? raw.bars : asArray(value, 'data')
+  return rows.map((item) => {
+    const row = asRecord(item)
+    return {
+      t: stringValue(row, 't', 'timestamp', 'time', 'date') ?? '',
+      date: stringValue(row, 'date'),
+      o: numberValue(row, 'o', 'open') ?? 0,
+      h: numberValue(row, 'h', 'high') ?? 0,
+      l: numberValue(row, 'l', 'low') ?? 0,
+      c: numberValue(row, 'c', 'close', 'value') ?? 0,
+      v: numberValue(row, 'v', 'volume') ?? 0,
+      n: numberValue(row, 'n'),
+      vw: numberValue(row, 'vw', 'vwap'),
+    }
+  }).filter((row) => row.t)
+}
+
+export function normalizeMacroCoverage(value: unknown): MacroCoverageRow[] {
+  return asArray(value, 'coverage', 'data').map((item) => {
+    const row = asRecord(item)
+    return { symbol: stringValue(row, 'symbol'), first_t: stringValue(row, 'first_t', 'first'), last_t: stringValue(row, 'last_t', 'last'), num_bars: numberValue(row, 'num_bars', 'bars') }
+  }).filter((row) => row.symbol)
+}
+
+export function normalizeMacroSymbols(value: unknown): Trading2MacroSymbol[] {
+  return asArray(value, 'symbols', 'data').map((item) => {
+    const raw = asRecord(item)
+    return {
+      symbol: stringValue(raw, 'symbol') ?? '',
+      source: stringValue(raw, 'source'),
+      sourceId: stringValue(raw, 'source_id', 'sourceId'),
+      title: stringValue(raw, 'title', 'name'),
+      frequency: stringValue(raw, 'frequency', 'freq'),
+      units: stringValue(raw, 'units'),
+      enabled: raw.enabled === undefined ? undefined : raw.enabled === true,
+      raw,
+    }
+  }).filter((row) => row.symbol)
+}
+
 export const trading2Api = {
   getAccount: async () => normalizeAccount(await call('get_account')),
   getPortfolioHistory: async (period = '1M') => normalizePortfolioHistory(await call('get_portfolio_history', { period })),
@@ -371,6 +423,13 @@ export const trading2Api = {
   getBars: async (symbol: string, start: string, end: string, timeframe = '1Day') => normalizeBars(await call('get_stock_bars', { symbols: symbol, timeframe, start, end, feed: 'iex', adjustment: 'split', limit: 1000 }), symbol),
   getQuote: async (symbol: string) => normalizeQuote(await call('get_stock_snapshot', { symbol })),
   getOptionChain: async (symbol: string, expiration?: string) => normalizeOptions(await call('get_option_chain', { underlying_symbol: symbol, ...(expiration ? { expiration } : {}) })),
+  getLakeTa: async (symbol: string, timeframe: string, start: string, end: string, indicators: string[], persist = false) => normalizeFeatureRows(await call('get_lake_ta', { market: 'US', symbol: symbol.trim().toUpperCase(), timeframe, start, end, indicators: indicators.join(','), persist })),
+  getLakeSp: async (symbol: string, timeframe: string, start: string, end: string, families: string[], persist = false) => normalizeFeatureRows(await call('get_lake_sp', { market: 'US', symbol: symbol.trim().toUpperCase(), timeframe, start, end, families: families.join(','), persist })),
+  getLakeFeatures: async (symbol: string, timeframe: string, start: string, end: string) => normalizeFeatureRows(await call('get_lake_features', { market: 'US', symbol: symbol.trim().toUpperCase(), timeframe, start, end })),
+  getMacroSymbols: async () => normalizeMacroSymbols(await call('get_macro_symbols')),
+  getMacroBars: async (symbol: string, start?: string, end?: string) => normalizeMacroBars(await call('get_macro_bars', { symbols: symbol.trim().toUpperCase(), ...(start ? { start } : {}), ...(end ? { end } : {}), quiet: false })),
+  getMacroCoverage: async () => normalizeMacroCoverage(await call('get_lake_coverage', { market: 'MACRO', timeframe: '1d' })),
+  getMacroFeatures: async (symbol: string, start: string, end: string) => normalizeFeatureRows(await call('get_macro_features', { symbol: symbol.trim().toUpperCase(), start, end })),
   placeOrder: async (input: Trading2OrderInput) => normalizeOrders([await call('place_order', {
     symbol: input.symbol.trim().toUpperCase(), side: input.side, type: input.type, time_in_force: input.timeInForce,
     ...(input.qty ? { qty: input.qty } : {}), ...(input.notional ? { notional: input.notional } : {}),

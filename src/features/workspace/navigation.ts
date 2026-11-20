@@ -1,7 +1,7 @@
 // App-level navigation model: the menu bar and the command palette are the primary way to
 // reach every dashboard and every trade repository view (tabs are for documents only).
 export type TradeView = 'blotter' | 'positions' | 'recon' | 'audit' | 'import' | 'fixings'
-export type Trading2View = 'overview' | 'account' | 'positions' | 'orders' | 'news' | 'watchlist'
+export type Trading2View = 'overview' | 'account' | 'positions' | 'orders' | 'news' | 'watchlist' | 'macro' | 'calendar'
 export type RdView = 'experiments' | 'runs' | 'results'
 export type RiskCubeView = 'scenarios' | 'versions' | 'slice' | 'cubes'
 export type NarrativeView = 'overview' | 'claims'
@@ -32,6 +32,8 @@ export const TRADING2_VIEWS: { id: Trading2View; label: string; accel?: string }
   { id: 'orders', label: 'Orders' },
   { id: 'news', label: 'News' },
   { id: 'watchlist', label: 'Watchlist' },
+  { id: 'macro', label: 'Macro' },
+  { id: 'calendar', label: 'Calendar' },
 ]
 export const RD_VIEWS: { id: RdView; label: string; accel?: string }[] = [
   { id: 'experiments', label: 'Experiments', accel: 'Alt+Shift+R' },

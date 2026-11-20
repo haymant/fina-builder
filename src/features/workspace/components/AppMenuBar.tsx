@@ -11,7 +11,7 @@ import {
 import { accelLabel, matchAccel, TRADE_VIEWS, TRADING2_VIEWS, RD_VIEWS, RISKCUBE_VIEWS, type Location, type TradeView, type Trading2View, type RdView, type RiskCubeView } from '../navigation'
 
 const TRADE_ICONS: Record<TradeView, typeof Layers> = { blotter: BookOpenCheck, positions: Layers, recon: ArrowLeftRight, audit: History, import: FileUp, fixings: CalendarClock }
-const TRADING2_ICONS: Record<Trading2View, typeof BriefcaseBusiness> = { overview: BriefcaseBusiness, account: WalletCards, positions: ListChecks, orders: ClipboardList, news: Newspaper, watchlist: Star }
+const TRADING2_ICONS: Record<Trading2View, typeof BriefcaseBusiness> = { overview: BriefcaseBusiness, account: WalletCards, positions: ListChecks, orders: ClipboardList, news: Newspaper, watchlist: Star, macro: Activity, calendar: CalendarClock }
 const RD_ICONS: Record<RdView, typeof BrainCircuit> = { experiments: BrainCircuit, runs: Activity, results: ClipboardList }
 const RISKCUBE_ICONS: Record<RiskCubeView, typeof Layers> = { scenarios: Layers, versions: History, slice: Columns3, cubes: Database }
 

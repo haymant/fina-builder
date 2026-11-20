@@ -1,3 +1,5 @@
-export type Trading2View = 'overview' | 'account' | 'positions' | 'orders' | 'news' | 'watchlist'
+export type Trading2View = 'overview' | 'account' | 'positions' | 'orders' | 'news' | 'watchlist' | 'macro' | 'calendar'
 export { Trading2Workspace } from './components/Trading2Workspace'
+export { MacroWorkspace } from './components/MacroWorkspace'
+export { CalendarWorkspace } from './components/CalendarWorkspace'
 export type { Trading2Account, Trading2Order, Trading2Position } from '../../api/trading2Api'
