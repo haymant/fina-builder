@@ -17,6 +17,7 @@ describe('Trading 2nd DTO normalization', () => {
   })
   it('normalizes synthetic macro bars', () => {
     expect(normalizeMacroBars({ bars: [{ t: '2026-01-01T00:00:00Z', c: '101', o: '101', h: '101', l: '101' }] })).toEqual([expect.objectContaining({ t: '2026-01-01T00:00:00Z', c: 101, o: 101, h: 101, l: 101, v: 0 })])
+    expect(normalizeMacroBars({ bars: { CBOE_VIX: [{ t: '2026-01-02T00:00:00Z', c: 22 }] } }, 'CBOE_VIX')).toEqual([expect.objectContaining({ t: '2026-01-02T00:00:00Z', c: 22 })])
   })
 })
 
@@ -24,9 +25,10 @@ describe('Trading 2nd API transport boundary', () => {
   it('calls read-only TAC tools with stable arguments', async () => {
     const callTool = vi.fn(async (name: string) => name === 'list_orders' ? { orders: [] } : { positions: [] })
     setTacTransport({ callTool: callTool as unknown as <T>(name: string, args?: unknown) => Promise<T> })
-    await trading2Api.listOrders(); await trading2Api.listPositions()
+    await trading2Api.listOrders(); await trading2Api.listPositions(); await trading2Api.getLakeBars('aapl', '2026-01-01', '2026-02-01')
     expect(callTool).toHaveBeenNthCalledWith(1, 'list_orders', { status: 'open' })
     expect(callTool).toHaveBeenNthCalledWith(2, 'list_positions', {})
+    expect(callTool).toHaveBeenNthCalledWith(3, 'get_lake_bars', { market: 'US', symbols: 'AAPL', timeframe: '1d', start: '2026-01-01', end: '2026-02-01', feed: 'iex', adjustment: 'raw', lazy: true })
   })
   it('calls macro lake reads with MACRO coverage and canonical symbols args', async () => {
     const callTool = vi.fn(async (name: string) => name === 'get_macro_bars' ? { bars: [] } : name === 'get_macro_features' ? { features: [] } : { coverage: [] })
