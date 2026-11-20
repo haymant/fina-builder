@@ -74,3 +74,6 @@ artifacts/demo/
 # Module-local Python environments for TradeAC-derived MCP services.
 modules/tac-qlib/.venv/
 modules/tac-qlib/.pytest_cache/
+# Generated artifacts from the module-local qlib environment
+modules/tac-qlib/**/__pycache__/
+modules/tac-qlib/*.egg-info/
