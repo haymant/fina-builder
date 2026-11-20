@@ -16,6 +16,7 @@ const TAC_MUTATION_ARGS = new Map([
   ['place_order', ['symbol', 'side', 'type', 'time_in_force', 'qty', 'notional', 'limit_price', 'stop_price', 'trail_price', 'trail_percent', 'extended_hours', 'client_order_id', 'order_class', 'position_intent']],
   ['cancel_order', ['order_id']],
   ['get_order', ['order_id']],
+  ['create_watchlist', ['name', 'symbols']],
   ['add_watchlist_asset', ['watchlist_id', 'symbol']],
 ])
 
@@ -64,6 +65,11 @@ export function validateTacToolCall(params) {
   if (name === 'add_watchlist_asset') {
     if (typeof args.watchlist_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(args.watchlist_id)) throw new Error('TAC watchlist_id is invalid')
     if (typeof args.symbol !== 'string' || !/^[A-Za-z][A-Za-z0-9._-]{0,15}$/.test(args.symbol)) throw new Error('TAC watchlist symbol is invalid')
+    return
+  }
+  if (name === 'create_watchlist') {
+    if (typeof args.name !== 'string' || args.name.trim().length < 1 || args.name.length > 64) throw new Error('TAC watchlist name is invalid')
+    if (args.symbols !== undefined && (!Array.isArray(args.symbols) || args.symbols.some((symbol) => typeof symbol !== 'string' || !/^[A-Za-z][A-Za-z0-9._-]{0,15}$/.test(symbol)))) throw new Error('TAC watchlist symbols are invalid')
     return
   }
   if (typeof args.symbol !== 'string' || !/^[A-Za-z][A-Za-z0-9._-]{0,15}$/.test(args.symbol)) throw new Error('TAC symbol is invalid')

@@ -53,6 +53,10 @@
 .more-tiles-head:hover { color: var(--theme-text); }
 .tile-chip { height: 26px; padding: 0 10px; font-size: 11px; border-radius: 999px; border: 1px solid var(--theme-grid); color: var(--theme-text); background: var(--theme-panel); }
 .tile-chip:hover { border-color: var(--theme-primary); }
+.workspace-tile-grid { min-height: 420px; }
+.workspace-tile-item, .workspace-tile-item > * { height: 100%; min-height: 0; }
+.workspace-tile-grid .react-grid-item > .react-resizable-handle { opacity: .45; }
+.workspace-tile-grid .react-grid-item:hover > .react-resizable-handle { opacity: 1; }
 .help-modal { height: auto; max-height: 80vh; width: min(560px, 94vw); }
 .confirm-modal { height: auto; width: min(420px, 94vw); }
 .confirm-body { padding: 16px; }

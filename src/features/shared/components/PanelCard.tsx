@@ -38,7 +38,7 @@ export const PanelCard = memo(function PanelCard({
         className,
       )}
     >
-      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-3 py-2">
+      <header className="tile-header flex shrink-0 cursor-move items-center justify-between gap-3 border-b border-line px-3 py-2">
         {collapsible ? (
           <button
             type="button"

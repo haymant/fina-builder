@@ -136,6 +136,10 @@ export interface Trading2PortfolioPoint {
   raw: Record<string, unknown>
 }
 
+export interface Trading2Bar { timestamp: string; open?: number; high?: number; low?: number; close?: number; volume?: number }
+export interface Trading2Quote { bid?: number; ask?: number; bidSize?: number; askSize?: number; last?: number; raw: Record<string, unknown> }
+export interface Trading2Option { symbol?: string; expiration?: string; strike?: number; type?: string; bid?: number; ask?: number; mid?: number; volume?: number; openInterest?: number; impliedVolatility?: number; raw: Record<string, unknown> }
+
 const asRecord = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {})
 const asArray = (value: unknown, ...keys: string[]): unknown[] => {
   if (Array.isArray(value)) return value
@@ -334,6 +338,21 @@ export function normalizePortfolioHistory(value: unknown): Trading2PortfolioPoin
   })).map((row) => ({ ...row, equity: Number.isFinite(row.equity) ? row.equity : undefined, profitLoss: Number.isFinite(row.profitLoss) ? row.profitLoss : undefined, profitLossPct: Number.isFinite(row.profitLossPct) ? row.profitLossPct : undefined }))
 }
 
+export function normalizeBars(value: unknown, symbol?: string): Trading2Bar[] {
+  const raw = asRecord(value); const source = asRecord(raw.bars ?? value); const rows: unknown[] = Array.isArray(source[symbol ?? '']) ? source[symbol ?? ''] as unknown[] : asArray(value, 'bars', 'data')
+  return rows.map((item) => { const row = asRecord(item); return { timestamp: stringValue(row, 't', 'timestamp', 'time') ?? '', open: numberValue(row, 'o', 'open'), high: numberValue(row, 'h', 'high'), low: numberValue(row, 'l', 'low'), close: numberValue(row, 'c', 'close'), volume: numberValue(row, 'v', 'volume') } }).filter((row) => row.timestamp)
+}
+
+export function normalizeQuote(value: unknown): Trading2Quote {
+  const raw = asRecord(value); const quote = asRecord(raw.latestQuote ?? raw.quote); const trade = asRecord(raw.latestTrade ?? raw.trade); const bar = asRecord(raw.dailyBar ?? raw.bar)
+  return { bid: numberValue(quote, 'bp', 'bid', 'bid_price'), ask: numberValue(quote, 'ap', 'ask', 'ask_price'), bidSize: numberValue(quote, 'bs', 'bid_size'), askSize: numberValue(quote, 'as', 'ask_size'), last: numberValue(trade, 'p', 'price') ?? numberValue(bar, 'c', 'close'), raw }
+}
+
+export function normalizeOptions(value: unknown): Trading2Option[] {
+  const raw = asRecord(value); const snapshots = asRecord(raw.snapshots ?? raw.options ?? value); const items = Array.isArray(value) ? value : Object.entries(snapshots).map(([symbol, item]) => ({ ...asRecord(item), symbol }))
+  return items.map((item) => { const row = asRecord(item); const quote = asRecord(row.latestQuote ?? row.quote); const greeks = asRecord(row.greeks); const bid = numberValue(quote, 'bp', 'bid'); const ask = numberValue(quote, 'ap', 'ask'); return { symbol: stringValue(row, 'symbol', 'contract_symbol'), expiration: stringValue(row, 'expiration_date', 'expiration'), strike: numberValue(row, 'strike_price', 'strike'), type: stringValue(row, 'type', 'option_type'), bid, ask, mid: numberValue(row, 'mid') ?? (bid !== undefined && ask !== undefined ? (bid + ask) / 2 : undefined), volume: numberValue(row, 'volume'), openInterest: numberValue(row, 'open_interest', 'openInterest'), impliedVolatility: numberValue(row, 'implied_volatility', 'impliedVolatility') ?? numberValue(greeks, 'implied_volatility', 'impliedVolatility'), raw: row } })
+}
+
 export const trading2Api = {
   getAccount: async () => normalizeAccount(await call('get_account')),
   getPortfolioHistory: async (period = '1M') => normalizePortfolioHistory(await call('get_portfolio_history', { period })),
@@ -347,7 +366,11 @@ export const trading2Api = {
   },
   listWatchlists: async () => normalizeWatchlists(await call('list_watchlists')),
   getWatchlist: async (watchlistId: string) => normalizeWatchlistRecord(await call('get_watchlist', { watchlist_id: watchlistId })),
+  createWatchlist: async (name: string) => normalizeWatchlistRecord(await call('create_watchlist', { name: name.trim() })),
   addWatchlistAsset: async (watchlistId: string, symbol: string) => normalizeWatchlistRecord(await call('add_watchlist_asset', { watchlist_id: watchlistId, symbol: symbol.trim().toUpperCase() })),
+  getBars: async (symbol: string, start: string, end: string, timeframe = '1Day') => normalizeBars(await call('get_stock_bars', { symbols: symbol, timeframe, start, end, feed: 'iex', adjustment: 'split', limit: 1000 }), symbol),
+  getQuote: async (symbol: string) => normalizeQuote(await call('get_stock_snapshot', { symbol })),
+  getOptionChain: async (symbol: string, expiration?: string) => normalizeOptions(await call('get_option_chain', { underlying_symbol: symbol, ...(expiration ? { expiration } : {}) })),
   placeOrder: async (input: Trading2OrderInput) => normalizeOrders([await call('place_order', {
     symbol: input.symbol.trim().toUpperCase(), side: input.side, type: input.type, time_in_force: input.timeInForce,
     ...(input.qty ? { qty: input.qty } : {}), ...(input.notional ? { notional: input.notional } : {}),
