@@ -54,6 +54,41 @@ drives them.
   patchelf, CMake, Ninja and libclang, then verifies `pkg-config` can see the Tauri
   libraries. It is a no-op on non-Debian systems. The browser mode does not need them.
 
+### Manus sandbox: one-shot setup
+
+For a fresh Manus Ubuntu sandbox, run the following from the repository root. It installs the
+native build prerequisites, installs the pinned Rust toolchain from `rust-toolchain.toml`,
+installs JavaScript dependencies, installs the optional Tauri desktop libraries, and prepares
+the module-local qlib environment. The command does not require Alpaca, database, MLflow, or
+other production credentials.
+
+```bash
+sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  cargo rustc pkg-config build-essential cmake ninja-build clang libssl-dev curl
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+export PATH="$HOME/.cargo/bin:$PATH"
+rustup toolchain install 1.99.0 --profile minimal
+npm ci
+./scripts/ci/install-tauri-linux-deps.sh       # optional for browser-only work
+uv sync --project modules/tac-qlib --locked    # optional for RD/book sidecars
+cargo --version && rustc --version && npm --version
+```
+
+The Ubuntu `cargo`/`rustc` packages are installed before `rustup` because Ubuntu packages
+`rustup` as a conflicting alternative. The installer then places the upstream toolchain manager
+in `~/.cargo/bin`; the repository pin selects Rust 1.99.0 automatically in this checkout. If
+`uv` is not already available in the sandbox, install it using the official installer and reopen
+the shell before running the qlib command:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+After setup, the normal validation entry points are `npm run test:run`,
+`cargo test --workspace`, and `npm run build`. Engine-specific tests and builds are documented
+below and do not migrate or contact production data.
+
 ## Run it
 
 ### 1. Web mode (browser + HTTP engines) — four processes
@@ -91,6 +126,7 @@ RIGA's local GGUF inference in the desktop shell.
 | `riga-mcp` | MCP over HTTP on <http://127.0.0.1:8788> |
 | `tac-engine` | MCP over HTTP on <http://127.0.0.1:8790> |
 | Trade repository | MCP over HTTP on <http://127.0.0.1:8792> |
+| `tac-qlib-rd` | MCP over HTTP on <http://127.0.0.1:8796> |
 
 The webview calls the same-origin paths `/riga/mcp` and `/tac/mcp`, which Vite proxies to
 the two engines (see `vite.config.ts`). To run the pieces separately:
@@ -99,6 +135,7 @@ the two engines (see `vite.config.ts`). To run the pieces separately:
 npm run backend:dev      # npm run mcp:http:riga   (riga-mcp --transport http)
 npm run mcp:http:tac     # the tac-engine HTTP bridge
 npm run mcp:http:trade-repo # seeded local trade repository MCP server
+npm run mcp:http:rd        # read-only qlib/MLflow R&D MCP bridge
 npm run dev:web          # frontend-only Vite process
 ```
 
@@ -128,6 +165,94 @@ UI, logs or persisted state.
 The TAC desktop sidecar still uses the same stdio transport and full Alpaca tool set when both
 API keys are configured. If both are omitted, it starts in the same Yahoo daily-stock/FX fallback
 mode as web mode; account/order tools are omitted, and Alpaca-only market data remains unavailable.
+
+### Sidecar catalog and setup
+
+Sidecars are the default integration boundary for engines and data-owning services in fina-builder:
+the renderer calls a typed MCP transport, while the host owns executable resolution, environment
+construction, process lifetime, stdio/HTTP transport, cancellation and error mapping. A sidecar
+must never be selected by an arbitrary renderer path, and secrets must remain in the host environment
+or an app-data `.env` file.
+
+| Sidecar/service | Ownership and role | Development command | Default endpoint/transport |
+| --- | --- | --- | --- |
+| `riga-mcp` | `modules/riga-flow`; structured-product pricing, risk and payoff tools | `npm run mcp:sidecar:riga` | stdio in Tauri; HTTP `127.0.0.1:8788` |
+| `tac-engine` | `modules/tac-engine`; market data, lake, account and order tools | `npm run mcp:sidecar:tac` | stdio in Tauri; HTTP `127.0.0.1:8790` |
+| Trade repository MCP | `scripts/lib/trade-repo`; fina-owned operational trade persistence | `npm run mcp:http:trade-repo` | HTTP `127.0.0.1:8792` |
+| `nip-engine` | NIP narrative ingestion, evidence and media lifecycle | `npm run mcp:sidecar:nip` | Tauri/HTTP `127.0.0.1:8794` |
+| `tac-qlib-rd` | `modules/tac-qlib`; TradeAC-derived research, experiment, model and result tools | `uv sync --project modules/tac-qlib --locked`; `npm run mcp:http:rd` (browser) or `npm run mcp:stdio:rd` (desktop) | HTTP `127.0.0.1:8796/mcp`; Tauri-owned stdio |
+| `tac-rd-book` (new) | `modules/tac-qlib`; TradeAC-derived round book, facts, intents, decisions and reconciliation | `uv sync --project modules/tac-qlib --locked`; `npm run mcp:stdio:book` | stdio; module-local `.venv` |
+| Fina Phase 3A book adapter | fina-owned read-only DTO/transport boundary over the qlib book service | `npm run mcp:http:book` (browser) or `scripts/tac-qlib-book-mcp` (desktop) | HTTP `127.0.0.1:8795/mcp`; Tauri-owned stdio |
+| RiskCube OLAP (planned) | A canonical `fina-pricer`/OLAP capability, not ordinary TAC market data | set host-only `RISK_CUBE_MCP_BIN` and run `npm run mcp:http:riskcube` | HTTP `127.0.0.1:8797/mcp`; Tauri-owned named sidecar |
+
+Build and stage the compiled Rust sidecars for a packaged Tauri build with:
+
+```bash
+npm run mcp:sidecar:engines       # riga-mcp, tac-engine and nip-engine
+uv sync --project modules/tac-qlib --locked
+npm run mcp:stdio:rd              # stdio service; Ctrl-C stops the child
+npm run mcp:stdio:book             # stdio service; Ctrl-C stops the child
+```
+
+`modules/tac-qlib/.venv` is intentionally module-local and ignored; `uv.lock` is committed so a
+clean checkout resolves the same Python dependencies. The RD and book services are separate named
+processes even though they share package source. They own qlib/MLflow and round-book calculations;
+React must consume their DTOs rather than reimplementing metrics or reconciliation. The default
+fina-builder test suite must use temporary fixtures and does not require Alpaca credentials,
+PostgreSQL, MLflow, remote embeddings or a populated production lake. See
+[modules/tac-qlib/README.tradeac.md](./modules/tac-qlib/README.tradeac.md) for the source package
+reference and [docs/75-tradeac-migration.md](./docs/75-tradeac-migration.md) for migration scope.
+
+The read-only RiskCube workspace uses a semantic, bounded request (`scope`, allowlisted
+dimensions/measures, aggregation, filters, and limit) rather than renderer-supplied SQL. It
+accepts only `riskcube_capabilities`, `risk_cube_partitions`, and `olap_query`; the browser and
+Tauri host boundaries reject arbitrary tools, paths, URIs, SQL, tracking-store arguments, and
+mutations. No canonical OLAP/pricer sidecar is selected or bundled yet. Without
+`RISK_CUBE_MCP_BIN`, the bridge returns an explicit unavailable/setup response and the UI does
+not display fabricated cube data. The named browser bridge listens on `127.0.0.1:8797` by
+default (`RISKCUBE_MCP_HTTP_PORT` may change the local port), and Vite proxies `/riskcube` to it.
+Run the deterministic fixture journey with `npm run test:e2e:journey:riskcube`.
+
+The read-only R&D workspace is fixture-tested with an experiment → run → result journey:
+
+```bash
+npm run test:run -- src/api/__tests__/rdApi.test.ts
+npm run test:e2e:journey:rd
+npm run test:run -- src/api/__tests__/riskcubeApi.test.ts src/api/__tests__/mcpAllowlist.test.ts
+npm run test:e2e:journey:riskcube
+```
+
+The browser journey intercepts only `/rd/mcp` with synthetic JSON-RPC responses. It does not
+require a lake, MLflow, credentials, or production artifacts. Training, deletion, note mutation,
+and artifact writes are intentionally not exposed by the renderer API.
+
+#### Phase 3A metadata and book boundary
+
+Phase 3A adds a fina-owned metadata repository for model-registry entries, validated scheduler
+configuration, and manual execution-attempt metadata. SQLite is the default local adapter; the
+PostgreSQL adapter is optional and selected by the host-side repository configuration. Set
+`DATABASE_URL` only in the host environment or an app-data `.env` when a shared PostgreSQL
+deployment is explicitly configured. Never put it in renderer configuration, Vite variables,
+DTOs, logs, or committed files. The repository stores opaque qlib/MLflow references and does
+not copy model files, runs, artifacts, or TradeAC records.
+
+The fina book API is read-only and allowlists `round_list`, `round_get`, `trail_query`,
+`trail_funnel`, and `round_metrics`. It does not expose round writes, order placement, fill
+synchronization, cancellation, or broker mutations. For browser development, prepare the
+module-local qlib environment and start the bridge:
+
+```bash
+uv sync --project modules/tac-qlib --locked
+npm run mcp:http:book                 # http://127.0.0.1:8795/mcp
+```
+
+Vite proxies `/book` to that loopback endpoint. `BOOK_MCP_HTTP_PORT` may change the bridge
+port; do not expose the bridge publicly. In Tauri desktop mode, the shell resolves and starts
+the checked-in `scripts/tac-qlib-book-mcp` launcher over stdio, forwarding only the host-side
+runtime configuration required by the qlib service. Missing `uv`, qlib dependencies, database
+configuration, or the book service is reported as an explicit unavailable state rather than an
+empty successful result. Authentication and renderer-supplied roles are intentionally deferred
+for Phase 3 in both modes.
 
 ### Narrative Intelligence (NIP) in the desktop app
 
@@ -248,6 +373,7 @@ npm run test:run       # Vitest frontend unit/integration suite
 npm run test:e2e       # Playwright browser E2E (starts an isolated Vite server)
 npm run test:e2e:smoke # tagged high-value smoke subset
 npm run test:e2e:journey:trade-fixings # individual and bulk fixing operations
+npm run test:e2e:journey:trading2       # fixture-backed read-only Trading 2ⁿᵈ MCP journey
 npm run test:e2e:demo  # records tests tagged @demo (forward --grep to pick one journey)
 npm run test:e2e -- --grep @feature-notebook # feature subset
 npm run test:coverage  # Vitest coverage

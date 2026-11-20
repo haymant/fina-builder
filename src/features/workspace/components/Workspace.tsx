@@ -3,7 +3,7 @@ import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, use
 import { invoke } from '@tauri-apps/api/core'
 import { AppMenuBar } from './AppMenuBar'
 import { ConfirmDialog } from './ConfirmDialog'
-import { loadLocation, saveLocation, splitPrimary, TRADE_VIEWS, type Location, type TradeView } from '../navigation'
+import { loadLocation, saveLocation, splitPrimary, TRADE_VIEWS, TRADING2_VIEWS, RD_VIEWS, RISKCUBE_VIEWS, type Location, type TradeView } from '../navigation'
 import { Responsive, WidthProvider, type Layout, type ResponsiveLayouts } from 'react-grid-layout/legacy'
 import { useExplorerStore, BUILT_IN_DASHBOARDS } from '../../../store/explorerStore'
 import { TILE_CATALOG, tileFromType } from '../../dashboards/catalog'
@@ -23,6 +23,9 @@ import '../panels.css'
 
 const Grid = WidthProvider(Responsive)
 const TradeRepository = lazy(() => import('../../trade-repository/components/TradeRepository').then((m) => ({ default: m.TradeRepository })))
+const Trading2Workspace = lazy(() => import('../../trading2').then((m) => ({ default: m.Trading2Workspace })))
+const RdWorkspace = lazy(() => import('../../rd').then((m) => ({ default: m.RdWorkspace })))
+const RiskCubeWorkspace = lazy(() => import('../../riskcube').then((m) => ({ default: m.RiskCubeWorkspace })))
 const NarrativeWorkspace = lazy(() => import('../../narrative/components/NarrativeWorkspace').then((m) => ({ default: m.NarrativeWorkspace })))
 const VideoWorkspace = lazy(() => import('../../video/components/VideoWorkspace').then((m) => ({ default: m.VideoWorkspace })))
 
@@ -105,6 +108,9 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
   const [location, setLocationState] = useState<Location>(() => {
     const l = loadLocation()
     if (l?.kind === 'trades' && TRADE_VIEWS.some((v) => v.id === l.view)) return l
+    if (l?.kind === 'trading2' && TRADING2_VIEWS.some((v) => v.id === l.view)) return l
+    if (l?.kind === 'rd' && RD_VIEWS.some((v) => v.id === l.view)) return l
+    if (l?.kind === 'riskcube' && RISKCUBE_VIEWS.some((v) => v.id === l.view)) return l
     if (l?.kind === 'narrative' && (l.view === 'overview' || l.view === 'claims')) return l
     if (l?.kind === 'video' && (l.view === 'projects' || l.view === 'workspace') && [l.projectId, l.episodeId, l.claimId].every((value) => value === undefined || (typeof value === 'string' && value.trim().length > 0))) return l
     return { kind: 'dashboard', dashboardId: selectedId }
@@ -250,6 +256,24 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
             </Suspense>
           </ViewLoadBoundary>
         </main>
+      ) : location.kind === 'trading2' ? (
+        <ViewLoadBoundary label="Trading 2ⁿᵈ">
+          <Suspense fallback={<SlowModuleNotice label="Trading 2ⁿᵈ" />}>
+            <Trading2Workspace view={location.view} />
+          </Suspense>
+        </ViewLoadBoundary>
+      ) : location.kind === 'rd' ? (
+        <ViewLoadBoundary label="R&D">
+          <Suspense fallback={<SlowModuleNotice label="R&D" />}>
+            <RdWorkspace view={location.view} />
+          </Suspense>
+        </ViewLoadBoundary>
+      ) : location.kind === 'riskcube' ? (
+        <ViewLoadBoundary label="RiskCube">
+          <Suspense fallback={<SlowModuleNotice label="RiskCube" />}>
+            <RiskCubeWorkspace view={location.view} />
+          </Suspense>
+        </ViewLoadBoundary>
       ) : location.kind === 'narrative' ? (
         <main className="workspace-canvas relative min-h-0 flex-1 overflow-auto p-5">
           <ViewLoadBoundary label="Narrative Intelligence">

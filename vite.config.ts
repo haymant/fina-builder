@@ -75,6 +75,9 @@ export default defineConfig({
     proxy: {
       '/riga': { target: process.env.VITE_RIGA_UPSTREAM ?? 'http://127.0.0.1:8788', changeOrigin: true, rewrite: (path) => path.replace(/^\/riga/, '') },
       '/tac': { target: process.env.VITE_TAC_UPSTREAM ?? 'http://127.0.0.1:8790', changeOrigin: true, rewrite: (path) => path.replace(/^\/tac/, '') },
+      '/book': { target: process.env.VITE_BOOK_UPSTREAM ?? 'http://127.0.0.1:8795', changeOrigin: true, rewrite: (path) => path.replace(/^\/book/, '') },
+      '/rd': { target: process.env.VITE_RD_UPSTREAM ?? 'http://127.0.0.1:8796', changeOrigin: true, rewrite: (path) => path.replace(/^\/rd/, '') },
+      '/riskcube': { target: process.env.VITE_RISKCUBE_UPSTREAM ?? 'http://127.0.0.1:8797', changeOrigin: true, rewrite: (path) => path.replace(/^\/riskcube/, '') },
       '/trade-repo': { target: process.env.VITE_TRADE_REPO_UPSTREAM ?? 'http://127.0.0.1:8792', changeOrigin: true, rewrite: (path) => path.replace(/^\/trade-repo/, '') },
       '/nip': { target: process.env.VITE_NIP_UPSTREAM ?? 'http://127.0.0.1:8794', changeOrigin: true, rewrite: (path) => path.replace(/^\/nip/, '') },
       '/nip-media': { target: process.env.VITE_NIP_UPSTREAM ?? 'http://127.0.0.1:8794', changeOrigin: true, rewrite: (path) => path.replace(/^\/nip-media/, '/media') },
@@ -92,7 +95,7 @@ export default defineConfig({
       // `.riga` is the agent's per-session worktree — writing a file there must
       // not trigger a Vite HMR reload. The MCP registry file is written at
       // startup and refreshed by the agent host, so it is ignored too.
-      ignored: ['**/dist/**', '**/target/**', '**/.riga/**', '**/.riga-mcp-registry.json']
+      ignored: ['**/dist/**', '**/target/**', '**/.riga/**', '**/.riga-mcp-registry.json', '**/modules/tac-qlib/.venv/**']
     }
   },
   envPrefix: ['VITE_', 'TAURI_'],

@@ -28,6 +28,9 @@
     "mcp:http:riga": "modules/riga-flow/target/release/riga-mcp --transport http --bind 127.0.0.1:8788 --allowed-host localhost --allowed-host 127.0.0.1",
     "mcp:http:trade-repo": "node scripts/trade-repo-mcp-http.mjs --seed",
     "mcp:http:trade-repo:reset": "node scripts/trade-repo-mcp-http.mjs --reset --seed",
+    "mcp:http:book": "node scripts/book-mcp-http.mjs",
+    "mcp:http:rd": "node scripts/rd-mcp-http.mjs",
+    "mcp:http:riskcube": "node scripts/riskcube-mcp-http.mjs",
     "nip:http": "cargo run -p nip-engine -- --transport http --bind 127.0.0.1:8794",
     "mcp:http:engines": "concurrently -k -n riga,tac -c blue,magenta \"npm:mcp:http:riga\" \"npm:mcp:http:tac\"",
     "riga:fixture": "node scripts/record-transcripts.mjs riga",
@@ -50,6 +53,9 @@
     "test:e2e:journey:trades": "playwright test --grep @journey-trade-navigation",
     "test:e2e:journey:trade-risk": "playwright test --grep @journey-portfolio-risk-handoff",
     "test:e2e:journey:trade-fixings": "playwright test --grep @journey-trade-fixing-capture",
+    "test:e2e:journey:trading2": "playwright test --grep @journey-trading2-read-only",
+    "test:e2e:journey:rd": "playwright test --grep @journey-rd-read-only",
+    "test:e2e:journey:riskcube": "playwright test --grep @journey-riskcube-read-only",
     "test:e2e:journey:narrative": "PLAYWRIGHT_NIP=on playwright test --grep @journey-narrative-ingestion --grep-invert @demo",
     "test:e2e:journey:narrative-setup": "playwright test playwright/narrative-intelligence-setup.spec.ts",
     "test:e2e:journey:narrative-evidence": "PLAYWRIGHT_NIP=on playwright test --grep @journey-narrative-evidence-review --grep-invert @demo",
@@ -63,7 +69,11 @@
     "price:instrument": "node scripts/price-instrument.mjs",
     "backend:dev": "npm run mcp:http:riga",
     "backend:test": "cargo test --workspace",
-    "version:set": "node scripts/set-version.mjs"
+    "version:set": "node scripts/set-version.mjs",
+    "mcp:stdio:rd": "node scripts/tac-qlib-mcp.mjs rd",
+    "mcp:stdio:book": "node scripts/tac-qlib-mcp.mjs book",
+    "mcp:qlib:sync": "uv sync --project modules/tac-qlib --locked",
+    "test:tac-qlib:lake": "uv run --project modules/tac-qlib --locked python scripts/test-tac-qlib-lake.py"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.15.23",

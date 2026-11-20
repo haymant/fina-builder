@@ -1,0 +1,129 @@
+# -----------------------------------------------------------------------------
+# LightGBM on the TradeAC lake -- qrun workflow (train -> signal -> backtest).
+#
+# Run it like a stock qlib project:
+#
+#     cd tac-qlib
+#     qrun workflows/workflow_lgb_taclake.yaml \
+#          --experiment_name tac-lake-lgb --uri_folder mlruns
+#
+# Or with a custom lake root:
+#
+#     TAC_LAKE_DIR=/path/to/lake qrun workflows/workflow_lgb_taclake.yaml \
+#          --experiment_name tac-lake-lgb
+#
+# The lake providers (calendar/instrument/feature) are wired in `qlib_init`; the
+# expression engine and backtest Exchange stay upstream qlib. The TACHandler reads
+# OHLCV + ta-lib features straight from the parquet lake.
+#
+# Segment split (the lake holds 1d bars since 2026-02-09):
+#     train 2026-03-01..2026-05-31 / valid 2026-06-01..2026-06-30 / test 2026-07-01..2026-08-06
+# -----------------------------------------------------------------------------
+{%- set LAKE = TAC_LAKE_DIR %}
+
+qlib_init:
+    provider_uri: "{{ LAKE }}"
+    region: us
+    expression_cache: null
+    dataset_cache: null
+
+    # --- lake-backed providers (see tac_qlib.data.providers) -----------------
+    calendar_provider:
+        class: tac_qlib.data.providers.LakeCalendarProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+    instrument_provider:
+        class: tac_qlib.data.providers.LakeInstrumentProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+            markets: {}
+    feature_provider:
+        class: tac_qlib.data.providers.LakeFeatureProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+
+    # sqlite backend avoids mlflow's filesystem-backend maintenance-mode opt-out
+    exp_manager:
+        class: MLflowExpManager
+        module_path: qlib.workflow.expm
+        kwargs:
+            uri: "sqlite:///mlruns.db"
+            default_exp_name: "tac-lake-demo"
+
+task:
+    model:
+        class: LGBModel
+        module_path: qlib.contrib.model.gbdt
+        kwargs:
+            loss: mse
+            learning_rate: 0.05
+            num_leaves: 15
+            n_estimators: 200
+            colsample_bytree: 0.8
+            subsample: 0.8
+            subsample_freq: 1
+            reg_alpha: 0.01
+            reg_lambda: 0.01
+
+    dataset:
+        class: DatasetH
+        module_path: qlib.data.dataset
+        kwargs:
+            handler:
+                class: TACHandler
+                module_path: tac_qlib.contrib.data.handler
+                kwargs:
+                    instruments: all
+                    start_time: 2026-03-01
+                    end_time: 2026-08-06
+                    fit_start_time: 2026-03-01
+                    fit_end_time: 2026-05-31
+                    freq: day
+                    lake_root: "{{ LAKE }}"
+                    market: US
+            segments:
+                train: [2026-03-01, 2026-05-31]
+                valid: [2026-06-01, 2026-06-30]
+                test: [2026-07-01, 2026-08-06]
+
+    record:
+        - class: SignalRecord
+          module_path: qlib.workflow.record_temp
+          kwargs: {}
+
+        - class: SigAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              ana_long_short: true
+              ann_scaler: 252
+
+        - class: PortAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              config:
+                  strategy:
+                      class: TopkDropoutStrategy
+                      module_path: qlib.contrib.strategy
+                      kwargs:
+                          signal: "<PRED>"
+                          topk: 2
+                          n_drop: 1
+                          only_tradable: true
+                          risk_degree: 0.95
+                  backtest:
+                      start_time: 2026-07-01
+                      end_time: 2026-08-06
+                      account: 1000000
+                      # any symbol the lake holds works; the lake has no index quotes yet
+                      benchmark: AAPL
+                      exchange_kwargs:
+                          codes: all
+                          deal_price: $close
+                          freq: day
+                          open_cost: 0.0005
+                          close_cost: 0.0015
+                          min_cost: 5.0
+              risk_analysis_freq: 1d

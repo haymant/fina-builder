@@ -124,6 +124,7 @@ interface JsonRpcResponse {
 
 const PROTOCOL_VERSION = '2025-11-25'
 const REQUEST_TIMEOUT_MS = 30_000
+const SESSION_INVALID_STATUSES = new Set([401, 404, 409, 410])
 
 /** Parses a JSON-RPC reply that may arrive as JSON or as SSE `data:` frames. */
 export function parseRpcBody(contentType: string, body: string): JsonRpcResponse {
@@ -142,15 +143,60 @@ export function parseRpcBody(contentType: string, body: string): JsonRpcResponse
     }
     throw new RigaToolError('serialization_error', 'The MCP server returned no JSON-RPC result frame')
   }
-  return JSON.parse(body) as JsonRpcResponse
+  try {
+    return JSON.parse(body) as JsonRpcResponse
+  } catch {
+    throw new RigaToolError('serialization_error', 'The MCP server returned malformed JSON')
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'AbortError'
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function transportError(method: string, baseUrl: string, error: unknown): RigaToolError {
+  return new RigaToolError(
+    'transport_error',
+    isAbortError(error)
+      ? `${method} timed out after ${REQUEST_TIMEOUT_MS}ms (is the MCP server reachable at ${baseUrl}/mcp?)`
+      : `could not reach MCP server at ${baseUrl}/mcp: ${errorMessage(error)}`,
+  )
 }
 
 export function createHttpMcpTransport(baseUrl: string): RigaTransport {
   let sessionId: string | null = null
   let nextId = 1
   let initialized: Promise<void> | null = null
+  let reconnecting: Promise<void> | null = null
 
-  async function rpc(method: string, params: unknown, notify = false): Promise<Record<string, unknown> | undefined> {
+  function invalidateSession(): void {
+    sessionId = null
+    initialized = null
+  }
+
+  async function reconnect(): Promise<void> {
+    if (!reconnecting) {
+      reconnecting = (async () => {
+        invalidateSession()
+        await handshake()
+      })().finally(() => {
+        reconnecting = null
+      })
+    }
+    return reconnecting
+  }
+
+  async function rpc(
+    method: string,
+    params: unknown,
+    notify = false,
+    retryAfterReconnect = true,
+  ): Promise<Record<string, unknown> | undefined> {
+    const requestSessionId = sessionId
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream',
@@ -170,20 +216,26 @@ export function createHttpMcpTransport(baseUrl: string): RigaTransport {
         body: JSON.stringify({ jsonrpc: '2.0', ...(id !== undefined ? { id } : {}), method, params }),
       })
     } catch (error) {
-      const message = error instanceof DOMException && error.name === 'AbortError'
-        ? `${method} timed out after ${REQUEST_TIMEOUT_MS}ms (is the MCP server reachable at ${baseUrl}/mcp?)`
-        : `could not reach MCP server at ${baseUrl}/mcp: ${(error as Error).message}`
-      throw new RigaToolError('transport_error', message)
+      throw transportError(method, baseUrl, error)
     } finally {
       clearTimeout(timer)
     }
-    const returnedSession = response.headers.get('Mcp-Session-Id')
-    if (returnedSession) sessionId = returnedSession
-    if (notify) return undefined
-    const text = await response.text()
+    let text: string
+    try {
+      text = await response.text()
+    } catch (error) {
+      throw transportError(method, baseUrl, error)
+    }
     if (!response.ok) {
+      if (retryAfterReconnect && requestSessionId && SESSION_INVALID_STATUSES.has(response.status)) {
+        if (sessionId === requestSessionId || reconnecting) await reconnect()
+        return rpc(method, params, notify, false)
+      }
       throw new RigaToolError('http_error', `HTTP ${response.status}: ${text.slice(0, 240)}`)
     }
+    const returnedSession = response.headers.get('Mcp-Session-Id')
+    if (returnedSession && (requestSessionId === null || sessionId === requestSessionId)) sessionId = returnedSession
+    if (notify) return undefined
     const parsed = parseRpcBody(response.headers.get('Content-Type') ?? '', text)
     if (parsed.error) throw new RigaToolError('jsonrpc_error', parsed.error.message)
     return parsed.result ?? {}

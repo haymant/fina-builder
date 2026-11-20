@@ -1,0 +1,113 @@
+# -----------------------------------------------------------------------------
+# Improved RankIC workflow: 300+ stock universe, proven RankICLGBModel params,
+# extended 12-month validation, full SP feature set (40 features).
+#
+# Changes from repro run:
+#   1. Single RankICLGBModel (not ensemble) — proven config from skill
+#   2. num_leaves=15 (not 31) — the verified value
+#   3. Universe expanded from 50 ETFs to 300+ single stocks + ETFs
+#   4. Validation extended to 12 months (2025-01 to 2026-01)
+#   5. Full 40 SP features (no leakage confirmed)
+#   6. Early stopping still at 200 (proven)
+#
+# Run:
+#   rd_run_workflow config_path=tac-qlib/workflows/workflow_lgb_300sp_rankic.yaml \
+#       experiment_name=tac-rd-300sp-rankic
+# -----------------------------------------------------------------------------
+{%- set LAKE = TAC_LAKE_DIR %}
+
+qlib_init:
+    provider_uri: "{{ LAKE }}"
+    region: us
+    expression_cache: null
+    dataset_cache: null
+    calendar_provider:
+        class: tac_qlib.data.providers.LakeCalendarProvider
+        kwargs: { lake_root: "{{ LAKE }}", market: US }
+    instrument_provider:
+        class: tac_qlib.data.providers.LakeInstrumentProvider
+        kwargs: { lake_root: "{{ LAKE }}", market: US, markets: {} }
+    feature_provider:
+        class: tac_qlib.data.providers.LakeFeatureProvider
+        kwargs: { lake_root: "{{ LAKE }}", market: US }
+    exp_manager:
+        class: MLflowExpManager
+        module_path: qlib.workflow.expm
+        kwargs: { uri: "sqlite:///mlruns.db", default_exp_name: "tac-rd-300sp-rankic" }
+
+task:
+    model:
+        # Single RankICLGBModel — proven config from tac-qlib-custom skill.
+        # Per-day query groups + feval=rankic + metric='None' so early-stopping
+        # tracks mean per-day Spearman instead of l2.
+        class: RankICLGBModel
+        module_path: tac_qlib.contrib.model.rank_gbdt
+        kwargs:
+            loss: mse
+            learning_rate: 0.02
+            num_leaves: 15
+            num_boost_round: 3000
+            early_stopping_rounds: 200
+            min_data_in_leaf: 20
+            lambda_l1: 0.0
+            lambda_l2: 0.5
+            colsample_bytree: 0.8
+            subsample: 0.8
+            subsample_freq: 1
+            seed: 2026
+
+    dataset:
+        class: DatasetH
+        module_path: qlib.data.dataset
+        kwargs:
+            handler:
+                class: TACHandler
+                module_path: tac_qlib.contrib.data.handler
+                kwargs:
+                    # Expanded universe: all lake symbols (instruments: "all" = every symbol with bars in the lake)
+                    instruments: "all"
+                    start_time: "2015-01-03"
+                    end_time: "2026-08-14"
+                    fit_start_time: "2016-01-04"
+                    fit_end_time: "2025-01-01"
+                    freq: day
+                    lake_root: "{{ LAKE }}"
+                    market: US
+                    label: "Ref($close,-6)/Ref($close,-1)-1"
+                    # Full 40 SP features + 6 OHLCV = 46 features
+                    feature_fields: "$open,$high,$low,$close,$vwap,$volume,sp_ret,sp_logp,sp_hurst_exponent,sp_ou_half_life,sp_ou_revert,sp_ou_zscore,sp_hmm_state,sp_hmm_p_regime1,sp_jump_flag,sp_jump_ratio,sp_jump_tail,sp_max_move,sp_max_up,sp_max_down,sp_rv1,sp_rv5,sp_rv22,sp_rv_ac1,sp_rv_cv_22,sp_vol_ratio_1_22,sp_vol_ratio_5_22,sp_trend_slope_5,sp_trend_slope_20,sp_trend_slope_60,sp_rskew_5,sp_rskew_22,sp_rkurt_5,sp_rkurt_22,sp_dsv_1,sp_dsv_5,sp_dsv_22,sp_dsv_ratio_1,sp_dsv_ratio_5,sp_dsv_ratio_22,sp_sig_level1_lead,sp_sig_level1_lag,sp_sig_level2_lead_lag,sp_sig_level2_lag_lead,sp_sig_level2_lead_lag_5,sp_sig_level2_lag_lead_5"
+                    infer_processors:
+                        - { class: DropAllNaN, kwargs: { fit_start_time: "2016-01-04", fit_end_time: "2025-01-01" } }
+                        - { class: ProcessInf, kwargs: {} }
+                        - { class: CSRankNorm, kwargs: {} }
+                        - { class: ZScoreNorm, kwargs: { fit_start_time: "2016-01-04", fit_end_time: "2025-01-01" } }
+                        - { class: Fillna, kwargs: {} }
+            segments:
+                train: ["2016-01-04", "2024-12-31"]
+                valid: ["2025-01-02", "2026-01-02"]
+                test:  ["2026-01-04", "2026-08-14"]
+
+    record:
+        - { class: SignalRecord, module_path: qlib.workflow.record_temp, kwargs: {} }
+        - { class: SigAnaRecord, module_path: qlib.workflow.record_temp, kwargs: { ana_long_short: true, ann_scaler: 252 } }
+        - class: PortAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              config:
+                  strategy:
+                      class: TopkDropoutStrategy
+                      module_path: qlib.contrib.strategy
+                      kwargs: { signal: "<PRED>", topk: 10, n_drop: 2, only_tradable: true, risk_degree: 0.95 }
+                  backtest:
+                      start_time: "2026-01-04"
+                      end_time: "2026-08-14"
+                      account: 1000000
+                      benchmark: SPY
+                      exchange_kwargs:
+                          codes: ""
+                          deal_price: $close
+                          freq: day
+                          open_cost: 0.0005
+                          close_cost: 0.0015
+                          min_cost: 5.0
+              risk_analysis_freq: 1d

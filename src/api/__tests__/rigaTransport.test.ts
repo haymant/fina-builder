@@ -57,6 +57,12 @@ describe('parseRpcBody', () => {
     const parsed = parseRpcBody('text/event-stream', 'event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"pv":2.0}}\n\n')
     expect(parsed.result).toEqual({ pv: 2.0 })
   })
+
+  it('normalizes malformed JSON', () => {
+    expect(() => parseRpcBody('application/json', '{not-json')).toThrowError(
+      expect.objectContaining({ name: 'RigaToolError', code: 'serialization_error' }),
+    )
+  })
 })
 
 describe('rigaTransport (HTTP MCP contract)', () => {
@@ -102,6 +108,90 @@ describe('rigaTransport (HTTP MCP contract)', () => {
     )
     const transport = createHttpRigaTransport('http://127.0.0.1:8788')
     await expect(transport.listTools()).rejects.toBeInstanceOf(RigaToolError)
+  })
+
+  it('normalizes a rejected fetch as a transport error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('connection refused') }))
+    const transport = createHttpRigaTransport('http://127.0.0.1:8788')
+
+    await expect(transport.listTools()).rejects.toMatchObject({
+      name: 'RigaToolError',
+      code: 'transport_error',
+      message: expect.stringContaining('connection refused'),
+    })
+  })
+
+  it('normalizes an abort as a timeout transport error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw Object.assign(new Error('request aborted'), { name: 'AbortError' })
+    }))
+    const transport = createHttpRigaTransport('http://127.0.0.1:8788')
+
+    await expect(transport.listTools()).rejects.toMatchObject({
+      name: 'RigaToolError',
+      code: 'transport_error',
+      message: expect.stringContaining('timed out after 30000ms'),
+    })
+  })
+
+  it('normalizes a response-body read failure as a transport error', async () => {
+    const response = new Response('{}', {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+    vi.spyOn(response, 'text').mockRejectedValue(new Error('body stream failed'))
+    vi.stubGlobal('fetch', vi.fn(async () => response))
+    const transport = createHttpRigaTransport('http://127.0.0.1:8788')
+
+    await expect(transport.listTools()).rejects.toMatchObject({
+      name: 'RigaToolError',
+      code: 'transport_error',
+      message: expect.stringContaining('body stream failed'),
+    })
+  })
+
+  it('re-handshakes once and retries after an expired MCP session', async () => {
+    const methods: string[] = []
+    const toolSessionIds: string[] = []
+    let initializeCount = 0
+    let toolCallCount = 0
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { method: string }
+      methods.push(body.method)
+      const headers = new Headers({ 'Content-Type': 'application/json' })
+      if (body.method === 'initialize') {
+        initializeCount += 1
+        headers.set('Mcp-Session-Id', `session-${initializeCount}`)
+        return new Response(JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          result: { protocolVersion: '2025-11-25' },
+        }), { headers })
+      }
+      if (body.method === 'notifications/initialized') {
+        return new Response('', { status: 202, headers })
+      }
+      toolCallCount += 1
+      toolSessionIds.push(new Headers(init.headers).get('Mcp-Session-Id') ?? '')
+      if (toolCallCount === 1) return new Response('expired', { status: 410, headers })
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        result: { structuredContent: { status: 'ok' }, isError: false, content: [] },
+      }), { headers })
+    }))
+    const transport = createHttpRigaTransport('http://127.0.0.1:8788')
+
+    await expect(transport.callTool<{ status: string }>('health')).resolves.toEqual({ status: 'ok' })
+    expect(methods).toEqual([
+      'initialize',
+      'notifications/initialized',
+      'tools/call',
+      'initialize',
+      'notifications/initialized',
+      'tools/call',
+    ])
+    expect(toolSessionIds).toEqual(['session-1', 'session-2'])
   })
 })
 

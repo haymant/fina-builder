@@ -1,0 +1,133 @@
+# -----------------------------------------------------------------------------
+# Tune run 5: longer backtest window (2026-01-01 -> 2026-08-01).
+#
+# Purpose: test the fixed universe provider (_resolve_symbols now honors the
+# comma-separated 10-name instruments) and the fixed artifact pinning
+# (mlruns/<exp_id>/<run_id>/) over a 7-month out-of-sample window instead of
+# the single month (Jul) of run 47e9e369 / tune_run4.
+#
+# Changes vs tune_run4_fix_universe_longtrain.yaml:
+#   - test/backtest window 2026-07-01..08-06  ->  2026-01-01..2026-08-01
+#   - train/valid moved back so they stay strictly before test (no leakage):
+#       train: 2024-06-03 .. 2025-11-28   (~18 months, ~4500 rows x 10 names)
+#       valid: 2025-12-01 .. 2025-12-31   (1 month, right before test)
+#       test : 2026-01-01 .. 2026-08-01   (7 months)
+#   - everything else held fixed: 5-day label, LGB baseline hyperparams,
+#     topk 5 / n_drop 2, benchmark QQQ, universe 10 names.
+#
+# NOTE: requires the providers.py fix so the universe is actually 10 names
+# (not silently expanded to all 17 lake symbols).
+#
+# Trigger (existing experiment, exp id 4 -> artifacts under
+#   $TAC_LAKE_DIR/mlruns/4/<run_id>/ ):
+#   rd_run_workflow config_path=tac-qlib/workflows/tune_run5_longtest.yaml \
+#       experiment_name=tac-rd-tune2
+# -----------------------------------------------------------------------------
+{%- set LAKE = TAC_LAKE_DIR %}
+
+qlib_init:
+    provider_uri: "{{ LAKE }}"
+    region: us
+    expression_cache: null
+    dataset_cache: null
+
+    calendar_provider:
+        class: tac_qlib.data.providers.LakeCalendarProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+    instrument_provider:
+        class: tac_qlib.data.providers.LakeInstrumentProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+            markets: {}
+    feature_provider:
+        class: tac_qlib.data.providers.LakeFeatureProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+
+    exp_manager:
+        class: MLflowExpManager
+        module_path: qlib.workflow.expm
+        kwargs:
+            uri: "sqlite:///{{ LAKE }}/mlruns.db"
+            default_exp_name: "tac-rd-tune2"
+
+task:
+    model:
+        class: LGBModel
+        module_path: qlib.contrib.model.gbdt
+        kwargs:
+            loss: mse
+            learning_rate: 0.05
+            num_leaves: 15
+            num_boost_round: 1000
+            early_stopping_rounds: 50
+            colsample_bytree: 0.8
+            subsample: 0.8
+            subsample_freq: 1
+            reg_alpha: 0.01
+            reg_lambda: 0.01
+            seed: 2026
+
+    dataset:
+        class: DatasetH
+        module_path: qlib.data.dataset
+        kwargs:
+            handler:
+                class: TACHandler
+                module_path: tac_qlib.contrib.data.handler
+                kwargs:
+                    instruments: AAPL,MSFT,TSLA,QQQ,IVV,SMH,TLT,IBIT,MCHI,AIQ
+                    start_time: 2000-01-03
+                    end_time: 2026-08-01
+                    fit_start_time: 2024-06-03
+                    fit_end_time: 2025-11-28
+                    freq: day
+                    lake_root: "{{ LAKE }}"
+                    market: US
+                    label: "Ref($close,-6)/Ref($close,-1)-1"
+            segments:
+                train: [2024-06-03, 2025-11-28]
+                valid: [2025-12-01, 2025-12-31]
+                test:  [2026-01-01, 2026-08-01]
+
+    record:
+        - class: SignalRecord
+          module_path: qlib.workflow.record_temp
+          kwargs: {}
+
+        - class: SigAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              ana_long_short: true
+              ann_scaler: 252
+
+        - class: PortAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              config:
+                  strategy:
+                      class: TopkDropoutStrategy
+                      module_path: qlib.contrib.strategy
+                      kwargs:
+                          signal: "<PRED>"
+                          topk: 5
+                          n_drop: 2
+                          only_tradable: true
+                          risk_degree: 0.95
+                  backtest:
+                      start_time: 2026-01-01
+                      end_time: 2026-08-01
+                      account: 1000000
+                      benchmark: QQQ
+                      exchange_kwargs:
+                          codes: AAPL,MSFT,TSLA,QQQ,IVV,SMH,TLT,IBIT,MCHI,AIQ
+                          deal_price: $close
+                          freq: day
+                          open_cost: 0.0005
+                          close_cost: 0.0015
+                          min_cost: 5.0
+              risk_analysis_freq: 1d

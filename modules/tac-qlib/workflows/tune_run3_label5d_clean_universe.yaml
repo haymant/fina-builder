@@ -1,0 +1,146 @@
+# -----------------------------------------------------------------------------
+# Tune run 3 (NEXT run): 5-day label + clean 10-name universe.
+#
+# Baseline (exp 1 / run f29f5446):
+#   IC 0.071, ICIR 0.17, Rank IC 0.014, Rank ICIR 0.03  ->  ranking ~ coin flip
+#   valid l2 best at round 0 and never improved (early-stopped ~50 rounds, overfit)
+#   backtest: strategy +4.9% ann (raw) vs equal-weight universe +89.2% ann
+#   (benchmark was unset -> qlib used equal-weight), excess w/ cost -94.0% ann,
+#   IR -2.23, max DD -18.9%. topk=2, 24 trades/27 days, $11.1k cost (1.1% of $1M),
+#   ending book ~97.5% in AAPL+IBIT (two names, both ~49%).
+#
+# PRIMARY LEVER (change one thing, everything else held at baseline):
+#   label: 1-day next return -> 5-day forward return
+#     "Ref($close,-6)/Ref($close,-1)-1".
+#   Rationale: Rank ICIR 0.03 is the binding constraint - a topk book's return
+#   is bounded by ranking quality, and no backtest tuning fixes a non-existent
+#   ranking. The retained TA features (rsi_14, macd_hist, ema_20, volume,
+#   stoch, aroon) are momentum/mean-reversion proxies that predict multi-day
+#   drift, not overnight noise; and the avg holding in the baseline book was
+#   several days, so a 1-day label mismatches the holding horizon.
+#
+# SUPPORTING (kept minimal, flagged for attribution):
+#   - universe 17 -> 10: drop leveraged/vol/cash names (VXX, USO, SLV, BIL)
+#     and near-duplicate index baskets (GPIQ, QQQE, KTEC). 17 names were really
+#     ~8 independent betas (QQQ/QQQE/IVV/SMH/AIQ overlap heavily).
+#   - topk 2 -> 5, n_drop 1 -> 2: stop the 2-name lottery, cut per-name turnover.
+#   - benchmark: unset -> QQQ (a real index ETF the universe tracks; the
+#     "excess return" vs equal-weight of a 17-name universe is misleading).
+#   - model: explicitly num_boost_round 1000 + early_stopping_rounds 50 so the
+#     round count is actually controlled (baseline's n_estimators: 200 was a
+#     no-op, swallowed into lgb params; rounds were the 1000 default).
+#     Hyperparameters otherwise identical to baseline (lr 0.05, num_leaves 15,
+#     reg 0.01/0.01) for a clean label A/B.
+#
+# Trigger into a NEW experiment (do not pollute exp 1):
+#   rd_run_workflow config_path=tac-qlib/workflows/tune_run3_label5d_clean_universe.yaml \
+#       experiment_name=tac-rd-tune
+# -----------------------------------------------------------------------------
+{%- set LAKE = TAC_LAKE_DIR %}
+
+qlib_init:
+    provider_uri: "{{ LAKE }}"
+    region: us
+    expression_cache: null
+    dataset_cache: null
+
+    calendar_provider:
+        class: tac_qlib.data.providers.LakeCalendarProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+    instrument_provider:
+        class: tac_qlib.data.providers.LakeInstrumentProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+            markets: {}
+    feature_provider:
+        class: tac_qlib.data.providers.LakeFeatureProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+
+    exp_manager:
+        class: MLflowExpManager
+        module_path: qlib.workflow.expm
+        kwargs:
+            uri: "sqlite:///{{ LAKE }}/mlruns.db"
+            default_exp_name: "tac-rd-tune"
+
+task:
+    model:
+        class: LGBModel
+        module_path: qlib.contrib.model.gbdt
+        kwargs:
+            loss: mse
+            learning_rate: 0.05
+            num_leaves: 15
+            num_boost_round: 1000
+            early_stopping_rounds: 50
+            colsample_bytree: 0.8
+            subsample: 0.8
+            subsample_freq: 1
+            reg_alpha: 0.01
+            reg_lambda: 0.01
+            seed: 2026
+
+    dataset:
+        class: DatasetH
+        module_path: qlib.data.dataset
+        kwargs:
+            handler:
+                class: TACHandler
+                module_path: tac_qlib.contrib.data.handler
+                kwargs:
+                    instruments: AAPL,MSFT,TSLA,QQQ,IVV,SMH,TLT,IBIT,MCHI,AIQ
+                    start_time: 2000-01-03
+                    end_time: 2026-08-06
+                    fit_start_time: 2026-03-01
+                    fit_end_time: 2026-05-31
+                    freq: day
+                    lake_root: "{{ LAKE }}"
+                    market: US
+                    label: "Ref($close,-6)/Ref($close,-1)-1"
+            segments:
+                train: [2026-03-01, 2026-05-31]
+                valid: [2026-06-01, 2026-06-30]
+                test: [2026-07-01, 2026-08-06]
+
+    record:
+        - class: SignalRecord
+          module_path: qlib.workflow.record_temp
+          kwargs: {}
+
+        - class: SigAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              ana_long_short: true
+              ann_scaler: 252
+
+        - class: PortAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              config:
+                  strategy:
+                      class: TopkDropoutStrategy
+                      module_path: qlib.contrib.strategy
+                      kwargs:
+                          signal: "<PRED>"
+                          topk: 5
+                          n_drop: 2
+                          only_tradable: true
+                          risk_degree: 0.95
+                  backtest:
+                      start_time: 2026-07-01
+                      end_time: 2026-08-06
+                      account: 1000000
+                      benchmark: QQQ
+                      exchange_kwargs:
+                          codes: AAPL,MSFT,TSLA,QQQ,IVV,SMH,TLT,IBIT,MCHI,AIQ
+                          deal_price: $close
+                          freq: day
+                          open_cost: 0.0005
+                          close_cost: 0.0015
+                          min_cost: 5.0
+              risk_analysis_freq: 1d

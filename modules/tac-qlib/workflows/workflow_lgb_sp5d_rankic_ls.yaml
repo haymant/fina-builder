@@ -1,0 +1,164 @@
+# -----------------------------------------------------------------------------
+# Long-short test of TradeACExchange: same model/data/exchange as
+# TradeACExchange (short/borrow/margin-aware exchange).
+#
+# Identical to the baseline workflow except backtest.exchange_kwargs, which now
+# instantiates TradeACExchange via init_instance_by_config:
+#   - allow_short + initial/maintenance margin settings
+#   - borrow_fee_rate charged only on net-new-short sell value
+#   - per-symbol borrowable limits (TSLA capped at 3000 shares, IBIT not borrowable)
+#   - SMA excess-equity helper enabled (check_margin_call / get_sma API)
+#
+# NOTE on wiring: PortAnaRecord -> qlib.backtest.backtest -> get_exchange(**kw)
+# passes the dict under the `exchange:` key to init_instance_by_config. A flat
+# {class, module_path, kwargs} block here would be swallowed by base
+# Exchange(**kwargs) and silently ignored.
+#
+# Run:
+#   rd_run_workflow config_path=tac-qlib/workflows/workflow_lgb_sp5d_rankic_ls.yaml \
+#       experiment_name=tac-rd-evolve
+# -----------------------------------------------------------------------------
+{%- set LAKE = TAC_LAKE_DIR %}
+{%- set UNIVERSE = "AAPL,MSFT,TSLA,QQQ,IVV,SMH,TLT,IBIT,MCHI,AIQ" %}
+{%- set SP_FIELDS = "sp_ret,sp_logp,sp_rv1,sp_rv5,sp_rv22,sp_vol_ratio_5_22,sp_vol_ratio_1_22,sp_trend_slope_5,sp_trend_slope_20,sp_trend_slope_60,sp_dsv_1,sp_dsv_5,sp_dsv_22,sp_dsv_ratio_1,sp_dsv_ratio_5,sp_dsv_ratio_22,sp_rskew_5,sp_rskew_22,sp_rkurt_5,sp_rkurt_22,sp_rv_ac1,sp_rv_cv_22" %}
+
+qlib_init:
+    provider_uri: "{{ LAKE }}"
+    region: us
+    expression_cache: null
+    dataset_cache: null
+
+    calendar_provider:
+        class: tac_qlib.data.providers.LakeCalendarProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+    instrument_provider:
+        class: tac_qlib.data.providers.LakeInstrumentProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+            markets: {}
+    feature_provider:
+        class: tac_qlib.data.providers.LakeFeatureProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+
+    exp_manager:
+        class: MLflowExpManager
+        module_path: qlib.workflow.expm
+        kwargs:
+            uri: "postgresql+psycopg://postgres:XMhaRhbi1CD8nAM2ZRBCGYfphw9frWtvyim7vSIE2wE9dABtR0fXr1LuAfdwaiGu@192.168.1.96:5555/tradeac_local"
+            default_exp_name: "tac-rd-evolve"
+
+task:
+    model:
+        class: RankICLGBModel
+        module_path: tac_qlib.contrib.model.rank_gbdt
+        kwargs:
+            loss: mse
+            learning_rate: 0.02
+            num_leaves: 31
+            num_boost_round: 3000
+            early_stopping_rounds: 200
+            min_data_in_leaf: 20
+            lambda_l2: 0.5
+            colsample_bytree: 0.8
+            subsample: 0.8
+            subsample_freq: 1
+            reg_alpha: 0.1
+            reg_lambda: 1.0
+            seed: 42
+
+    dataset:
+        class: DatasetH
+        module_path: qlib.data.dataset
+        kwargs:
+            handler:
+                class: TACHandler
+                module_path: tac_qlib.contrib.data.handler
+                kwargs:
+                    instruments: "{{ UNIVERSE }}"
+                    start_time: 2000-01-03
+                    end_time: 2026-08-14
+                    fit_start_time: 2022-08-15
+                    fit_end_time: 2026-08-14
+                    freq: day
+                    lake_root: "{{ LAKE }}"
+                    market: US
+                    label: "Ref($close,-6)/Ref($close,-1)-1"
+                    feature_fields: "$open,$high,$low,$close,$vwap,$volume,{{ SP_FIELDS }}"
+                    infer_processors:
+                        - class: DropAllNaN
+                          kwargs:
+                              fit_start_time: 2022-08-15
+                              fit_end_time: 2026-08-14
+                        - class: ProcessInf
+                          kwargs: {}
+                        - class: CSRankNorm
+                          kwargs: {}
+                        - class: ZScoreNorm
+                          kwargs:
+                              fit_start_time: 2022-08-15
+                              fit_end_time: 2026-08-14
+                        - class: Fillna
+                          kwargs: {}
+            segments:
+                train: [2022-08-15, 2025-12-31]
+                valid: [2026-01-02, 2026-04-30]
+                test: [2026-05-01, 2026-08-14]
+
+    record:
+        - class: SignalRecord
+          module_path: qlib.workflow.record_temp
+          kwargs: {}
+        - class: SigAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              ana_long_short: true
+              ann_scaler: 252
+        - class: PortAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              config:
+                  strategy:
+                      class: LongShortTopkStrategy
+                      module_path: tac_qlib.contrib.strategy.long_short
+                      kwargs:
+                          signal: "<PRED>"
+                          topk: 4
+                          k_short: 2
+                          only_tradable: true
+                          rebalance_tol: 0.05
+                          risk_degree: 0.95
+                  backtest:
+                      start_time: 2026-05-01
+                      end_time: 2026-08-14
+                      account: 1000000
+                      benchmark: QQQ
+                      exchange_kwargs:
+                          exchange:
+                              class: TradeACExchange
+                              module_path: tac_qlib.contrib.backtest.tradeac_exchange
+                              kwargs:
+                                  start_time: 2026-05-01
+                                  end_time: 2026-08-14
+                                  freq: day
+                                  codes: "{{ UNIVERSE }}"
+                                  deal_price: $close
+                                  open_cost: 0.0005
+                                  close_cost: 0.0015
+                                  min_cost: 5.0
+                                  impact_cost: 0.001
+                                  allow_short: true
+                                  initial_margin_long: 0.5
+                                  initial_margin_short: 0.5
+                                  maintenance_margin_long: 0.25
+                                  maintenance_margin_short: 0.3
+                                  borrow_fee_rate: 0.001
+                                  borrowable:
+                                      TSLA: 3000
+                                      IBIT: false
+                                  sma_enabled: true
+              risk_analysis_freq: 1d

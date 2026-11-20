@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tac-qlib"
+version = "0.1.0"
+description = "TradeAC qlib integration: read the parquet+DuckDB lake (OHLCV bars + ta-lib features) from within the qlib research workflow"
+requires-python = ">=3.10"
+dependencies = [
+    "pyarrow",
+    "duckdb",
+    "pandas>=1.1",
+    "pyqlib",
+    "mcp[cli]",
+    "python-dotenv",
+    "psycopg[binary]",
+]
+
+[tool.setuptools]
+packages = [
+    "tac_qlib",
+    "tac_qlib.data",
+    "tac_qlib.workflows",
+    "tac_qlib.contrib",
+    "tac_qlib.contrib.data",
+    "tac_qlib.contrib.model",
+    "tac_qlib.contrib.strategy",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]

@@ -1,0 +1,147 @@
+# QUEUE-18c — Long-short A/B arm: SHORT ENABLED BUT RESTRICTED.
+# Same QUEUE-17 spec as arms a/b (universe, realized-moments feature set,
+# RankICEnsembleLGBModel 5-seed ensemble, TACHandler segments, SPY benchmark,
+# 5bp open / 15bp close / $5 min costs, test 2026-01-04 -> 2026-08-10,
+# LongShortTopkStrategy topk=10 / k_short=5), with two new restriction knobs:
+#
+#   - strategy: short_whitelist=[SPY] -> only SPY is ever targeted short;
+#     short_vol_window=20 + short_vol_top_pct=0.5 -> and only when its trailing
+#     20d realized-vol rank clears the top half of that day's cross-section
+#     (ranks are always computed across ALL ranked names, not just candidates).
+#   - exchange: borrowable={SPY: true} + borrow_default=false -> strict borrow
+#     whitelist at the execution layer; sells beyond holdings of any other
+#     symbol are clipped to zero headroom even if an order slips through.
+#
+# Effective book: long top-10, plus an opportunistic SPY short leg only when
+# SPY is relatively high-vol vs the ETF universe. Compare against arm a
+# (workflow_q18_ls_short_on.yaml, unrestricted shorts) and arm b
+# (workflow_q18_ls_short_off.yaml, long-only).
+#
+# Run:
+#   rd_run_workflow config_path=tac-qlib/workflows/workflow_q18_ls_short_restricted.yaml \
+#       experiment_name=tac-rd-q17-ls-short-ab
+# -----------------------------------------------------------------------------
+{%- set LAKE = TAC_LAKE_DIR %}
+{%- set UNIVERSE = "SPY,QQQ,DIA,IWM,MDY,VTI,VOO,VEA,VWO,VT,EFA,EEM,TLT,IEF,SHY,AGG,BND,LQD,HYG,JNK,EMB,GLD,SLV,USO,UNG,DBA,DBC,XLK,XLF,XLE,XLV,XLI,XLY,XLP,XLU,XLB,XLRE,ARKK,SMH,SOXX,IBB,XBI,ITA,XAR,ICLN,TAN,FDN,IGV,ESPO,REM" %}
+{%- set FEATURES = "$open,$high,$low,$close,$vwap,$volume,sp_ret,sp_jump_ratio,sp_jump_flag,sp_jump_tail,sp_max_move,sp_rv1,sp_rv5,sp_rv22,sp_vol_ratio_5_22,sp_vol_ratio_1_22,sp_trend_slope_5,sp_trend_slope_20,sp_trend_slope_60,sp_logp,sp_hurst_exponent,sp_sig_level1_lead,sp_sig_level1_lag,sp_sig_level2_lead_lag,sp_sig_level2_lag_lead,sp_rskew_5,sp_rskew_22,sp_rkurt_5,sp_rkurt_22,sp_dsv_5,sp_dsv_22" %}
+
+qlib_init:
+    provider_uri: "{{ LAKE }}"
+    region: us
+    expression_cache: null
+    dataset_cache: null
+    calendar_provider:
+        class: tac_qlib.data.providers.LakeCalendarProvider
+        kwargs: { lake_root: "{{ LAKE }}", market: US }
+    instrument_provider:
+        class: tac_qlib.data.providers.LakeInstrumentProvider
+        kwargs: { lake_root: "{{ LAKE }}", market: US, markets: {} }
+    feature_provider:
+        class: tac_qlib.data.providers.LakeFeatureProvider
+        kwargs: { lake_root: "{{ LAKE }}", market: US }
+    exp_manager:
+        class: MLflowExpManager
+        module_path: qlib.workflow.expm
+        kwargs:
+            uri: "postgresql+psycopg://postgres:XMhaRhbi1CD8nAM2ZRBCGYfphw9frWtvyim7vSIE2wE9dABtR0fXr1LuAfdwaiGu@192.168.1.96:5555/tradeac_local"
+            default_exp_name: "tac-rd-q17-ls-short-ab"
+
+task:
+    model:
+        class: RankICEnsembleLGBModel
+        module_path: tac_qlib.contrib.model.rank_ensemble
+        kwargs:
+            loss: mse
+            learning_rate: 0.02
+            num_leaves: 31
+            n_estimators: 3000
+            num_boost_round: 3000
+            early_stopping_rounds: 200
+            min_data_in_leaf: 20
+            lambda_l2: 0.5
+            colsample_bytree: 0.8
+            subsample: 0.8
+            subsample_freq: 1
+            reg_alpha: 0.1
+            reg_lambda: 1.0
+            seeds: "42,7,2026,99,123"
+
+    dataset:
+        class: DatasetH
+        module_path: qlib.data.dataset
+        kwargs:
+            handler:
+                class: TACHandler
+                module_path: tac_qlib.contrib.data.handler
+                kwargs:
+                    instruments: "{{ UNIVERSE }}"
+                    start_time: 2015-01-03
+                    end_time: 2026-08-10
+                    fit_start_time: 2016-01-04
+                    fit_end_time: 2025-09-01
+                    freq: day
+                    lake_root: "{{ LAKE }}"
+                    market: US
+                    label: "Ref($close,-6)/Ref($close,-1)-1"
+                    feature_fields: "{{ FEATURES }}"
+                    infer_processors:
+                        - { class: DropAllNaN, kwargs: { fit_start_time: "2016-01-04", fit_end_time: "2025-09-01" } }
+                        - { class: ProcessInf, kwargs: {} }
+                        - { class: CSRankNorm, kwargs: {} }
+                        - { class: ZScoreNorm, kwargs: { fit_start_time: "2016-01-04", fit_end_time: "2025-09-01" } }
+                        - { class: Fillna, kwargs: {} }
+            segments:
+                train: [2016-01-04, 2025-09-01]
+                valid: [2025-09-03, 2026-01-03]
+                test: [2026-01-04, 2026-08-10]
+
+    record:
+        - { class: SignalRecord, module_path: qlib.workflow.record_temp, kwargs: {} }
+        - { class: SigAnaRecord, module_path: qlib.workflow.record_temp, kwargs: { ana_long_short: true, ann_scaler: 252 } }
+        - class: PortAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              config:
+                  strategy:
+                      class: LongShortTopkStrategy
+                      module_path: tac_qlib.contrib.strategy.long_short
+                      kwargs:
+                          signal: "<PRED>"
+                          topk: 10
+                          k_short: 5
+                          hold_thresh: 1
+                          only_tradable: true
+                          rebalance_tol: 0.05
+                          risk_degree: 0.95
+                          allow_short: true
+                          short_whitelist: ["SPY"]
+                          short_vol_window: 20
+                          short_vol_top_pct: 0.5
+                  backtest:
+                      start_time: 2026-01-04
+                      end_time: 2026-08-10
+                      account: 1000000
+                      benchmark: SPY
+                      exchange_kwargs:
+                          exchange:
+                              class: TradeACExchange
+                              module_path: tac_qlib.contrib.backtest.tradeac_exchange
+                              kwargs:
+                                  start_time: 2026-01-04
+                                  end_time: 2026-08-10
+                                  freq: day
+                                  codes: "{{ UNIVERSE }}"
+                                  deal_price: $close
+                                  open_cost: 0.0005
+                                  close_cost: 0.0015
+                                  min_cost: 5.0
+                                  allow_short: true
+                                  initial_margin_long: 0.5
+                                  initial_margin_short: 0.5
+                                  maintenance_margin_long: 0.25
+                                  maintenance_margin_short: 0.3
+                                  borrow_fee_rate: 0.001
+                                  borrowable: { SPY: true }
+                                  borrow_default: false
+                                  sma_enabled: true
+              risk_analysis_freq: 1d

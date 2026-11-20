@@ -1,0 +1,7 @@
+pyarrow
+duckdb
+pandas>=1.1
+pyqlib
+mcp[cli]
+python-dotenv
+psycopg[binary]

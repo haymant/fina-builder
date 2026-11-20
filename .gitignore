@@ -70,3 +70,7 @@ artifacts/demo/
 
 # Local TTS tooling for demo narration
 .venv-tts/
+
+# Module-local Python environments for TradeAC-derived MCP services.
+modules/tac-qlib/.venv/
+modules/tac-qlib/.pytest_cache/

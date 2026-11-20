@@ -1,16 +1,19 @@
 import { Command as Cmd } from 'cmdk'
 import {
   BookOpen, Columns3, Copy, Database, FilePlus2, FileUp, HelpCircle, History, Keyboard, LayoutGrid, Layers, ArrowLeftRight,
-  MessageSquare, Moon, Plus, Search, Sun, Trash2, BookOpenCheck, Activity, CalendarClock, BrainCircuit, ShieldCheck, Clapperboard,
+  MessageSquare, Moon, Plus, Search, Sun, Trash2, BookOpenCheck, Activity, CalendarClock, BrainCircuit, ShieldCheck, Clapperboard, BriefcaseBusiness, WalletCards, ListChecks, ClipboardList, Newspaper, Star,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   Menubar, MenubarCheckboxItem, MenubarContent, MenubarItem, MenubarLabel, MenubarMenu, MenubarRadioGroup, MenubarRadioItem,
   MenubarSeparator, MenubarShortcut, MenubarTrigger,
 } from '@/components/ui/menubar'
-import { accelLabel, matchAccel, TRADE_VIEWS, type Location, type TradeView } from '../navigation'
+import { accelLabel, matchAccel, TRADE_VIEWS, TRADING2_VIEWS, RD_VIEWS, RISKCUBE_VIEWS, type Location, type TradeView, type Trading2View, type RdView, type RiskCubeView } from '../navigation'
 
 const TRADE_ICONS: Record<TradeView, typeof Layers> = { blotter: BookOpenCheck, positions: Layers, recon: ArrowLeftRight, audit: History, import: FileUp, fixings: CalendarClock }
+const TRADING2_ICONS: Record<Trading2View, typeof BriefcaseBusiness> = { overview: BriefcaseBusiness, account: WalletCards, positions: ListChecks, orders: ClipboardList, news: Newspaper, watchlist: Star }
+const RD_ICONS: Record<RdView, typeof BrainCircuit> = { experiments: BrainCircuit, runs: Activity, results: ClipboardList }
+const RISKCUBE_ICONS: Record<RiskCubeView, typeof Layers> = { scenarios: Layers, versions: History, slice: Columns3, cubes: Database }
 
 export interface MenuCommand { id: string; group: string; label: string; icon: typeof Layers; accel?: string; run: () => void; keywords?: string }
 
@@ -43,6 +46,9 @@ export function useMenuCommands(p: AppMenuBarProps): MenuCommand[] {
       run: () => p.onNavigate({ kind: 'dashboard', dashboardId: d.id }),
     }))
     const trades = TRADE_VIEWS.map((v) => ({ id: `trades:${v.id}`, group: 'Trades', label: `Trade Repository: ${v.label}`, icon: TRADE_ICONS[v.id], accel: v.accel, keywords: 'trade repository', run: () => p.onNavigate({ kind: 'trades', view: v.id }) }))
+    const trading2 = TRADING2_VIEWS.map((v) => ({ id: `trading2:${v.id}`, group: 'Trading 2ⁿᵈ', label: `Trading 2ⁿᵈ: ${v.label}`, icon: TRADING2_ICONS[v.id], accel: v.accel, keywords: 'alpaca account positions orders broker', run: () => p.onNavigate({ kind: 'trading2', view: v.id }) }))
+    const rd = RD_VIEWS.map((v) => ({ id: `rd:${v.id}`, group: 'R&D', label: `R&D: ${v.label}`, icon: RD_ICONS[v.id], accel: v.accel, keywords: 'research experiment run mlflow qlib model metrics', run: () => p.onNavigate({ kind: 'rd', view: v.id }) }))
+    const riskcube = RISKCUBE_VIEWS.map((v) => ({ id: `riskcube:${v.id}`, group: 'RiskCube', label: `RiskCube: ${v.label}`, icon: RISKCUBE_ICONS[v.id], accel: v.accel, keywords: 'OLAP scenario version sensitivity P&L cube partition', run: () => p.onNavigate({ kind: 'riskcube', view: v.id }) }))
     const narrative = [
       { id: 'narrative:overview', group: 'Narrative', label: 'Narrative Intelligence', icon: BrainCircuit, keywords: 'events evidence claims', run: () => p.onNavigate({ kind: 'narrative', view: 'overview' as const }) },
       { id: 'narrative:claims', group: 'Narrative', label: 'Claim Explorer', icon: ShieldCheck, keywords: 'claims evidence provenance', run: () => p.onNavigate({ kind: 'narrative', view: 'claims' as const }) },
@@ -56,6 +62,9 @@ export function useMenuCommands(p: AppMenuBarProps): MenuCommand[] {
       { id: 'file:delete', group: 'File', label: 'Delete dashboard…', icon: Trash2, run: p.onDeleteDashboard },
       ...dash,
       ...trades,
+      ...trading2,
+      ...rd,
+      ...riskcube,
       ...narrative,
       ...video,
       { id: 'trades:new', group: 'Trades', label: 'New trade…', icon: Plus, accel: 'Alt+N', run: p.onNewTrade },
@@ -102,6 +111,12 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
     ? ['Dashboards', props.dashboards.find((d) => d.id === loc.dashboardId)?.name ?? '—']
     : loc.kind === 'trades'
       ? ['Trade Repository', TRADE_VIEWS.find((v) => v.id === loc.view)!.label]
+      : loc.kind === 'trading2'
+        ? ['Trading 2ⁿᵈ', TRADING2_VIEWS.find((v) => v.id === loc.view)!.label]
+      : loc.kind === 'rd'
+        ? ['R&D', RD_VIEWS.find((v) => v.id === loc.view)!.label]
+      : loc.kind === 'riskcube'
+        ? ['RiskCube', RISKCUBE_VIEWS.find((v) => v.id === loc.view)!.label]
       : loc.kind === 'video'
         ? ['Video Workspace', loc.view === 'projects' ? 'Projects' : 'Episode workspace']
         : ['Narrative Intelligence', loc.view === 'claims' ? 'Claim Explorer' : 'Event review']
@@ -152,6 +167,18 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
           </MenubarContent>
         </MenubarMenu>
         <MenubarMenu>
+          <MenubarTrigger data-testid="menu-trading2">Trading 2ⁿᵈ</MenubarTrigger>
+          <MenubarContent>{by('Trading 2ⁿᵈ').map((c) => <Item key={c.id} cmd={{ ...c, label: c.label.replace('Trading 2ⁿᵈ: ', '') }} />)}</MenubarContent>
+        </MenubarMenu>
+        <MenubarMenu>
+          <MenubarTrigger data-testid="menu-rd">R&amp;D</MenubarTrigger>
+          <MenubarContent>{by('R&D').map((c) => <Item key={c.id} cmd={{ ...c, label: c.label.replace('R&D: ', '') }} />)}</MenubarContent>
+        </MenubarMenu>
+        <MenubarMenu>
+          <MenubarTrigger data-testid="menu-riskcube">RiskCube</MenubarTrigger>
+          <MenubarContent>{by('RiskCube').map((c) => <Item key={c.id} cmd={{ ...c, label: c.label.replace('RiskCube: ', '') }} />)}</MenubarContent>
+        </MenubarMenu>
+        <MenubarMenu>
           <MenubarTrigger data-testid="menu-narrative">Narrative</MenubarTrigger>
           <MenubarContent>{by('Narrative').map((c) => <Item key={c.id} cmd={c} />)}</MenubarContent>
         </MenubarMenu>
@@ -172,7 +199,7 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
         </MenubarMenu>
       </Menubar>
       <nav className="app-breadcrumb" aria-label="Location" data-testid="breadcrumb">
-        {loc.kind === 'trades' ? <Database size={12} /> : loc.kind === 'narrative' ? <BrainCircuit size={12} /> : loc.kind === 'video' ? <Clapperboard size={12} /> : <LayoutGrid size={12} />}
+        {loc.kind === 'trades' ? <Database size={12} /> : loc.kind === 'trading2' ? <BriefcaseBusiness size={12} /> : loc.kind === 'rd' ? <BrainCircuit size={12} /> : loc.kind === 'riskcube' ? <Database size={12} /> : loc.kind === 'narrative' ? <BrainCircuit size={12} /> : loc.kind === 'video' ? <Clapperboard size={12} /> : <LayoutGrid size={12} />}
         <span>{where[0]}</span><span className="text-muted">/</span><b>{where[1]}</b>
       </nav>
       <button type="button" className="palette-button" data-testid="open-palette" onClick={() => setPalette(true)}>
@@ -185,7 +212,7 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
             <div className="palette-input"><Search size={15} /><Cmd.Input autoFocus placeholder="Type a dashboard, view or command…" data-testid="palette-input" /></div>
             <Cmd.List className="palette-list">
               <Cmd.Empty className="px-3 py-6 text-center text-xs text-muted">No matches.</Cmd.Empty>
-              {['Dashboards', 'Trades', 'Narrative', 'Video', 'Tools', 'View', 'File', 'Help'].map((g) => (
+              {['Dashboards', 'Trades', 'Trading 2ⁿᵈ', 'R&D', 'RiskCube', 'Narrative', 'Video', 'Tools', 'View', 'File', 'Help'].map((g) => (
                 <Cmd.Group key={g} heading={g} className="palette-group">
                   {by(g).map((c) => {
                     const Icon = c.icon

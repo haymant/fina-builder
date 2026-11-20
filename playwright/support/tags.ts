@@ -35,6 +35,9 @@ export const TAG = {
     narrativeThemeMapping: '@journey-narrative-theme-mapping',
     narrativeEditorialReview: '@journey-narrative-editorial-review',
     videoProduction: '@journey-video-production',
+    trading2ReadOnly: '@journey-trading2-read-only',
+    rdReadOnly: '@journey-rd-read-only',
+    riskCubeReadOnly: '@journey-riskcube-read-only',
   },
   feature: {
     workspace: '@feature-workspace',
@@ -82,6 +85,9 @@ export const TAG = {
     bitemporal: '@feature-bitemporal',
     entitlements: '@feature-entitlements',
     savedViews: '@feature-saved-views',
+    trading2: '@feature-trading2',
+    rd: '@feature-rd',
+    riskCube: '@feature-riskcube',
   },
   dependency: {
     riga: '@requires-riga',

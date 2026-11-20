@@ -1,0 +1,148 @@
+# -----------------------------------------------------------------------------
+# Tune run 6 (NEXT run): wider 10-name universe A/B vs run f744455056 (exp 1).
+#
+# Baseline (exp 1 / run f744455056 — this run):
+#   Input : universe AAPL,MSFT,QQQ,IVV,SMH,TLT (6 names, 5 of them the same
+#           tech beta); 21 features (OHLCV + TA); label 1-day next return;
+#           LGB lr 0.05 / 15 leaves / 200 trees / reg 0.01,0.01;
+#           train 03-01..05-31 / valid 06-01..06-30 / test 07-01..08-06.
+#   Output: IC 0.048, ICIR 0.09, Rank IC 0.065, Rank ICIR 0.13  ->  noise-level
+#           (per-day n=6, IC swings -0.89..+0.74 with many null days).
+#           Backtest had NO benchmark (benchmark null) -> the "+180% ann, IR 6.4"
+#           headline is raw strategy return, not excess. Strategy +16.5% over 27
+#           days, but ~half the P&L came from ONE day (2026-07-30 MSFT +14% sell,
+#           +$72k realized). 30 trades/27 days, $15.3k cost (1.5% of $1M),
+#           ending book 46.6% SMH + 50.8% TLT (2-name lottery).
+#
+# PRIMARY LEVER (change one thing, everything else held at baseline):
+#   universe: 6 -> 10 names (AAPL,MSFT,TSLA,QQQ,IVV,SMH,TLT,IBIT,MCHI,AIQ).
+#   Rationale: with 6 near-collinear names there is nothing to rank — ICIR 0.09
+#   is cross-sectional noise and the topk book just re-buys tech momentum on
+#   correlated bets. Widening to ~10 independent-ish betas (mega tech, semis,
+#   S&P, Nasdaq, bonds, BTC, EM, robotics) gives the cross-section real breadth,
+#   stabilizes IC, and makes a diversified topk book possible.
+#
+# SUPPORTING (kept minimal, flagged for attribution):
+#   - topk 2 -> 4, n_drop 1 -> 2: kill the 2-name lottery, cut per-name churn.
+#   - benchmark: unset -> QQQ: the baseline "excess return" was raw strategy
+#     return because no benchmark was wired; QQQ is the index the tech-heavy
+#     universe tracks.
+#   - model: explicit num_boost_round 1000 + early_stopping_rounds 50 so round
+#     count is controlled (baseline's n_estimators: 200 was swallowed into lgb
+#     params and valid l2 rose monotonically -> overfit). Hyperparameters
+#     otherwise identical to baseline for a clean universe A/B.
+#   - label: KEPT at 1-day next return so this run isolates the universe lever;
+#     a 5-day horizon is the natural NEXT experiment (see tune_run3).
+#
+# Trigger into a NEW experiment (do not pollute exp 1); evolved_from = f744455056:
+#   rd_run_workflow config_path=tac-qlib/workflows/tune_run6_wider_universe_ab.yaml \
+#       experiment_name=tac-rd-tune
+# -----------------------------------------------------------------------------
+{%- set LAKE = TAC_LAKE_DIR %}
+
+qlib_init:
+    provider_uri: "{{ LAKE }}"
+    region: us
+    expression_cache: null
+    dataset_cache: null
+
+    calendar_provider:
+        class: tac_qlib.data.providers.LakeCalendarProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+    instrument_provider:
+        class: tac_qlib.data.providers.LakeInstrumentProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+            markets: {}
+    feature_provider:
+        class: tac_qlib.data.providers.LakeFeatureProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+
+    exp_manager:
+        class: MLflowExpManager
+        module_path: qlib.workflow.expm
+        kwargs:
+            uri: "sqlite:///{{ LAKE }}/mlruns.db"
+            default_exp_name: "tac-rd-tune"
+
+task:
+    model:
+        class: LGBModel
+        module_path: qlib.contrib.model.gbdt
+        kwargs:
+            loss: mse
+            learning_rate: 0.05
+            num_leaves: 15
+            num_boost_round: 1000
+            early_stopping_rounds: 50
+            colsample_bytree: 0.8
+            subsample: 0.8
+            subsample_freq: 1
+            reg_alpha: 0.01
+            reg_lambda: 0.01
+            seed: 2026
+
+    dataset:
+        class: DatasetH
+        module_path: qlib.data.dataset
+        kwargs:
+            handler:
+                class: TACHandler
+                module_path: tac_qlib.contrib.data.handler
+                kwargs:
+                    instruments: AAPL,MSFT,TSLA,QQQ,IVV,SMH,TLT,IBIT,MCHI,AIQ
+                    start_time: 2000-01-03
+                    end_time: 2026-08-06
+                    fit_start_time: 2026-03-01
+                    fit_end_time: 2026-05-31
+                    freq: day
+                    lake_root: "{{ LAKE }}"
+                    market: US
+                    label: "Ref($close,-2)/Ref($close,-1)-1"
+            segments:
+                train: [2026-03-01, 2026-05-31]
+                valid: [2026-06-01, 2026-06-30]
+                test: [2026-07-01, 2026-08-06]
+
+    record:
+        - class: SignalRecord
+          module_path: qlib.workflow.record_temp
+          kwargs: {}
+
+        - class: SigAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              ana_long_short: true
+              ann_scaler: 252
+
+        - class: PortAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              config:
+                  strategy:
+                      class: TopkDropoutStrategy
+                      module_path: qlib.contrib.strategy
+                      kwargs:
+                          signal: "<PRED>"
+                          topk: 4
+                          n_drop: 2
+                          only_tradable: true
+                          risk_degree: 0.95
+                  backtest:
+                      start_time: 2026-07-01
+                      end_time: 2026-08-06
+                      account: 1000000
+                      benchmark: QQQ
+                      exchange_kwargs:
+                          codes: AAPL,MSFT,TSLA,QQQ,IVV,SMH,TLT,IBIT,MCHI,AIQ
+                          deal_price: $close
+                          freq: day
+                          open_cost: 0.0005
+                          close_cost: 0.0015
+                          min_cost: 5.0
+              risk_analysis_freq: 1d

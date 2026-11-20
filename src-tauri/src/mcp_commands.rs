@@ -108,6 +108,46 @@ pub fn get_tac_engine_path(app: AppHandle) -> Result<String, String> {
     resolve_engine_binary(Some(&app), "TAC_ENGINE_BIN", "tac-engine", "tac-engine")
 }
 
+/// Resolve the checked-in tac-qlib book launcher. The launcher performs the
+/// module-local `uv sync --locked` and starts the Python MCP service; it is a
+/// named service path, not renderer-selectable executable configuration.
+#[tauri::command]
+pub fn get_tac_qlib_book_path(app: AppHandle) -> Result<String, String> {
+    if let Ok(explicit) = std::env::var("TAC_QLIB_BOOK_BIN") {
+        if std::path::Path::new(&explicit).is_file() {
+            return Ok(explicit);
+        }
+    }
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace = manifest.join("..");
+    let mut candidates = vec![workspace.join("scripts").join("tac-qlib-book-mcp")];
+    if let Ok(dir) = app.path().resource_dir() {
+        candidates.push(dir.join("tac-qlib-book-mcp"));
+    }
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Ok(candidate.to_string_lossy().into_owned());
+        }
+    }
+    Err("tac-qlib book launcher not found. Run from a fina-builder checkout with scripts/tac-qlib-book-mcp and uv installed, or set TAC_QLIB_BOOK_BIN.".into())
+}
+
+/// Resolve the checked-in tac-qlib R&D launcher.
+#[tauri::command]
+pub fn get_tac_qlib_rd_path(app: AppHandle) -> Result<String, String> {
+    if let Ok(explicit) = std::env::var("TAC_QLIB_RD_BIN") {
+        if std::path::Path::new(&explicit).is_file() { return Ok(explicit); }
+    }
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace = manifest.join("..");
+    let mut candidates = vec![workspace.join("scripts").join("tac-qlib-rd-mcp")];
+    if let Ok(dir) = app.path().resource_dir() { candidates.push(dir.join("tac-qlib-rd-mcp")); }
+    for candidate in candidates {
+        if candidate.is_file() { return Ok(candidate.to_string_lossy().into_owned()); }
+    }
+    Err("tac-qlib R&D launcher not found. Run from a fina-builder checkout with scripts/tac-qlib-rd-mcp and uv installed, or set TAC_QLIB_RD_BIN.".into())
+}
+
 #[tauri::command]
 pub fn get_nip_engine_path(app: AppHandle) -> Result<String, String> {
     resolve_engine_binary(Some(&app), "NIP_ENGINE_BIN", "..", "nip-engine")
@@ -345,6 +385,100 @@ pub fn tac_mcp_reset(state: State<'_, McpState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn book_mcp_list_tools(
+    app: AppHandle,
+    state: State<'_, McpState>,
+) -> Result<Value, String> {
+    let binary = get_tac_qlib_book_path(app)?;
+    let mcp = state.runtime.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (server, version, tools) = mcp.list_tools("book", &binary)?;
+        Ok::<Value, String>(json!({ "server": server, "version": version, "tools": tools }))
+    })
+    .await
+    .map_err(|e| format!("MCP worker failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn book_mcp_call_tool(
+    app: AppHandle,
+    state: State<'_, McpState>,
+    name: String,
+    arguments: Option<Value>,
+) -> Result<crate::mcp::McpCallResult, String> {
+    let binary = get_tac_qlib_book_path(app)?;
+    let mcp = state.runtime.clone();
+    let arguments = arguments.unwrap_or_else(|| json!({}));
+    tauri::async_runtime::spawn_blocking(move || mcp.call_tool("book", &binary, &name, arguments))
+        .await
+        .map_err(|e| format!("MCP worker failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn book_mcp_reset(state: State<'_, McpState>) -> Result<(), String> {
+    state.runtime.try_reset("book");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rd_mcp_list_tools(app: AppHandle, state: State<'_, McpState>) -> Result<Value, String> {
+    let binary = get_tac_qlib_rd_path(app)?;
+    let mcp = state.runtime.clone();
+    tauri::async_runtime::spawn_blocking(move || { let (server, version, tools) = mcp.list_tools("rd", &binary)?; Ok::<Value, String>(json!({ "server": server, "version": version, "tools": tools })) }).await.map_err(|e| format!("MCP worker failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn rd_mcp_call_tool(app: AppHandle, state: State<'_, McpState>, name: String, arguments: Option<Value>) -> Result<crate::mcp::McpCallResult, String> {
+    let binary = get_tac_qlib_rd_path(app)?;
+    let mcp = state.runtime.clone();
+    let arguments = arguments.unwrap_or_else(|| json!({}));
+    validate_rd_tool_call(&name, &arguments)?;
+    tauri::async_runtime::spawn_blocking(move || mcp.call_tool("rd", &binary, &name, arguments)).await.map_err(|e| format!("MCP worker failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn rd_mcp_reset(state: State<'_, McpState>) -> Result<(), String> { state.runtime.try_reset("rd"); Ok(()) }
+
+pub fn validate_rd_tool_call(name: &str, arguments: &Value) -> Result<(), String> {
+    let allowed: &[&str] = match name {
+        "rd_exp_list" => &[],
+        "rd_exp_get_experiment" => &["experiment_id"],
+        "rd_exp_get_run" | "rd_exp_input" | "rd_exp_result" | "rd_exp_model" | "rd_exp_lineage" => &["run_id", "experiment_id"],
+        _ => return Err(format!("R&D tool is not allowed: {name}")),
+    };
+    let object = arguments.as_object().ok_or_else(|| "R&D arguments must be an object".to_string())?;
+    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(format!("R&D argument is not allowed: {key}"));
+    }
+    Ok(())
+}
+
+pub fn validate_riskcube_tool_call(name: &str, arguments: &Value) -> Result<(), String> {
+    let allowed: &[&str] = match name {
+        "riskcube_capabilities" | "risk_cube_partitions" => &[],
+        "olap_query" => &["scope", "dimensions", "measures", "aggregation", "filters", "limit"],
+        _ => return Err(format!("RiskCube tool is not allowed: {name}")),
+    };
+    let object = arguments.as_object().ok_or_else(|| "RiskCube arguments must be an object".to_string())?;
+    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(format!("RiskCube argument is not allowed: {key}"));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn riskcube_mcp_call_tool(app: AppHandle, state: State<'_, McpState>, name: String, arguments: Option<Value>) -> Result<crate::mcp::McpCallResult, String> {
+    let binary = resolve_engine_binary(Some(&app), "RISK_CUBE_MCP_BIN", "riskcube", "riskcube-mcp")?;
+    let mcp = state.runtime.clone();
+    let arguments = arguments.unwrap_or_else(|| json!({}));
+    validate_riskcube_tool_call(&name, &arguments)?;
+    tauri::async_runtime::spawn_blocking(move || mcp.call_tool("riskcube", &binary, &name, arguments)).await.map_err(|e| format!("MCP worker failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn riskcube_mcp_reset(state: State<'_, McpState>) -> Result<(), String> { state.runtime.try_reset("riskcube"); Ok(()) }
+
+#[tauri::command]
 pub async fn nip_mcp_list_tools(state: State<'_, NipServiceState>) -> Result<Value, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -472,5 +606,25 @@ mod tests {
                 .unwrap();
         assert_eq!(resolved, file.to_string_lossy());
         std::env::remove_var("RIGA_MCP_BIN_TEST_OVERRIDE");
+    }
+
+    #[test]
+    fn rd_tool_validation_rejects_renderer_paths_and_mutations() {
+        assert!(validate_rd_tool_call("rd_exp_result", &json!({"run_id": "r1", "experiment_id": "e1"})).is_ok());
+        assert!(validate_rd_tool_call("rd_exp_result", &json!({"uri": "file:///tmp/mlruns"})).is_err());
+        assert!(validate_rd_tool_call("rd_exp_result", &json!({"path": "/tmp/mlruns"})).is_err());
+        assert!(validate_rd_tool_call("rd_exp_result", &json!({"tracking_store": "/tmp/mlruns"})).is_err());
+        assert!(validate_rd_tool_call("delete_experiment", &json!({})).is_err());
+    }
+
+    #[test]
+    fn riskcube_tool_validation_rejects_sql_paths_and_unknown_tools() {
+        assert!(validate_riskcube_tool_call("olap_query", &json!({
+            "scope": {"partition_id": "p1"}, "dimensions": ["underlying"],
+            "measures": ["pv_amount"], "aggregation": "sum", "filters": [], "limit": 10
+        })).is_ok());
+        assert!(validate_riskcube_tool_call("olap_query", &json!({"sql": "select * from riskcube_cells"})).is_err());
+        assert!(validate_riskcube_tool_call("olap_query", &json!({"uri": "file:///tmp/cube"})).is_err());
+        assert!(validate_riskcube_tool_call("riskcube_write", &json!({})).is_err());
     }
 }

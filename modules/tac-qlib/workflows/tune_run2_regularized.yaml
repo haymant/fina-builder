@@ -1,0 +1,127 @@
+# -----------------------------------------------------------------------------
+# Tune run 2: same-day signal, strongly regularized model, 3x rotating book.
+#
+# Baseline (exp 1 / run f29f5446): IC 0.071 / ICIR 0.17, Rank IC ~0.014;
+# excess return w/ cost -0.94 ann, IR -2.23. The 1-day signal was noisy
+# (Rank IC ~ 0) and the topk=2 book turned over 24 times in 27 days, paying
+# ~1.1% of the $1M account in costs.
+#
+# Changes (isolates model/backtest effects; universe + label same as baseline):
+#   - model: stronger regularization (reg_alpha 0.5, reg_lambda 5.0,
+#     subsample 0.7, colsample 0.6) to combat the unstable Rank IC.
+#   - topk 2 -> 3, n_drop 1 -> 2: rotate out losers faster (lower cost drag,
+#     higher turnover on only the worst names).
+#   - benchmark AAPL -> QQQ.
+#   - universe: drop leveraged/duplicate names (VXX, USO, SLV, BIL, GPIQ,
+#     QQQE, KTEC) for a cleaner cross-section; keeps baseline 1-day label.
+#
+# Trigger:
+#   rd_run_workflow config_path=tac-qlib/workflows/tune_run2_regularized.yaml \
+#       experiment_name=tac-rd-tune
+# -----------------------------------------------------------------------------
+{%- set LAKE = TAC_LAKE_DIR %}
+
+qlib_init:
+    provider_uri: "{{ LAKE }}"
+    region: us
+    expression_cache: null
+    dataset_cache: null
+
+    calendar_provider:
+        class: tac_qlib.data.providers.LakeCalendarProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+    instrument_provider:
+        class: tac_qlib.data.providers.LakeInstrumentProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+            markets: {}
+    feature_provider:
+        class: tac_qlib.data.providers.LakeFeatureProvider
+        kwargs:
+            lake_root: "{{ LAKE }}"
+            market: US
+
+    exp_manager:
+        class: MLflowExpManager
+        module_path: qlib.workflow.expm
+        kwargs:
+            uri: "sqlite:///mlruns.db"
+            default_exp_name: "tac-rd-tune"
+
+task:
+    model:
+        class: LGBModel
+        module_path: qlib.contrib.model.gbdt
+        kwargs:
+            loss: mse
+            learning_rate: 0.05
+            num_leaves: 15
+            n_estimators: 250
+            colsample_bytree: 0.6
+            subsample: 0.7
+            subsample_freq: 1
+            reg_alpha: 0.5
+            reg_lambda: 5.0
+            seed: 2026
+
+    dataset:
+        class: DatasetH
+        module_path: qlib.data.dataset
+        kwargs:
+            handler:
+                class: TACHandler
+                module_path: tac_qlib.contrib.data.handler
+                kwargs:
+                    instruments: AAPL,MSFT,TSLA,QQQ,IVV,SMH,TLT,IBIT,MCHI,AIQ
+                    start_time: 2000-01-03
+                    end_time: 2026-08-06
+                    fit_start_time: 2026-03-01
+                    fit_end_time: 2026-05-31
+                    freq: day
+                    lake_root: "{{ LAKE }}"
+                    market: US
+            segments:
+                train: [2026-03-01, 2026-05-31]
+                valid: [2026-06-01, 2026-06-30]
+                test: [2026-07-01, 2026-08-06]
+
+    record:
+        - class: SignalRecord
+          module_path: qlib.workflow.record_temp
+          kwargs: {}
+
+        - class: SigAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              ana_long_short: true
+              ann_scaler: 252
+
+        - class: PortAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              config:
+                  strategy:
+                      class: TopkDropoutStrategy
+                      module_path: qlib.contrib.strategy
+                      kwargs:
+                          signal: "<PRED>"
+                          topk: 3
+                          n_drop: 2
+                          only_tradable: true
+                          risk_degree: 0.95
+                  backtest:
+                      start_time: 2026-07-01
+                      end_time: 2026-08-06
+                      account: 1000000
+                      benchmark: QQQ
+                      exchange_kwargs:
+                          codes: AAPL,MSFT,TSLA,QQQ,IVV,SMH,TLT,IBIT,MCHI,AIQ
+                          deal_price: $close
+                          freq: day
+                          open_cost: 0.0005
+                          close_cost: 0.0015
+                          min_cost: 5.0
+              risk_analysis_freq: 1d

@@ -1,634 +1,444 @@
-# TradeAC → fina-builder: Executable Implementation and Test Plan
+# TradeAC → fina-builder: Main Feature Migration Plan
 
-**Status:** Proposed  
-**Target repository:** `haymant/fina-builder`  
-**Reference repository:** `haymant/tradeac` — frozen reference; do not modify unless explicitly authorized  
-**Migration style:** Selective feature migration into fina-builder’s existing React/Vite + Tauri application. Do not merge the two repository roots or bring over TradeAC’s Next.js runtime.
+**Status:** In progress — architecture-aligned revision
+**Target:** `haymant/fina-builder`
+**Reference:** `haymant/tradeac` (read-only; do not modify)
+**Migration style:** selective feature migration into fina-builder’s existing React/Vite + Tauri application. Do not merge repository roots and do not embed TradeAC’s Next.js runtime.
 
----
+**Execution status (2026-11-20):** Phases 1 and 2 are complete, and the first Phase 4/5 Trading 2ⁿᵈ
+read-only vertical slice is integrated. Account, positions, orders, news, and watchlist
+now have typed APIs, normalized DTOs, explicit loading/empty/error/unavailable states,
+persisted navigation, menu-bar/command-palette access, and lazy workspace rendering. The
+TradeAC-derived `tac-qlib`
+package now lives under `modules/tac-qlib/` with a committed `uv.lock`, ignored module-local
+`.venv`, explicit `rd`/`book` stdio launchers, and lake-dependent tests that skip clearly when
+`TAC_LAKE_DIR` is not configured. Focused Trading 2ⁿᵈ API tests pass (including news and
+watchlist normalization), the full Vitest suite passes, and the production build succeeds.
+A live bridge probe against a temporary empty lake returned an empty watchlist successfully;
+the news tool correctly reported unavailable because no Alpaca credentials were configured.
+The selected TAC pin builds and passes its Rust suite (60 passed, 0 failed), and the live
+RIGA/TAC smoke workflow passed. Phase 2 validation also passed locked `uv` synchronization,
+the `tac_qlib` import, module-local RD/book launcher setup, and the persistent
+`npm run test:tac-qlib:lake` harness: both lake-provider and contrib smoke scripts pass
+against a temporary deterministic parquet lake, which is removed after each run. No
+credentials were needed or exposed. Phase 3A persistence/data ownership is implemented
+for fina-owned metadata and the read-only book boundary; unattended scheduling, broker
+mutations, R&D artifact ownership, and RiskCube remain staged work and are not claimed
+complete. The accepted gate decisions are recorded in
+[`docs/77-phase3-gate-decisions-adr.md`](77-phase3-gate-decisions-adr.md). Remaining
+Phase 3 work is canonical OLAP/pricer selection, service-specific retention review,
+and later R&D/Trading 2ⁿd workflow integration. The initial Phase 3 ownership and
+lifecycle matrix is recorded in
+[`docs/76-phase3-record-inventory.md`](76-phase3-record-inventory.md); it is a review
+artifact only and does not add persistence or migrate records.
 
-## 1. Goals and scope
-
-### In scope
-
-Migrate the following TradeAC feature sets, as represented in its left navigation:
-
-1. **Trading 2nd** — first priority. Port this feature set only; do not port the legacy `trading` area.
-2. **R&D** — experiments, models, results, lineage, and related workflows.
-3. **Risk Cube** — cubes, scenarios, slices, and versions.
-
-Use fina-builder’s existing React, TypeScript, Vite, Tailwind, Tauri v2, Rust, test, and release conventions. Reuse its existing RIGA assistant and TAC engine integration where practical.
-
-### Explicitly out of scope
-
-- TradeAC’s legacy **Trading** area. It is obsolete and replaced by **Trading 2nd**.
-- TradeAC’s **agent/OpenCode** UI, server, and related integration. The existing **RIGA** assistant is the replacement and remains fina-builder’s assistant.
-- TradeAC authentication and user-management migration for this work.
-- Migration of existing TradeAC database records.
-- Importing unrelated Next.js admin-template pages or deploying a second web application inside fina-builder.
-
-### Required outcomes
-
-- One TAC engine source and one pinned `modules/tac-engine` submodule revision.
-- Each runnable Python module has an independent `uv`-managed environment and lockfile; no shared/root Python environment.
-- Database schema and persistence work with both PostgreSQL and SQLite, selected by `DATABASE_URL`.
-- The migrated features use fina-builder’s frontend and Tauri IPC patterns. The renderer does not spawn processes or connect directly to the database.
-- TradeAC remains available as an unchanged source reference until explicitly released from that role.
-
----
-
-## 2. Current-state evidence and migration boundaries
-
-The plan is grounded in the repositories’ current structure:
-
-- TradeAC is a Next.js 16 App Router app in `tac-app/`. Its UI includes Trading 2nd, R&D, and Risk Cube routes. Its `src/server/*-actions.ts` files use Next server actions, authentication checks, Drizzle/Postgres, and MCP clients.
-- TradeAC has Git submodules for `qlib`, `FinA`, and `tac-engine`; `tac-qlib/` is a Python package that starts R&D/book MCP servers.
-- The TradeAC Python launchers currently find a shared workspace root and use its `.venv` or a bare `python`. This must be replaced with deterministic module-local `uv` environments.
-- fina-builder already has a Vite React app, Tauri v2 shell, Rust-owned MCP subprocesses, `modules/` engine submodules, typed transport patterns, frontend tests, and desktop release workflows.
-- The repositories pin `tac-engine` at different gitlink revisions in the inspected snapshot:
-  - fina-builder: `89fb0c89e19e72c05131f8b1022016a9098e254f`
-  - TradeAC: `c876902c8ea74500437903702cf27431077e694b`
-- TradeAC’s schema uses PostgreSQL-specific features including `pgTable`, `jsonb`, `vector(384)`, and Postgres migrations. It cannot be made SQLite-compatible merely by changing the connection string.
-
-### Source snapshot
-
-Record the frozen TradeAC source commit before implementation. The inspected TradeAC source files were at commit `478849f923cf68b53e180250ad444a11a2255b57`; fina-builder files were inspected at `cc40430ea9f7bdd2d08b94036593769f7eea7ea1`. Reconfirm and record the actual commit IDs at migration start.
+This document is the implementation plan and the source-of-truth boundary for migrating the main TradeAC feature groups. It was rewritten after inspecting both repositories at the frozen snapshots recorded below. Any implementation that contradicts the target architecture or the non-goals in this document requires an explicit decision update before coding.
 
 ---
 
-## 3. Target architecture
+## 1. Verified source snapshots
 
-```text
-src/
-  features/
-    trading2/                 Trading 2nd UI and feature state
-    rd/                       R&D UI and feature state
-    riskcube/                 Risk Cube UI and feature state
-  api/
-    trading2Transport.ts      Typed Tauri command wrappers
-    rdTransport.ts
-    riskcubeTransport.ts
-src-tauri/src/
-  tradeac/                    Tauri commands and feature services
-  db/                         DATABASE_URL selection, repositories, migrations
-modules/
-  tac-engine/                 The single merged/pinned TAC engine submodule
-  qlib/                       Pinned qlib source, if required by tac-qlib
-  tac-qlib/                   Python package and its own uv project/lock
+| Repository | Commit | Relevant submodule pins |
+|---|---|---|
+| `fina-builder` | `ebf4ecbc475d27b5816bdb7f1684bec0e36878ce` | `modules/tac-engine` = `89fb0c89e19e72c05131f8b1022016a9098e254f` |
+| `tradeac` | `478849f923cf68b53e180250ad444a11a2255b57` | `tac-engine` = `c876902c8ea74500437903702cf27431077e694b`; `qlib` = `d5379c520f66a39953bad76234a7019a72796fd0`; `FinA` = `786243b5cda503c82c61906667a6ce3f14470827` |
 
+The snapshots were cloned recursively. Reconfirm these SHAs at implementation start and record any intentional source revision change in this document.
 
-  ```markdown name=docs/tradeac-migration-plan.md
-# TradeAC → fina-builder: Executable Implementation and Test Plan
+### Evidence summary
 
-**Status:** Proposed  
-**Target repository:** `haymant/fina-builder`  
-**Reference repository:** `haymant/tradeac` — frozen reference; do not modify unless explicitly authorized  
-**Migration style:** Selective feature migration into fina-builder’s existing React/Vite + Tauri application. Do not merge the two repository roots or bring over TradeAC’s Next.js runtime.
+TradeAC is a Next.js 16 App Router application in `tac-app/`. Its server actions use authentication guards, Drizzle/PostgreSQL, and MCP clients. Its Python package is `tac-qlib/`, with `rd_server.py` and `book_server.py`; the launch path currently resolves a workspace-level Python environment through `getVenvPython()` and sets `PYTHONPATH` to the package.
+
+The TradeAC sidebar has four relevant feature groups:
+
+- **Trading 2ⁿᵈ**: `/dashboard/alpaca`, `/dashboard/positions`, `/dashboard/orders`, `/dashboard/scheduler`, `/dashboard/rounds`, `/dashboard/news`, `/dashboard/watchlist`, `/dashboard/macro`, and `/dashboard/calendar`.
+- **R&D**: `/rd`, `/rd/input`, `/rd/result`, `/rd/model`, `/rd/models`, `/rd/blotter`, `/rd/graph`, and `/rd/lineage`.
+- **RiskCube**: `/riskcube/scenarios`, `/riskcube/versions`, `/riskcube/slice`, and `/riskcube/cubes`.
+- The separate **Trading** group contains RFQs, quotes, trades, instruments, and positions. It is not Trading 2ⁿᵈ and is excluded unless separately approved.
+
+RiskCube’s cube designer builds constrained SQL over `riskcube_cells`, then calls TradeAC’s `finaOlapQuery` server action. Its dimensions and measures are defined in `riskcube/cubes/_components/cube-sql.ts`; the implementation depends on the `fina-pricer`/OLAP capability, not merely on the market-data `tac-engine`.
+
+fina-builder is currently a React 19 + TypeScript + Vite frontend at `src/`, a thin Tauri v2 shell at `src-tauri/`, Rust-owned stdio MCP engines for desktop, HTTP MCP bridges for browser development, and a Node MCP trade repository with SQLite/PostgreSQL adapters under `scripts/lib/trade-repo/`. Its app-level navigation is a persisted `Location` union in `src/features/workspace/navigation.ts`, rendered by `Workspace.tsx`; it is not file-system routing.
 
 ---
 
-## 1. Goals and scope
+## 2. Goals and scope
 
-### In scope
+### 2.1 In scope
 
-Migrate the following TradeAC feature sets, as represented in its left navigation:
+Migrate the main workflows of the following TradeAC groups, in this order:
 
-1. **Trading 2nd** — first priority. Port this feature set only; do not port the legacy `trading` area.
-2. **R&D** — experiments, models, results, lineage, and related workflows.
-3. **Risk Cube** — cubes, scenarios, slices, and versions.
+1. **Trading 2ⁿᵈ** — read-only market/account/position/order views first, then scheduler and rounds workflows, with explicit confirmation for broker mutations.
+2. **R&D** — experiment/run inspection, input/model/result views, model registry, blotter, Git graph, and lineage, backed by `tac-qlib` MCP services and portable persistence where required.
+3. **RiskCube** — scenario/version/slice/cube workflows, preserving the existing OLAP query semantics and making the engine capability explicit rather than fabricating risk data.
 
-Use fina-builder’s existing React, TypeScript, Vite, Tailwind, Tauri v2, Rust, test, and release conventions. Reuse its existing RIGA assistant and TAC engine integration where practical.
+Use fina-builder’s existing:
 
-### Explicitly out of scope
+- React/Vite/TypeScript build and `src/` layout;
+- Tailwind v4 theme tokens, shared primitives, lazy feature views, error boundaries, and Zustand conventions;
+- `Location`-based workspace navigation and command/menu-bar access;
+- generic MCP transport shape and snake_case/camelCase boundary normalization;
+- Rust-owned Tauri process lifecycle for desktop;
+- Node HTTP bridges for browser development;
+- `modules/` submodule conventions and sidecar scripts;
+- Vitest, Playwright, Rust, smoke, lint, and release workflows.
 
-- TradeAC’s legacy **Trading** area. It is obsolete and replaced by **Trading 2nd**.
-- TradeAC’s **agent/OpenCode** UI, server, and related integration. The existing **RIGA** assistant is the replacement and remains fina-builder’s assistant.
-- TradeAC authentication and user-management migration for this work.
-- Migration of existing TradeAC database records.
-- Importing unrelated Next.js admin-template pages or deploying a second web application inside fina-builder.
+### 2.2 Explicitly out of scope
 
-### Required outcomes
+- TradeAC’s separate legacy **Trading** group: RFQs, quotes, trades, instruments, and its positions page.
+- TradeAC’s OpenCode/Agent UI, OpenCode server, authentication, and user-management migration. RIGA remains fina-builder’s assistant.
+- Copying the Next.js app, App Router, server actions, `next/navigation`, server components, metadata, or a second web application.
+- Migrating existing TradeAC database records, MLflow records, broker orders, or production lake data.
+- Adding live broker credentials, live order placement, remote embedding requirements, or public-service dependencies to CI.
+- Treating TradeAC’s demo data, synthetic market data, or illustrative risk values as production valuations.
+- Creating a second `tac-engine` checkout or silently replacing fina-builder’s existing TAC pin.
 
-- One TAC engine source and one pinned `modules/tac-engine` submodule revision.
-- Each runnable Python module has an independent `uv`-managed environment and lockfile; no shared/root Python environment.
-- Database schema and persistence work with both PostgreSQL and SQLite, selected by `DATABASE_URL`.
-- The migrated features use fina-builder’s frontend and Tauri IPC patterns. The renderer does not spawn processes or connect directly to the database.
-- TradeAC remains available as an unchanged source reference until explicitly released from that role.
+### 2.3 Required outcomes
 
----
-
-## 2. Current-state evidence and migration boundaries
-
-The plan is grounded in the repositories’ current structure:
-
-- TradeAC is a Next.js 16 App Router app in `tac-app/`. Its UI includes Trading 2nd, R&D, and Risk Cube routes. Its `src/server/*-actions.ts` files use Next server actions, authentication checks, Drizzle/Postgres, and MCP clients.
-- TradeAC has Git submodules for `qlib`, `FinA`, and `tac-engine`; `tac-qlib/` is a Python package that starts R&D/book MCP servers.
-- The TradeAC Python launchers currently find a shared workspace root and use its `.venv` or a bare `python`. This must be replaced with deterministic module-local `uv` environments.
-- fina-builder already has a Vite React app, Tauri v2 shell, Rust-owned MCP subprocesses, `modules/` engine submodules, typed transport patterns, frontend tests, and desktop release workflows.
-- The repositories pin `tac-engine` at different gitlink revisions in the inspected snapshot:
-  - fina-builder: `89fb0c89e19e72c05131f8b1022016a9098e254f`
-  - TradeAC: `c876902c8ea74500437903702cf27431077e694b`
-- TradeAC’s schema uses PostgreSQL-specific features including `pgTable`, `jsonb`, `vector(384)`, and Postgres migrations. It cannot be made SQLite-compatible merely by changing the connection string.
-
-### Source snapshot
-
-Record the frozen TradeAC source commit before implementation. The inspected TradeAC source files were at commit `478849f923cf68b53e180250ad444a11a2255b57`; fina-builder files were inspected at `cc40430ea9f7bdd2d08b94036593769f7eea7ea1`. Reconfirm and record the actual commit IDs at migration start.
+- One canonical TAC engine source and one pinned `modules/tac-engine` gitlink.
+- No renderer code opens a database, launches a child process, chooses an executable, or receives secrets.
+- Every migrated backend operation has a typed feature API and deterministic unavailable/error behavior.
+- Every Python module used at runtime has its own `pyproject.toml`, committed `uv.lock`, ignored `.venv`, explicit interpreter resolution, and a clean-checkout smoke test.
+- Existing fina-builder pricing, market-data, trade repository, Narrative, Video, RIGA assistant, tests, and release commands continue to work.
+- TradeAC remains unchanged and usable as a frozen source reference.
 
 ---
 
 ## 3. Target architecture
 
 ```text
-src/
-  features/
-    trading2/                 Trading 2nd UI and feature state
-    rd/                       R&D UI and feature state
-    riskcube/                 Risk Cube UI and feature state
-  api/
-    trading2Transport.ts      Typed Tauri command wrappers
-    rdTransport.ts
-    riskcubeTransport.ts
-src-tauri/src/
-  tradeac/                    Tauri commands and feature services
-  db/                         DATABASE_URL selection, repositories, migrations
-modules/
-  tac-engine/                 The single merged/pinned TAC engine submodule
-  qlib/                       Pinned qlib source, if required by tac-qlib
-  tac-qlib/                   Python package and its own uv project/lock
+React/Vite renderer (src/)
+  ├─ Workspace + persisted Location navigation
+  ├─ features/trading2, features/rd, features/riskcube
+  ├─ typed feature APIs and transport adapters
+  └─ Zustand UI state / localStorage for view preferences only
+          │
+          ├─ browser: same-origin HTTP MCP paths through Vite
+          └─ desktop: Tauri invoke → Rust-owned MCP stdio clients
+                          │
+                 feature MCP services / repositories
+                   ├─ existing riga-mcp and tac-engine
+                   ├─ existing Node trade-repository MCP
+                   ├─ tac-qlib RD/book MCP processes
+                   └─ OLAP/risk-cube engine capability
 ```
 
-Adapt names to fina-builder’s existing module and naming conventions during implementation. Do not create a second top-level UI shell or replace fina-builder’s `App.tsx`.
+### 3.1 Frontend boundary
 
-### Runtime boundaries
+Keep the application at `src/`. Add feature folders such as:
 
-- **React webview:** renders UI, owns view state, calls typed Tauri transports.
-- **Tauri/Rust:** owns subprocess lifecycle, MCP stdio clients, filesystem access, database access, validation, and error mapping.
-- **TAC engine:** remains a standalone Rust workspace under `modules/tac-engine`; the root Cargo workspace continues to exclude standalone module workspaces.
-- **Python:** R&D Python MCP processes run from the `uv` environment owned by the relevant Python module. Tauri resolves that module’s interpreter and starts the MCP process.
-- **Database:** Tauri commands call a repository/service layer; no database URL or raw DB connection is exposed to the webview.
-- **RIGA:** stays as fina-builder’s assistant. Do not migrate TradeAC’s agent implementation.
-
----
-
-## 4. Implementation phases and exit criteria
-
-Every phase is a separate reviewable PR or commit series. Do not proceed past a phase’s exit criteria while its required tests are failing.
-
-### Phase 0 — Freeze references and capture baselines
-
-#### Tasks
-
-1. Confirm the TradeAC default branch and record its current commit SHA in this document or the migration tracking issue.
-2. Make no writes, commits, dependency updates, or cleanup changes to `haymant/tradeac`.
-3. Configure the team workflow so migration changes are made only in fina-builder. If branch protections are available, prohibit direct pushes to TradeAC’s reference branch.
-4. Save the current fina-builder baseline:
-   - Frontend test/build/lint results.
-   - Rust workspace test and formatting results.
-   - Current TAC engine pin.
-5. Inventory exact route/component/action dependencies for Trading 2nd, R&D, and Risk Cube. Record shared components, packages, DB tables, MCP tools, environment variables, and Python entry points.
-6. Mark the legacy TradeAC `trading` and `agent` features excluded in the inventory.
-
-#### Commands
-
-```bash
-git clone https://github.com/haymant/fina-builder.git
-git clone https://github.com/haymant/tradeac.git tradeac-reference
-
-git -C tradeac-reference rev-parse HEAD
-git -C tradeac-reference status --short
-
-cd fina-builder
-npm ci
-npm run test:run
-npm run build
-npm run lint
-cargo test --workspace
-cargo fmt --all -- --check
+```text
+src/features/trading2/
+src/features/rd/
+src/features/riskcube/
+src/api/trading2Api.ts
+src/api/rdApi.ts
+src/api/riskcubeApi.ts
 ```
 
-If the reference clone is intentionally kept local, make it read-only in the migration workspace and do not add it as a working submodule.
+These names are organizational only; they do not create routes. Add `Location` variants and view renderers to `Workspace.tsx`, update the command palette/menu bar, validate persisted locations on load, and lazy-load each feature so a failed optional backend does not take down the existing dashboards.
 
-#### Exit criteria
+Feature APIs must call a named transport/service. They must not import Node modules, `pg`, `better-sqlite3`, Python launch code, or arbitrary Tauri commands. Keep pure SQL/pivot generation in a tested feature module only when the query is a constrained, non-user-arbitrary query; backend-side validation must still enforce allowed dimensions, measures, aggregations, filters, row limits, and timeouts.
 
-- TradeAC reference commit SHA and fina-builder baseline commit SHA are recorded.
-- TradeAC working tree is clean, and no migration work is committed there.
-- A feature dependency inventory exists for Trading 2nd, R&D, and Risk Cube.
-- Baseline commands pass, or pre-existing failures are documented and distinguished from migration failures.
+### 3.2 Runtime boundary
 
----
+The desktop shell owns child-process lifecycle, stdio MCP clients, environment construction, cleanup, cancellation, and error mapping. Browser mode uses explicit Node HTTP bridges and Vite proxy paths, as fina-builder already does for RIGA, TAC, and the trade repository.
 
-### Phase 1 — Reconcile TAC engine versions
+Use the existing MCP result contract: structured content is unwrapped at the transport boundary, tool errors become typed feature errors, and camelCase/snake_case conversion occurs in the transport rather than in every component.
 
-#### Tasks
+Do not introduce a Rust SQLx database layer merely because TradeAC used Next server actions. fina-builder’s implemented persistence precedent is the Node storage port in `scripts/lib/trade-repo/store.mjs`, with SQLite default, PostgreSQL support, migrations, and an in-memory test adapter. Reuse or extend that pattern for new persisted records unless an engine already owns the data. If a future Rust-owned database is chosen, it requires a separate ADR and must not be mixed with the Node adapter for the same tables.
 
-1. Initialize fina-builder’s existing TAC engine submodule and verify its current gitlink.
-2. Fetch the TradeAC-pinned revision into the same submodule repository if reachable.
-3. Compare the two revisions, identify their common ancestor, inspect the complete diff, and run tests against both.
-4. Select a single canonical revision:
-   - If one revision is an ancestor of the other and the later revision contains the needed changes, pin the later revision after tests pass.
-   - If both contain unique changes, merge those changes in the `haymant/tac-engine` repository first, run its tests, then update fina-builder’s submodule gitlink to the resulting merge commit.
-   - Do not copy one submodule’s files over the other or maintain two TAC engine checkouts.
-5. Confirm the migrated Trading 2nd, R&D, and Risk Cube workflows use tools present in the canonical TAC engine.
-6. Update fina-builder’s sidecar build, CI, docs, and tests only if the canonical pin or build requirements require it.
+### 3.3 Engine ownership
 
-#### Commands
+- **Market/account/order data:** use the canonical fina-builder `modules/tac-engine` MCP surface. Reconcile the two TAC pins before importing any tool contract.
+- **R&D:** use `tac_qlib.rd_server` and `tac_qlib.book_server` as explicit MCP services. Do not duplicate qlib calculations in React or in a thin transport.
+- **RiskCube:** first establish the authoritative OLAP engine contract. TradeAC’s implementation calls `fina-pricer`’s `olap_query` and `risk_cube_partitions`; the current fina-builder `tac-engine` is not automatically a replacement. Choose one canonical implementation after a capability comparison: a supported `fina-pricer` submodule/capability, an explicitly ported engine service, or a reduced feature slice with a documented unsupported state. Do not implement a fake in-memory cube to make the UI appear complete.
+- **RIGA:** remains the assistant and agent surface. Do not migrate OpenCode.
 
-From the fina-builder checkout:
+### 3.4 Secrets and side effects
 
-```bash
-git submodule update --init modules/tac-engine
-
-git -C modules/tac-engine rev-parse HEAD
-git -C modules/tac-engine fetch origin --tags
-
-# These are the inspected snapshot pins; verify they still match Phase 0.
-git -C modules/tac-engine cat-file -e \
-  89fb0c89e19e72c05131f8b1022016a9098e254f^{commit}
-git -C modules/tac-engine cat-file -e \
-  c876902c8ea74500437903702cf27431077e694b^{commit}
-
-git -C modules/tac-engine merge-base \
-  89fb0c89e19e72c05131f8b1022016a9098e254f \
-  c876902c8ea74500437903702cf27431077e694b
-
-git -C modules/tac-engine diff --stat \
-  89fb0c89e19e72c05131f8b1022016a9098e254f \
-  c876902c8ea74500437903702cf27431077e694b
-
-git -C modules/tac-engine diff \
-  89fb0c89e19e72c05131f8b1022016a9098e254f \
-  c876902c8ea74500437903702cf27431077e694b
-```
-
-After selecting or merging a canonical TAC engine revision:
-
-```bash
-cargo test --manifest-path modules/tac-engine/Cargo.toml
-cargo fmt --manifest-path modules/tac-engine/Cargo.toml --all -- --check
-cargo clippy --manifest-path modules/tac-engine/Cargo.toml --all-targets -- -D warnings
-
-git submodule status modules/tac-engine
-npm run mcp:sidecar:tac
-npm run smoke
-```
-
-If a referenced object is absent after fetching, locate the corresponding commit in the TAC engine’s upstream repository before proceeding. Do not interpret a missing local object as evidence that the two versions are identical.
-
-#### Exit criteria
-
-- Diff between the two inspected pins has been reviewed and the differences are classified.
-- All unique required changes exist in one canonical TAC engine commit.
-- TAC engine tests pass at that commit.
-- fina-builder has one `modules/tac-engine` gitlink; no duplicate TAC engine directory or binary is introduced.
-- The selected commit SHA and rationale are recorded.
+Credentials remain in host/app-data `.env` or the configured runtime environment. Never persist `DATABASE_URL`, broker keys, embedding keys, Git credentials, or raw connection URLs in renderer state or logs. Broker mutations require a server-side validation boundary plus an explicit confirmation UI; CI must use fixtures and mocked tools only.
 
 ---
 
-### Phase 2 — Create independent `uv` Python module environments
+## 4. Implementation phases
 
-#### Tasks
+Each phase is independently reviewable. Do not add a navigation entry until its primary workflow and unavailable/error states are tested.
 
-1. Inventory every Python MCP entry point required by the in-scope features. At minimum, verify whether `tac_qlib.rd_server` and `tac_qlib.book_server` are required for the selected R&D and Trading 2nd workflows.
-2. Give each runnable Python module its own project metadata, lockfile, and environment under its module directory:
-   - `modules/tac-qlib/pyproject.toml`
-   - `modules/tac-qlib/uv.lock`
-   - `modules/tac-qlib/.venv/` (ignored)
-3. Pin supported Python and dependency versions. Pin the qlib source revision. If qlib is a source submodule rather than a runnable module, install it as a pinned local source dependency into `tac-qlib`’s environment; do not share the environment with another Python module.
-4. Remove runtime dependence on a root `.venv`, ambient `python`, `pip`, or implicit `PYTHONPATH` discovery.
-5. Add a fina-builder script/helper that:
-   - Checks for `uv`.
-   - Creates/synchronizes the target module environment with its lockfile.
-   - Resolves the module’s exact interpreter path.
-   - Starts the server with an explicit working directory and a narrowly scoped environment.
-   - Returns an actionable error if the environment is missing or out of date.
-6. Add setup docs for development and packaged-app expectations. Do not claim Python is bundled until a distributable runtime/sidecar strategy is implemented and tested.
+### Phase 0 — Freeze references and baseline fina-builder
 
-#### Commands
-
-From the fina-builder root, after adding the module project:
-
-```bash
-uv --version
-uv sync --project modules/tac-qlib --locked
-uv run --project modules/tac-qlib --locked \
-  python -m tac_qlib.rd_server --help
-uv run --project modules/tac-qlib --locked \
-  python -m tac_qlib.book_server --help
-```
-
-If an entry point does not support `--help`, replace that check with a deterministic import or `--version` smoke command that does not require broker credentials or a populated lake.
-
-For a second runnable Python module, use the same commands with that module’s own `--project` path and `uv.lock`; never reuse the `tac-qlib/.venv`.
-
-#### Exit criteria
-
-- Each in-scope Python server has an explicit, documented module owner and interpreter path.
-- Each runnable module has an independent lockfile and environment.
-- `uv sync --locked` succeeds from a clean checkout.
-- Python smoke tests run without relying on a root `.venv` or user-installed packages.
-- Missing `uv`, Python, lockfile, or dependencies produce a clear actionable failure.
-- CI can install and run the Python module’s tests from a clean environment.
-
----
-
-### Phase 3 — Implement PostgreSQL/SQLite persistence
-
-#### Design decision
-
-Use a Rust persistence layer owned by Tauri, selected from `DATABASE_URL`. This keeps database credentials and database operations out of the webview and avoids depending on Next.js server actions or a Node server in the desktop app.
-
-Use SQLx with runtime query APIs and versioned SQL migrations. Maintain separate, tested migration directories for PostgreSQL and SQLite where syntax or types differ. Do not attempt to express Postgres-only `vector` columns as portable SQLite columns.
-
-#### Tasks
-
-1. Inventory all tables and queries needed by the in-scope feature sets. Start with the TradeAC schema and actions, but exclude auth tables and tables used only by excluded features.
-2. Create a schema compatibility matrix for every retained field:
-   - Primary-key and foreign-key behavior.
-   - JSON document representation.
-   - Numeric precision/serialization.
-   - Date and timestamp representation.
-   - Indexes, uniqueness, defaults, and nullability.
-   - Vector/embedding behavior.
-3. Define consistent Rust domain types and repository interfaces independent of SQL dialect.
-4. Implement a database factory that parses `DATABASE_URL` and accepts only supported schemes:
-   - `postgres://...` or `postgresql://...` → PostgreSQL.
-   - `sqlite://...` → SQLite.
-   - Missing or unsupported URL → a clear startup/configuration error when a DB-backed feature is first used.
-5. Implement idempotent migrations for both dialects. For SQLite, enable foreign keys and use portable JSON text or SQLite JSON support as appropriate. For PostgreSQL, use JSONB where useful.
-6. Replace TradeAC Postgres-only semantic vector search with an explicit capability:
-   - PostgreSQL may use vector search only if pgvector is available and the feature is separately enabled.
-   - SQLite must provide deterministic text search and must not require pgvector.
-   - Missing pgvector must not prevent ordinary R&D records from loading or saving.
-7. Port the required read/write operations from TradeAC server actions into repositories and typed Tauri commands.
-8. Do not migrate existing database data. Test against fresh disposable databases only.
-
-#### Configuration examples
-
-```bash
-# SQLite (local desktop default for development/tests)
-export DATABASE_URL="sqlite://./.data/fina-builder.db"
-
-# PostgreSQL (for shared/remote database use)
-export DATABASE_URL="postgres://fina:password@127.0.0.1:5432/fina_builder"
-```
-
-Do not commit credentials. SQLite path creation and PostgreSQL schema initialization must be documented. The app must not silently fall back from an invalid PostgreSQL URL to SQLite.
-
-#### Commands
-
-The exact Rust package name may be adjusted to match fina-builder’s crate layout:
-
-```bash
-cargo test --workspace
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-
-DATABASE_URL="sqlite://./.data/test.db" cargo test --workspace
-DATABASE_URL="postgres://fina:fina@127.0.0.1:5432/fina_test" \
-  cargo test --workspace
-```
-
-CI must provision a disposable PostgreSQL service and use a temporary SQLite file. Tests must not point at developer or production databases.
-
-#### Exit criteria
-
-- Fresh SQLite and PostgreSQL databases both migrate successfully.
-- Repository contract tests pass against both dialects.
-- CRUD, relationships, uniqueness, JSON serialization, and timestamps behave consistently.
-- SQLite startup and tests do not require pgvector.
-- PostgreSQL-only vector search is capability-gated; fallback behavior is tested.
-- No webview code opens a database connection or receives `DATABASE_URL`.
-- Existing TradeAC records are not copied or migrated.
-
----
-
-### Phase 4 — Build the Tauri feature transport and navigation
-
-#### Tasks
-
-1. Add typed Rust/Tauri command modules for the in-scope features. Commands should accept validated DTOs and return stable result/error shapes.
-2. Reuse fina-builder’s Rust-owned MCP runtime and TAC engine resolution for TAC calls. Add Python MCP process management for `tac-qlib` using the `uv`-resolved interpreter.
-3. Use Tauri async/runtime facilities so long-running MCP calls do not block the UI. Add request timeouts, process-exit handling, cancellation where the UI needs it, and safe reset/reconnect behavior.
-4. Add typed frontend transport files under `src/api/`. Keep command names, DTOs, error handling, and serialization tested.
-5. Add the three feature entries to fina-builder’s left navigation:
-   - Trading 2nd
-   - R&D
-   - Risk Cube
-6. Do not add TradeAC’s agent/OpenCode entry. Keep fina-builder’s RIGA entry and assistant behavior intact.
-7. Do not add the obsolete TradeAC Trading entry.
-8. Ensure navigation to unavailable Python-backed features shows a useful setup status and does not crash the rest of the app.
-
-#### Exit criteria
-
-- Frontend invokes only named, typed commands; it cannot choose an arbitrary executable, path, working directory, or environment.
-- Tauri owns all MCP/Python child processes and shuts them down on application exit.
-- Existing RIGA, TAC, and NIP behavior remains operational.
-- Left navigation displays only the in-scope migrated features plus fina-builder’s existing entries.
-- Unit tests cover success, validation failure, timeout, missing binary/interpreter, and child process exit.
-
----
-
-### Phase 5 — Port Trading 2nd
-
-#### Source and destination
-
-Use only TradeAC’s **Trading 2nd** routes/components and dependencies. Expected source areas include `tac-app/src/app/(main)/trading/` and the associated feature components/actions; confirm exact files in the Phase 0 inventory. Do not copy the legacy `trading` implementation or routes.
-
-Implement under `src/features/trading2/`.
-
-#### Tasks
-
-1. Port the user-facing pages/components into fina-builder’s React/Vite component model. Remove Next-only APIs, server components, server actions, metadata, and routing assumptions.
-2. Reuse fina-builder’s existing Tauri/TAC transport and UI primitives. Use its Tailwind version, theme tokens, React patterns, state conventions, and test utilities.
-3. Port the selected Trading 2nd workflows and only their required TAC MCP calls.
-4. Send reads and mutations through typed Tauri commands. Validate mutation inputs in Rust as well as in the UI.
-5. Require explicit user confirmation for broker-impacting actions such as order placement/cancellation. Tests must use mocks/fixtures; do not place live orders in CI.
-6. Define unavailable/unauthorized credential behavior even though app-level authentication is deferred: no configured broker credentials means a clear disabled/error state, not fake data.
-7. Preserve meaningful TradeAC behavior and terminology while adapting layout/navigation to fina-builder.
-
-#### Tests and exit criteria
-
-- Component tests cover loading, success, empty, error, and mutation-confirmation states.
-- Transport tests assert exact MCP tool names and argument shapes.
-- Rust tests cover request validation and error mapping.
-- Browser E2E covers the primary read-only workflow and confirms mutation cancellation/confirmation paths using stubs.
-- No live broker credentials or live orders are needed for tests.
-- Legacy TradeAC Trading pages/actions are absent from fina-builder.
-
----
-
-### Phase 6 — Port R&D
-
-#### Source and destination
-
-Use TradeAC’s R&D pages/actions, `tac-qlib` services, and required data schema. Expected source areas include `tac-app/src/app/(main)/rd/`, `rd-actions.ts`, `experiments-actions.ts`, `rounds-actions.ts` only where an in-scope R&D view needs them, and `tac-qlib/`.
-
-Implement the UI under `src/features/rd/`, Python package under `modules/tac-qlib/`, and persistence in the Tauri database service.
-
-#### Tasks
-
-1. Port the selected experiment/model/result/lineage workflows. Maintain the feature inventory as the source of truth for what is included.
-2. Replace Next server actions with Tauri transport calls and repository/MCP operations.
-3. Ensure calculations and qlib workflows remain in the Python/Rust service that owns them; do not duplicate domain calculations in React.
-4. Run R&D Python MCP servers from the `uv` environment established in Phase 2.
-5. Implement PostgreSQL and SQLite persistence for selected records. Keep schema differences behind repositories.
-6. Provide stable user-facing errors when the qlib module, `uv` environment, data lake, or required engine is unavailable.
-7. Do not implement TradeAC authentication, OpenCode integration, or user/session authorization as part of this phase.
-
-#### Tests and exit criteria
-
-- Python unit/integration tests cover the selected data providers, workflows, and MCP server contracts using temporary fixtures.
-- Tests do not require Alpaca credentials, a production lake, or a remote embedding API.
-- Tauri tests cover subprocess resolution, startup failure, timeout, restart, and shutdown.
-- PostgreSQL and SQLite repository contract suites both pass.
-- E2E covers one representative R&D flow end to end using deterministic local fixtures.
-
----
-
-### Phase 7 — Port Risk Cube
-
-#### Source and destination
-
-Use TradeAC’s `riskcube` feature only. The inspected route structure includes `cubes`, `scenarios`, `slice`, and `versions`. Confirm their exact dependencies and persistence requirements during Phase 0.
-
-Implement under `src/features/riskcube/`.
-
-#### Tasks
-
-1. Port the Risk Cube navigation pages and shared components to fina-builder’s existing UI stack.
-2. Replace server actions with typed Tauri calls.
-3. Keep cube/scenario calculations in their existing authoritative engine/service; do not recreate formulas in the UI.
-4. Persist required records through the cross-database repositories.
-5. Gate optional feature behavior based on actual backend capability instead of returning fabricated or placeholder risk data.
-6. Keep Risk Cube terminology distinct from fina-builder’s existing payoff/risk displays and avoid duplicate menu entries.
-
-#### Tests and exit criteria
-
-- Unit tests cover cube/scenario selection, slicing, version selection, and UI empty/loading/error states.
-- Backend contract tests cover input validation and output DTO compatibility.
-- PostgreSQL and SQLite persistence tests pass.
-- E2E covers a representative Risk Cube workflow with deterministic fixtures.
-- No TradeAC legacy Trading or agent UI is included.
-
----
-
-### Phase 8 — Integration, packaging, and release readiness
-
-#### Tasks
-
-1. Run the entire fina-builder frontend, Rust, Python, submodule, and E2E test suites.
-2. Add CI jobs for:
-   - Current pinned TAC engine tests.
-   - `uv sync --locked` and Python tests for each in-scope runnable module.
-   - SQLite repository tests.
-   - PostgreSQL repository tests with a disposable service.
-   - Existing fina-builder frontend/Rust coverage and production-mock guards.
-3. Update Tauri dev/build scripts to build or resolve the canonical TAC engine and report the Python environment requirement accurately.
-4. Test sidecar and Python path resolution in both developer checkouts and packaged app builds. If Python cannot yet be reliably packaged, document it as a runtime prerequisite and fail fast with setup instructions.
-5. Update fina-builder README and feature docs. Document:
-   - The migrated feature sets and excluded legacy features.
-   - `DATABASE_URL` PostgreSQL/SQLite configuration.
-   - `uv` installation and per-module sync commands.
-   - Data lake and engine requirements.
-   - Current desktop packaging limitations.
-6. Verify TradeAC remains unchanged and that all imported behavior can be traced to the recorded reference commit.
-
-#### Final commands
+1. Record the source SHAs in §1 and verify both reference trees are clean.
+2. Inventory exact TradeAC pages, components, server actions, MCP tools, schemas, environment variables, and data files for each in-scope group.
+3. Classify each dependency as: reuse existing fina-builder capability; add a new MCP service; port a pure frontend projection; or defer as unsupported.
+4. Run the current fina-builder baseline:
 
 ```bash
 git submodule update --init --recursive
+npm ci
+npm run lint
+npm run test:run
+npm run build
+cargo fmt --all -- --check
+cargo test --workspace
+```
 
+5. Run the browser stack after the pinned Rust toolchain and engine prerequisites are installed:
+
+```bash
+npm run dev:http -- --public
+npm run smoke -- --web
+```
+
+**Exit criteria:** a dependency matrix exists; excluded Trading/OpenCode/auth features are marked; baseline failures are recorded separately from migration failures; TradeAC remains untouched.
+
+### Phase 1 — Reconcile TAC engine capability and pin
+
+1. Fetch the TradeAC-pinned TAC object into the existing `modules/tac-engine` repository.
+2. Compare `89fb0c8…` and `c876902…`: common ancestor, full diff, tool list, schemas, tests, and build requirements.
+3. Select one canonical commit. If unique functionality must be combined, merge it in the upstream TAC repository first; do not copy files between submodules.
+4. Verify the required Trading 2ⁿᵈ tools exist: account, positions, orders, news, quotes/history, streams, scheduler inputs, and any round execution dependencies.
+5. Update fina-builder’s sidecar/build docs only if the selected canonical revision requires it.
+
+**Canonical decision (2026-11-20):** retain fina-builder’s
+`89fb0c89e19e72c05131f8b1022016a9098e254f` as the canonical TAC revision. TradeAC’s pin,
+`c876902c8ea74500437903702cf27431077e694b`, is its direct ancestor; fina-builder adds the
+`e2ff3d1` SVI volatility-surface/lake-market-data changes and the `89fb0c8` Yahoo fallback
+without Alpaca credentials. The selected revision preserves the TradeAC account, positions,
+orders, news, and lake-watchlist tool surface while providing the credential-free local
+development behavior required by fina-builder. No files were copied between TAC checkouts,
+and `modules/tac-engine` remains the sole TAC gitlink.
+
+**Phase 1 validation (2026-11-20):** the selected revision compiled successfully;
+`cargo test --manifest-path modules/tac-engine/Cargo.toml` passed with 60 tests passed and
+0 failed; and `npm run smoke` passed the live RIGA/TAC MCP round-trip (`SMOKE OK`).
+
+**Exit criteria:** one TAC gitlink; selected SHA and rationale recorded; engine tests/build pass; existing `npm run smoke` remains green; no duplicate engine directory or binary.
+
+### Phase 2 — Establish deterministic Python module ownership
+
+1. Copy only the required `tac-qlib` package and support files into an approved fina-builder module location, preferably `modules/tac-qlib/`.
+2. Create a module-local `pyproject.toml`, committed `uv.lock`, ignored `.venv`, and tests. Pin the supported Python version and qlib revision.
+3. Replace workspace-root discovery, ambient `python`, root `.venv`, and implicit `PYTHONPATH` with an explicit resolver:
+
+```text
+modules/tac-qlib/.venv/bin/python -m tac_qlib.rd_server
+modules/tac-qlib/.venv/bin/python -m tac_qlib.book_server
+```
+
+4. Add a Node launcher/bridge that checks `uv`, synchronizes with `uv sync --locked`, resolves the interpreter, sets a narrow environment, uses the module as `cwd`, and reports actionable setup errors.
+5. Keep RD and book servers as separate named services even if they share package source. If a second runnable Python module appears, it gets its own project and lockfile.
+
+Validation:
+
+```bash
+uv sync --project modules/tac-qlib --locked
+uv run --project modules/tac-qlib --locked python -c 'import tac_qlib'
+uv run --project modules/tac-qlib --locked python -m tac_qlib.rd_server --help
+uv run --project modules/tac-qlib --locked python -m tac_qlib.book_server --help
+```
+
+**Exit criteria:** clean-checkout sync works; no root `.venv` or ambient interpreter is used; child processes terminate on shutdown; smoke tests need no credentials, remote embeddings, broker, or populated production lake.
+
+**Phase 2 completion record (2026-11-20):** `scripts/tac-qlib-mcp.mjs` now checks for
+`uv`, runs `uv sync --project modules/tac-qlib --locked`, resolves only the module-local
+`.venv/bin/python`, uses `modules/tac-qlib` as `cwd`, and passes an explicit runtime
+allowlist instead of the arbitrary parent environment. The RD and book services remain
+separate named launch targets. `uv sync --locked`, `import tac_qlib`, the module-local
+launcher probes, and `npm run test:tac-qlib:lake` passed. The lake harness creates no
+production data and requires no credentials; its direct smoke scripts reported
+`ALL LAKE PROVIDER CHECKS PASSED` and `ALL CONTRIB CHECKS PASSED`.
+
+### Phase 3 — Define persistence and data ownership
+
+Produce a schema matrix before porting actions. For every retained TradeAC table or record, state its owner, lifecycle, backend, migration, and test fixture.
+
+**Next milestone requirements:**
+
+1. Inventory every retained Trading 2ⁿᵈ scheduler/round, R&D traceability/model/run, and
+   RiskCube configuration record before adding persistence or porting server actions.
+2. For each record, document the authoritative owner, lifecycle, backend, migration policy,
+   retention, failure behavior, and deterministic fixture. Explicitly classify records as
+   fina-owned metadata, TAC lake data, qlib/MLflow artifacts, trade-repository data, or
+   OLAP-engine data.
+3. Reuse the existing Node trade-repository storage-port pattern for fina-owned operational
+   records and user preferences, with SQLite as the disposable default and PostgreSQL as an
+   optional contract target.
+4. Keep qlib, MLflow, lake, and RiskCube data owned by their authoritative services; persist
+   only references, configuration, saved views, and user selections in fina-builder where
+   needed. Do not migrate TradeAC records or copy production lake data.
+5. If fina-owned R&D metadata is required, implement portable SQLite/PostgreSQL repository
+   contracts, idempotent migrations, constraints, serialization tests, and deterministic
+   lexical-search fallback when pgvector is unavailable.
+6. Keep all database URLs and credentials outside renderer state and logs, reject invalid
+   configuration explicitly, and test the setup/unavailable path without external services.
+
+**Phase 3 inventory status (2026-11-20):** Phase 3A foundations implemented. The scheduler, round-book, R&D,
+and RiskCube records are inventoried with source fields, ownership classification,
+proposed backend, lifecycle/retention, migration policy, fixtures, and explicit
+defer/unsupported decisions in [`docs/76-phase3-record-inventory.md`](76-phase3-record-inventory.md).
+No production-record migration may begin. Phase 3A adds only fina-owned metadata
+repositories and read-only book transport contracts after the ownership matrix and
+authoritative service boundaries were reviewed.
+
+**Phase 4/7 RiskCube evidence (2026-11-20):** the first RiskCube read-only vertical slice is
+implemented behind a typed semantic API and a named `riskcube` MCP boundary. It discovers
+capabilities and partitions, selects a bounded scope, runs an allowlisted `olap_query`, and
+renders decimal wire values without converting them through binary floating point. The lazy
+workspace has capability/setup, loading, validation, backend, timeout, not-found, and empty
+states. Browser coverage is fixture-backed and deterministic: `npm run test:e2e:journey:riskcube`
+passes the partition → scope → cube → slice journey. The fixture intercepts only `/riskcube/mcp`;
+it does not represent production OLAP data.
+
+The browser and Tauri host boundaries accept only the three named read-only RiskCube tools and
+reject arbitrary SQL, URI, path, tracking-store, mutation, or executable arguments. R&D has the
+same exact-argument read-only protection. API tests cover missing-backend, timeout, validation,
+not-found, backend, and credential-redaction classification; pure browser-validator tests and
+Tauri validator unit tests cover the host rejection paths. No canonical OLAP/pricer engine has
+been selected, no RiskCube sidecar is bundled, and no RiskCube cells, partitions, or production
+records are persisted or migrated. Production remains explicitly unavailable until
+`RISK_CUBE_MCP_BIN` names an approved canonical sidecar.
+
+- Use the existing trade-repository storage-port pattern for small fina-owned operational records and user preferences.
+- Keep qlib/MLflow/lake records owned by their authoritative service; do not silently copy them into a second database.
+- Keep RiskCube partitions/cells owned by the selected OLAP engine; persist only cube configuration, saved views, and user-level selections in fina-builder if needed.
+- If R&D traceability/model/scheduler records must be persisted in fina-builder, implement a portable repository with SQLite and PostgreSQL contract tests. Treat pgvector semantic search as optional capability: PostgreSQL+pgvector may enable it; SQLite must fall back to deterministic lexical search.
+- Do not claim full PostgreSQL/SQLite parity for MLflow or qlib internals unless their own stores support it. Fina-owned metadata may be portable; engine-owned artifacts retain their engine prerequisites.
+
+**Exit criteria:** no renderer-visible DB URL; fresh disposable SQLite tests pass; PostgreSQL tests run only when a disposable service is available; invalid configuration fails explicitly; no TradeAC data is migrated.
+
+### Phase 4 — Add feature transports and navigation
+
+**Read-only Trading 2ⁿd slice status (2026-11-20):** implemented. The existing typed TAC
+API, lazy workspace route, menu/command-palette navigation, browser proxy, and named Tauri
+TAC commands are now covered by a deterministic Playwright journey in
+`playwright/trading2-read-only.spec.ts`. The journey intercepts only the browser MCP boundary
+with synthetic JSON-RPC fixtures; it uses no Alpaca credentials, broker state, or production
+data. It verifies account/positions/orders/news rendering, the explicit read-only message,
+Trading 2ⁿd navigation, and location persistence after reload. Run it with
+`npm run test:e2e:journey:trading2`.
+
+**Read-only R&D slice status (2026-11-20):** implemented. Fina now has a typed read-only
+`rdApi`, browser `/rd` MCP bridge, named Tauri `rd_mcp_*` commands, a lazy R&D workspace with
+validated persisted locations, and explicit unavailable/error states. The workspace covers the
+experiment → run → result path while leaving qlib/MLflow records and artifacts owned by the
+sidecar. `playwright/rd-read-only.spec.ts` intercepts only the browser MCP boundary with
+synthetic JSON-RPC fixtures and requires no lake, MLflow service, credentials, or production
+artifacts. Evidence: 3 R&D API unit tests passed and the focused journey passed with
+`npm run test:e2e:journey:rd`.
+
+The Trading 2ⁿd, R&D, and initial RiskCube read-only transport/navigation slices are complete.
+Broker mutations, cancellation, durable scheduling, authentication, RiskCube editing, and
+RiskCube persistence remain intentionally unavailable.
+
+1. Add typed APIs for Trading 2ⁿᵈ, R&D, and RiskCube. Each API exposes stable DTOs and a closed error shape.
+2. Add desktop Tauri commands only for named service operations and MCP process controls. Add corresponding browser HTTP bridges and Vite proxy entries.
+3. Add `Location` variants for the three workspaces, or a single feature location with validated subviews where that better matches the existing menu-bar model. Persist only safe view identifiers.
+4. Reuse existing `Workspace` lazy loading, `ViewLoadBoundary`, theme tokens, `PanelCard`, tables, charts, and responsive layout conventions.
+5. Return explicit capability/setup states for missing TAC, qlib, OLAP engine, data lake, credentials, or optional embedding provider.
+
+**Exit criteria:** the existing dashboards, trade repository, Narrative, Video, and RIGA paths are unchanged; transports have unit tests for success, validation, timeout, missing backend, and process exit; no arbitrary executable or path is selectable from the renderer.
+
+### Phase 5 — Migrate Trading 2ⁿᵈ
+
+Port from TradeAC’s `/dashboard/*` pages, not from the legacy `/trading/*` group. Suggested slices:
+
+1. Account, positions, orders, news, watchlist, macro, and calendar read-only views.
+2. Scheduler configuration and run history, using fina-builder’s automation conventions if scheduling is retained. Do not create an unattended scheduler without explicit ownership, lifecycle, and failure semantics.
+3. Rounds: facts, target intents, decisions, orders, fills, funnel, and reconciliation. Keep round calculations in `book_server`/authoritative services.
+4. Broker mutations only after read paths are stable: order placement/cancellation, fill synchronization, and any round execution action. Confirmation must show the exact operation and target; test with stubs.
+
+Map TradeAC’s server actions to named TAC/book MCP tools. Do not port `requireUser()` as a fake auth layer. Until authentication is separately designed, use the existing local capability/configuration model and clearly label broker actions as unavailable when credentials are absent.
+
+**Exit criteria:** component tests cover loading/success/empty/error/unavailable/mutation confirmation; MCP contract tests assert exact tool names and arguments; deterministic Playwright coverage covers read-only Trading 2ⁿᵈ and cancellation paths; no live orders or production credentials are used.
+
+### Phase 6 — Migrate R&D
+
+Port the selected R&D views and their existing MCP contracts:
+
+- experiment list/detail and traced experiment search;
+- input, model, result, blotter, notes, Git graph, and lineage;
+- model registry only if its persistence owner and lifecycle are defined;
+- run wizard only after RIGA replacement behavior and side effects are explicitly specified.
+
+Replace server actions with typed `rdApi` calls. The UI renders DTOs and does not calculate qlib metrics. Use local deterministic fixtures for experiment/run/model/result responses. For delete or destructive operations, require explicit confirmation and test idempotency/error behavior.
+
+**Exit criteria:** RD MCP server starts from module-local `uv`; Python tests cover provider and tool contracts with temporary fixtures; frontend tests cover all view states; one end-to-end local-fixture journey covers experiment → run selection → result/model/lineage; no remote embedding or MLflow service is required for the default test suite.
+
+### Phase 7 — Migrate RiskCube
+
+First implement the engine capability gate and a small read-only vertical slice:
+
+1. Discover partitions/versions/scenarios.
+2. Load a selected scope.
+3. Run a validated cube query.
+4. Render the tabular/pivot result.
+
+Then add scenario editing, version selection, slices, saved cube configuration, and the full designer. Port the semantics of `cube-sql.ts`: dimensions, measures, aggregation, filters, measure grain/LOD, cell limits, and pivot transform. The preferred boundary is a typed semantic OLAP request modeled on the trade repository's bounded filters/sorts/cursors and a RIGA-style report envelope carrying schema, scope, provenance, assumptions, limitations, lineage, warnings, and engine/snapshot identifiers. Keep all SQL identifier and expression allowlists backend-controlled; never execute arbitrary SQL supplied by the renderer.
+
+Do not migrate RiskCube as a generic `src/features/riskcube` mock over current TAC market data. If the selected OLAP engine is unavailable in browser or desktop packaging, the UI must show a capability/setup state and the plan must state the supported runtime prerequisite.
+
+**Exit criteria:** cube results are sourced from the canonical OLAP service; scenario/version/slice selection is tested; query limits and invalid dimensions are rejected; saved views are deterministic; one Playwright workflow covers partition → scope → cube → slice; no fabricated risk numbers are displayed.
+
+### Phase 8 — Integration, packaging, and release readiness
+
+1. Add CI jobs for the canonical TAC pin, Python `uv sync --locked`, Python tests, feature transport tests, SQLite repository tests, and optional PostgreSQL contract tests.
+2. Test developer checkout and packaged desktop resolution for every child process. If Python or the OLAP engine cannot be bundled, document it as a runtime prerequisite and fail fast with setup instructions.
+3. Update README, feature docs, and this plan with actual capabilities, env vars, ports, data ownership, and unsupported states.
+4. Run the complete suite:
+
+```bash
 npm ci
 npm run lint
 npm run test:run
 npm run build
 npm run test:e2e
-
+npm run smoke -- --web
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-
 cargo test --manifest-path modules/tac-engine/Cargo.toml
 uv sync --project modules/tac-qlib --locked
 uv run --project modules/tac-qlib --locked pytest
-```
-
-Run the database suites independently against both backends using disposable databases:
-
-```bash
-DATABASE_URL="sqlite://./.data/test.db" cargo test --workspace
-
-DATABASE_URL="postgres://fina:fina@127.0.0.1:5432/fina_test" \
-  cargo test --workspace
-```
-
-Run the actual Tauri development and bundle builds on each supported CI platform:
-
-```bash
-npm run tauri:dev
 npm run tauri:build
 ```
 
-#### Final exit criteria
-
-- All required commands pass on a clean checkout with recursively initialized submodules.
-- Trading 2nd, R&D, and Risk Cube are reachable from fina-builder’s left navigation and have tested primary workflows.
-- Legacy TradeAC Trading and TradeAC agent/OpenCode are not ported.
-- RIGA remains the assistant.
-- Both database backends pass the same repository behavior contract.
-- Python dependencies are pinned and managed independently with `uv`.
-- Exactly one canonical TAC engine revision is referenced by fina-builder.
-- A packaged build either runs its required Python-backed features or clearly reports the documented missing runtime prerequisite.
-- No TradeAC data migration has occurred.
-- `haymant/tradeac` remains unchanged and frozen as the source reference.
+**Final exit criteria:** all required commands pass on a clean recursive checkout; Trading 2ⁿᵈ, R&D, and RiskCube primary workflows are reachable through fina-builder navigation; legacy Trading and OpenCode are absent; RIGA remains the assistant; one canonical TAC revision is used; no TradeAC records or credentials were migrated; packaged runtime prerequisites are either satisfied or reported clearly.
 
 ---
 
-## 5. Cross-cutting test requirements
+## 5. Feature mapping and test matrix
 
-### Frontend
+| TradeAC surface | fina-builder destination | Primary backend | Initial test |
+|---|---|---|---|
+| Trading 2ⁿᵈ account/positions/orders | `features/trading2` | `tac-engine` | transport + read-only E2E |
+| Trading 2ⁿᵈ scheduler/rounds | `features/trading2` | `book_server` + scheduler service | fixture contract + confirmation E2E |
+| News/watchlist/macro/calendar | `features/trading2` | `tac-engine` | loading/empty/error component tests |
+| R&D experiment/model/result | `features/rd` | `rd_server` + R&D repository | Python MCP + Vitest |
+| R&D blotter/lineage/Git graph | `features/rd` | `rd_server`/repository | deterministic fixture E2E |
+| RiskCube scenarios/versions/slices/cubes | `features/riskcube` | canonical OLAP engine | query contract + pivot tests |
 
-- Vitest tests for every new transport and feature state.
-- Test loading, success, empty, validation error, backend unavailable, and timeout states.
-- Do not use production Tauri mocks in production builds; retain fina-builder’s production mock guard.
-- Playwright E2E must use deterministic stubs/fixtures unless a test is explicitly an opt-in local integration test.
+### Cross-cutting requirements
 
-### Rust/Tauri
+**Frontend:** every new API has tests for loading, success, empty, unavailable, validation, timeout, and backend error. Keep production mocks out of `dist/` and use existing guard patterns.
 
-- Unit tests for command argument validation, environment construction, process resolution, errors, database selection, and repository behavior.
-- Do not test by starting a real broker order or connecting to a production database.
-- Verify process cleanup and cancellation for MCP/Python children.
+**Rust/Tauri:** test command validation, environment construction, process resolution, MCP errors, cleanup, timeout, and reset/reconnect behavior. Do not put business formulas in Tauri command bodies.
 
-### Python/qlib
+**Python:** commit `uv.lock` for every runnable module; use temporary lake/data directories; tests must not require Alpaca, MLflow, public feeds, or remote embedding APIs.
 
-- `uv.lock` is committed for each runnable module.
-- CI uses `uv sync --locked`; no unpinned dependency resolution during tests.
-- Use temporary lake/data directories and deterministic fixtures.
-- Tests must run without API keys or public services.
+**Persistence:** test migration idempotency, foreign keys, uniqueness, JSON/numeric/timestamp serialization, and invalid URL behavior. Test lexical fallback when pgvector is absent.
 
-### Database
-
-- Run repository contract tests against fresh SQLite and PostgreSQL databases.
-- Verify migration idempotency, foreign keys, uniqueness, nullability, JSON encoding, numeric behavior, and timestamps on both backends.
-- Confirm SQLite works without pgvector installed.
-- Verify invalid/missing URLs return explicit configuration errors and never silently switch database backends.
-
-### Security and operational behavior
-
-- No database URL, broker secret, or arbitrary shell capability is exposed to the webview.
-- Tauri commands are narrow and validate input on the Rust side.
-- Broker mutations require explicit confirmation and have no live-order CI tests.
-- Logs redact secrets and do not write credentials or raw connection URLs.
+**Security:** do not expose secrets, database URLs, arbitrary shell access, arbitrary SQL, or arbitrary child-process configuration to the webview. Redact credentials in logs. Require explicit confirmation for broker-impacting actions.
 
 ---
 
 ## 6. Change-control rules
 
-1. All migration commits go to `haymant/fina-builder`.
-2. Do not commit any change to `haymant/tradeac` unless the owner explicitly requests unfreezing it.
-3. Record the TradeAC source commit and selected TAC engine commit in migration documentation.
-4. Do not add a duplicate `tac-engine` submodule or import the entire TradeAC repository as a submodule.
-5. Do not migrate data or auth as an incidental part of a feature port.
-6. Do not add a feature to the left navigation until its primary workflow, error states, and backend requirements have tests.
-7. Any scope change—especially unfreezing TradeAC, adding auth, or bringing legacy Trading/agent features back—requires explicit approval.
-```
+1. Make all migration changes in `fina-builder` only.
+2. Keep `tradeac` read-only and frozen as the source reference.
+3. Record every imported behavior against the source file and commit SHA.
+4. Do not add a duplicate TAC engine checkout or import the entire TradeAC repository as a submodule.
+5. Do not port legacy Trading or OpenCode by accident; scope additions require an explicit update here.
+6. Do not migrate data, auth, or production credentials as incidental work.
+7. Do not expose a feature in navigation until its primary workflow, setup state, and failure states have tests.
+8. Prefer existing fina-builder transport, MCP, storage, theme, navigation, and test conventions over introducing a parallel framework.
+9. Any change to database ownership, OLAP engine choice, Python packaging, or broker side-effect policy requires an ADR or an update to this document before implementation.

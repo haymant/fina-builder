@@ -1,0 +1,117 @@
+import { invoke } from '@tauri-apps/api/core'
+import { createHttpMcpTransport, unwrapToolResult } from './rigaTransport'
+import { toSnakeKeys } from './keyCase'
+
+export type RdErrorKind = 'unavailable' | 'backend' | 'validation' | 'timeout'
+
+export class RdApiError extends Error {
+  readonly kind: RdErrorKind
+  readonly tool?: string
+  constructor(message: string, kind: RdErrorKind, tool?: string) {
+    super(message)
+    this.name = 'RdApiError'
+    this.kind = kind
+    this.tool = tool
+  }
+}
+
+export interface RdTransport {
+  callTool(name: string, args?: Record<string, unknown>): Promise<unknown>
+}
+export interface RdExperiment {
+  experimentId: string
+  name: string | null
+  lifecycleStage: string | null
+  runCount: number
+  latestRun: RdRunSummary | null
+  bestHeadline: Record<string, unknown>
+}
+export interface RdRunSummary {
+  runId: string
+  name: string | null
+  status: string | null
+  startTime: string | null
+  headline: Record<string, unknown>
+}
+export interface RdRunMeta {
+  runId: string
+  name: string | null
+  status: string | null
+  experimentId: string | null
+  startTime: string | null
+  endTime: string | null
+  sourceVersion: string | null
+}
+export interface RdRunDetail {
+  meta: RdRunMeta | null
+  params: Record<string, string>
+  tags: Record<string, string>
+  metrics: Record<string, unknown>
+  metricsLatest: Record<string, unknown>
+  headline: Record<string, unknown>
+  notes: Record<string, unknown>
+  artifacts: string[]
+}
+export interface RdResult {
+  runId: string
+  experimentId: string
+  metrics: Record<string, unknown>
+  headline: Record<string, unknown>
+  icSeries: Record<string, unknown>[]
+  groupReturns: Record<string, unknown>
+  backtest: Record<string, unknown>
+  explanation: Record<string, unknown>
+  warnings: string[]
+}
+const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+const array = (value: unknown, key: string): unknown[] => Array.isArray(value) ? value : Array.isArray(record(value)[key]) ? record(value)[key] as unknown[] : []
+const text = (value: unknown): string | null => value === null || value === undefined ? null : String(value)
+const number = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) ? value : Number(value ?? 0) || 0
+function normalizeRunSummary(value: unknown): RdRunSummary | null {
+  const raw = record(value)
+  if (!raw.run_id && !raw.runId) return null
+  return { runId: text(raw.run_id ?? raw.runId) ?? '', name: text(raw.name), status: text(raw.status), startTime: text(raw.start_time ?? raw.startTime), headline: record(raw.headline) }
+}
+function normalizeExperiment(value: unknown): RdExperiment {
+  const raw = record(value)
+  return { experimentId: text(raw.experiment_id ?? raw.experimentId) ?? '', name: text(raw.name), lifecycleStage: text(raw.lifecycle_stage ?? raw.lifecycleStage), runCount: number(raw.run_count ?? raw.runCount), latestRun: normalizeRunSummary(raw.latest_run ?? raw.latestRun), bestHeadline: record(raw.best_headline ?? raw.bestHeadline) }
+}
+function normalizeMeta(value: unknown): RdRunMeta | null {
+  const raw = record(value)
+  if (!Object.keys(raw).length) return null
+  return { runId: text(raw.run_id ?? raw.runId) ?? '', name: text(raw.name), status: text(raw.status), experimentId: text(raw.experiment_id ?? raw.experimentId), startTime: text(raw.start_time ?? raw.startTime), endTime: text(raw.end_time ?? raw.endTime), sourceVersion: text(raw.source_version ?? raw.sourceVersion) }
+}
+function normalizeRun(value: unknown): RdRunDetail {
+  const raw = record(value)
+  return { meta: normalizeMeta(raw.meta), params: record(raw.params) as Record<string, string>, tags: record(raw.tags) as Record<string, string>, metrics: record(raw.metrics), metricsLatest: record(raw.metrics_latest ?? raw.metricsLatest), headline: record(raw.headline), notes: record(raw.notes), artifacts: array(raw.artifacts, '').map(String) }
+}
+function errorFor(tool: string, cause: unknown): RdApiError {
+  if (cause instanceof RdApiError) return cause
+  const message = cause instanceof Error ? cause.message : String(cause)
+  const lower = message.toLowerCase()
+  const kind: RdErrorKind = lower.includes('timeout') || lower.includes('timed out') ? 'timeout' : lower.includes('not set') || lower.includes('not found') || lower.includes('not reachable') || lower.includes('could not reach') ? 'unavailable' : 'backend'
+  const redacted = message.replace(/([a-z][a-z0-9+.-]*:\/\/)([^\s/@]+):([^\s/@]+)@/ig, '$1[REDACTED]@').replace(/(password|secret|token|api[_-]?key)\s*[=:]\s*[^\s,;]+/ig, '$1=[REDACTED]')
+  return new RdApiError(redacted, kind, tool)
+}
+const READ_ONLY_TOOLS = new Set(['rd_exp_list', 'rd_exp_get_experiment', 'rd_exp_get_run', 'rd_exp_input', 'rd_exp_result', 'rd_exp_model', 'rd_exp_lineage'])
+export function createRdApi(transport: RdTransport) {
+  async function call<T>(tool: string, args: Record<string, unknown> = {}): Promise<T> {
+    if (!READ_ONLY_TOOLS.has(tool)) throw new RdApiError(`R&D tool is not allowed: ${tool}`, 'validation', tool)
+    try { return await transport.callTool(tool, args) as T } catch (cause) { throw errorFor(tool, cause) }
+  }
+  return {
+    async listExperiments(): Promise<RdExperiment[]> { return array(await call('rd_exp_list'), 'experiments').map(normalizeExperiment) },
+    async getExperiment(experimentId: string): Promise<{ experiment: RdExperiment | null; runs: RdRunDetail[] }> { const raw = record(await call('rd_exp_get_experiment', { experiment_id: experimentId })); return { experiment: raw.experiment ? normalizeExperiment(raw.experiment) : null, runs: array(raw.runs, '').map(normalizeRun) } },
+    async getRun(runId: string, experimentId?: string): Promise<RdRunDetail> { return normalizeRun(await call('rd_exp_get_run', { run_id: runId, ...(experimentId ? { experiment_id: experimentId } : {}) })) },
+    async getResult(runId: string, experimentId?: string): Promise<RdResult> { const raw = record(await call('rd_exp_result', { run_id: runId, ...(experimentId ? { experiment_id: experimentId } : {}) })); return { runId: text(raw.run_id ?? raw.runId) ?? runId, experimentId: text(raw.experiment_id ?? raw.experimentId) ?? experimentId ?? '', metrics: record(raw.metrics), headline: record(raw.headline), icSeries: array(raw.ic_series ?? raw.icSeries, '').map(record), groupReturns: record(raw.group_returns ?? raw.groupReturns), backtest: record(raw.backtest), explanation: record(raw.explanation), warnings: array(raw.warnings, '').map(String) } },
+    async getInput(runId: string, experimentId?: string): Promise<Record<string, unknown>> { return record(await call('rd_exp_input', { run_id: runId, ...(experimentId ? { experiment_id: experimentId } : {}) })) },
+  }
+}
+export function rdBaseUrl(): string { return (import.meta.env.VITE_RD_MCP_URL as string | undefined) ?? '/rd' }
+function inTauri(): boolean { return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window }
+const httpRdClient = createHttpMcpTransport(rdBaseUrl())
+const httpRdTransport: RdTransport = { async callTool(name, args = {}) { return unwrapToolResult(await httpRdClient.callTool<Record<string, unknown>>(name, args), name) as unknown } }
+const tauriRdTransport: RdTransport = { async callTool(name, args = {}) { return unwrapToolResult(await invoke<Record<string, unknown>>('rd_mcp_call_tool', { name, arguments: toSnakeKeys(args) }), name) as unknown } }
+let activeRdTransport: RdTransport = inTauri() ? tauriRdTransport : httpRdTransport
+export function setRdTransport(transport: RdTransport | null): void { activeRdTransport = transport ?? (inTauri() ? tauriRdTransport : httpRdTransport) }
+export const rdApi = createRdApi({ callTool: (name, args) => activeRdTransport.callTool(name, args) })
