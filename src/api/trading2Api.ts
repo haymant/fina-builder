@@ -19,14 +19,29 @@ export class Trading2Error extends Error {
 
 export interface Trading2Account {
   id?: string
+  accountNumber?: string
   status?: string
   currency?: string
   buyingPower?: number
+  effectiveBuyingPower?: number
+  regtBuyingPower?: number
+  daytradingBuyingPower?: number
+  nonMarginableBuyingPower?: number
+  optionsBuyingPower?: number
   cash?: number
   portfolioValue?: number
   equity?: number
   lastEquity?: number
+  longMarketValue?: number
+  shortMarketValue?: number
+  initialMargin?: number
+  maintenanceMargin?: number
+  sma?: number
+  multiplier?: string
   dayTradeCount?: number
+  patternDayTrader?: boolean
+  tradingBlocked?: boolean
+  shortingEnabled?: boolean
   raw: Record<string, unknown>
 }
 
@@ -37,6 +52,9 @@ export interface Trading2Position {
   costBasis?: number
   unrealizedPl?: number
   unrealizedPlPct?: number
+  unrealizedIntradayPl?: number
+  unrealizedIntradayPlPct?: number
+  changeToday?: number
   side?: string
   avgEntryPrice?: number
   currentPrice?: number
@@ -49,7 +67,13 @@ export interface Trading2Order {
   side?: string
   quantity?: number
   filledQuantity?: number
+  filledAveragePrice?: number
   type?: string
+  timeInForce?: string
+  limitPrice?: number
+  stopPrice?: number
+  notional?: number
+  orderClass?: string
   status?: string
   submittedAt?: string
   raw: Record<string, unknown>
@@ -75,6 +99,13 @@ export interface Trading2NewsItem {
   url?: string
   createdAt?: string
   symbols: string[]
+}
+
+export type Trading2NewsQuery = {
+  symbols?: string
+  start?: string
+  end?: string
+  limit?: number
 }
 
 export interface Trading2WatchlistItem {
@@ -141,14 +172,29 @@ export function normalizeAccount(value: unknown): Trading2Account {
   const raw = asRecord(value)
   return {
     id: stringValue(raw, 'id', 'account_id', 'accountId'),
+    accountNumber: stringValue(raw, 'account_number', 'accountNumber'),
     status: stringValue(raw, 'status'),
     currency: stringValue(raw, 'currency', 'currency_code'),
     buyingPower: numberValue(raw, 'buying_power', 'buyingPower'),
+    effectiveBuyingPower: numberValue(raw, 'effective_buying_power', 'effectiveBuyingPower'),
+    regtBuyingPower: numberValue(raw, 'regt_buying_power', 'regtBuyingPower'),
+    daytradingBuyingPower: numberValue(raw, 'daytrading_buying_power', 'daytradingBuyingPower'),
+    nonMarginableBuyingPower: numberValue(raw, 'non_marginable_buying_power', 'nonMarginableBuyingPower'),
+    optionsBuyingPower: numberValue(raw, 'options_buying_power', 'optionsBuyingPower'),
     cash: numberValue(raw, 'cash'),
     portfolioValue: numberValue(raw, 'portfolio_value', 'portfolioValue'),
     equity: numberValue(raw, 'equity'),
     lastEquity: numberValue(raw, 'last_equity', 'lastEquity'),
+    longMarketValue: numberValue(raw, 'long_market_value', 'longMarketValue'),
+    shortMarketValue: numberValue(raw, 'short_market_value', 'shortMarketValue'),
+    initialMargin: numberValue(raw, 'initial_margin', 'initialMargin'),
+    maintenanceMargin: numberValue(raw, 'maintenance_margin', 'maintenanceMargin'),
+    sma: numberValue(raw, 'sma'),
+    multiplier: stringValue(raw, 'multiplier'),
     dayTradeCount: numberValue(raw, 'daytrade_count', 'dayTradeCount'),
+    patternDayTrader: raw.pattern_day_trader === true || raw.patternDayTrader === true,
+    tradingBlocked: raw.trading_blocked === true || raw.tradingBlocked === true,
+    shortingEnabled: raw.shorting_enabled === true || raw.shortingEnabled === true,
     raw,
   }
 }
@@ -163,6 +209,9 @@ export function normalizePositions(value: unknown): Trading2Position[] {
       costBasis: numberValue(raw, 'cost_basis', 'costBasis'),
       unrealizedPl: numberValue(raw, 'unrealized_pl', 'unrealizedPl'),
       unrealizedPlPct: numberValue(raw, 'unrealized_plpc', 'unrealized_pl_pct', 'unrealizedPlPct'),
+      unrealizedIntradayPl: numberValue(raw, 'unrealized_intraday_pl', 'unrealizedIntradayPl'),
+      unrealizedIntradayPlPct: numberValue(raw, 'unrealized_intraday_plpc', 'unrealizedIntradayPlPct'),
+      changeToday: numberValue(raw, 'change_today', 'changeToday'),
       side: stringValue(raw, 'side'),
       avgEntryPrice: numberValue(raw, 'avg_entry_price', 'avgEntryPrice'),
       currentPrice: numberValue(raw, 'current_price', 'currentPrice'),
@@ -180,7 +229,13 @@ export function normalizeOrders(value: unknown): Trading2Order[] {
       side: stringValue(raw, 'side'),
       quantity: numberValue(raw, 'qty', 'quantity'),
       filledQuantity: numberValue(raw, 'filled_qty', 'filledQuantity'),
+      filledAveragePrice: numberValue(raw, 'filled_avg_price', 'filledAveragePrice'),
       type: stringValue(raw, 'type', 'order_type'),
+      timeInForce: stringValue(raw, 'time_in_force', 'timeInForce'),
+      limitPrice: numberValue(raw, 'limit_price', 'limitPrice'),
+      stopPrice: numberValue(raw, 'stop_price', 'stopPrice'),
+      notional: numberValue(raw, 'notional'),
+      orderClass: stringValue(raw, 'order_class', 'orderClass'),
       status: stringValue(raw, 'status'),
       submittedAt: stringValue(raw, 'submitted_at', 'submittedAt', 'created_at'),
       raw,
@@ -219,7 +274,12 @@ export const trading2Api = {
   getAccount: async () => normalizeAccount(await call('get_account')),
   listPositions: async () => normalizePositions(await call('list_positions')),
   listOrders: async (status = 'open') => normalizeOrders(await call('list_orders', { status })),
-  getNews: async (symbols?: string[]) => normalizeNews(await call('get_news', symbols?.length ? { symbols: symbols.join(','), limit: 25 } : { limit: 25 })),
+  getNews: async (query?: Trading2NewsQuery | string[]) => {
+    const args = Array.isArray(query)
+      ? query.length ? { symbols: query.join(','), limit: 25 } : { limit: 25 }
+      : { limit: 25, ...(query ?? {}) }
+    return normalizeNews(await call('get_news', args))
+  },
   getWatchlist: async () => normalizeWatchlist(await call('get_lake_watchlist')),
   placeOrder: async (input: Trading2OrderInput) => normalizeOrders([await call('place_order', {
     symbol: input.symbol.trim().toUpperCase(), side: input.side, type: input.type, time_in_force: input.timeInForce,
