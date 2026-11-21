@@ -55,6 +55,17 @@ export interface RdRunDetail {
 export interface RdArtifact { path: string; size: number }
 export interface RdLakeStatus { market: string; calendarDays: number; calendarStart: string | null; calendarEnd: string | null; symbols: string[]; symbolCount: number; features: { timeframe: string; columns: string[] }[] }
 export interface RdDatasetPreflight { featureFields: string[]; label: string; universe: string[]; universeSize: number; segments: Record<string, unknown>; allNanDropped: string[]; nanRatioNonzero: Record<string, number>; window: Record<string, unknown> }
+export interface RdBlotter {
+  runId: string
+  experimentId: string
+  summary: Record<string, unknown>
+  daily: Record<string, unknown>[]
+  positions: Record<string, unknown>[]
+  positionHistory: Record<string, unknown>[]
+  trades: Record<string, unknown>[]
+  signals: Record<string, unknown>[]
+  warnings: string[]
+}
 export interface RdResult {
   runId: string
   experimentId: string
@@ -101,7 +112,7 @@ function errorFor(tool: string, cause: unknown): RdApiError {
   const redacted = message.replace(/([a-z][a-z0-9+.-]*:\/\/)([^\s/@]+):([^\s/@]+)@/ig, '$1[REDACTED]@').replace(/(password|secret|token|api[_-]?key)\s*[=:]\s*[^\s,;]+/ig, '$1=[REDACTED]')
   return new RdApiError(redacted, kind, tool)
 }
-const ALLOWED_TOOLS = new Set(['rd_status', 'rd_dataset', 'rd_exp_list', 'rd_exp_get_experiment', 'rd_exp_get_run', 'rd_exp_input', 'rd_exp_result', 'rd_exp_model', 'rd_exp_lineage', 'rd_trace_start', 'rd_trace_get', 'rd_trace_list', 'rd_train'])
+const ALLOWED_TOOLS = new Set(['rd_status', 'rd_dataset', 'rd_exp_list', 'rd_exp_get_experiment', 'rd_exp_get_run', 'rd_exp_input', 'rd_exp_result', 'rd_exp_model', 'rd_exp_blotter', 'rd_exp_lineage', 'rd_trace_start', 'rd_trace_get', 'rd_trace_list', 'rd_train'])
 export function createRdApi(transport: RdTransport) {
   async function call<T>(tool: string, args: Record<string, unknown> = {}): Promise<T> {
     if (!ALLOWED_TOOLS.has(tool)) throw new RdApiError(`R&D tool is not allowed: ${tool}`, 'validation', tool)
@@ -116,6 +127,7 @@ export function createRdApi(transport: RdTransport) {
     async getResult(runId: string, experimentId?: string): Promise<RdResult> { const raw = record(await call('rd_exp_result', { run_id: runId, ...(experimentId ? { experiment_id: experimentId } : {}) })); return { runId: text(raw.run_id ?? raw.runId) ?? runId, experimentId: text(raw.experiment_id ?? raw.experimentId) ?? experimentId ?? '', metrics: record(raw.metrics), headline: record(raw.headline), icSeries: array(raw.ic_series ?? raw.icSeries, '').map(record), icHistogram: array(raw.ic_histogram ?? raw.icHistogram, '').map(record), monthlyIc: array(raw.monthly_ic ?? raw.monthlyIc, '').map(record), groupReturns: record(raw.group_returns ?? raw.groupReturns), predStats: record(raw.pred_stats ?? raw.predStats), backtest: record(raw.backtest), explanation: record(raw.explanation), warnings: array(raw.warnings, '').map(String) } },
     async getModel(runId: string, experimentId?: string): Promise<Record<string, unknown>> { return record(await call('rd_exp_model', { run_id: runId, ...(experimentId ? { experiment_id: experimentId } : {}) })) },
     async getInput(runId: string, experimentId?: string): Promise<Record<string, unknown>> { return record(await call('rd_exp_input', { run_id: runId, ...(experimentId ? { experiment_id: experimentId } : {}) })) },
+    async getBlotter(runId: string, experimentId?: string): Promise<RdBlotter> { const raw = record(await call('rd_exp_blotter', { run_id: runId, ...(experimentId ? { experiment_id: experimentId } : {}) })); return { runId: text(raw.run_id ?? raw.runId) ?? runId, experimentId: text(raw.experiment_id ?? raw.experimentId) ?? experimentId ?? '', summary: record(raw.summary), daily: array(raw.daily, '').map(record), positions: array(raw.positions, '').map(record), positionHistory: array(raw.position_history ?? raw.positionHistory, '').map(record), trades: array(raw.trades, '').map(record), signals: array(raw.signals, '').map(record), warnings: array(raw.warnings, '').map(String) } },
     async createExperiment(draft: RdExperimentDraft): Promise<Record<string, unknown>> { return record(await call('rd_trace_start', { rational: draft.rational, ...(draft.details ? { details: draft.details } : {}), ...(draft.experimentName ? { experiment_name: draft.experimentName } : {}), ...(draft.evolvedFrom ? { evolved_from: draft.evolvedFrom } : {}) })) },
     async getTraceExperiment(experimentId: string): Promise<Record<string, unknown>> { return record(await call('rd_trace_get', { experiment_id: experimentId })) },
     async listTraceExperiments(limit = 20): Promise<Record<string, unknown>[]> { return array(await call('rd_trace_list', { limit }), 'experiments').map(record) },

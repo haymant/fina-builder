@@ -265,7 +265,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
       ) : location.kind === 'rd' ? (
         <ViewLoadBoundary label="R&D">
           <Suspense fallback={<SlowModuleNotice label="R&D" />}>
-            <RdWorkspace view={location.view} />
+              <RdWorkspace view={location.view} onNavigate={navigate} />
           </Suspense>
         </ViewLoadBoundary>
       ) : location.kind === 'riskcube' ? (

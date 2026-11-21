@@ -7,6 +7,7 @@ const RD_TOOL_ARGS = new Map([
   ['rd_exp_input', ['run_id', 'experiment_id']],
   ['rd_exp_result', ['run_id', 'experiment_id']],
   ['rd_exp_model', ['run_id', 'experiment_id']],
+  ['rd_exp_blotter', ['run_id', 'experiment_id']],
   ['rd_exp_lineage', ['run_id', 'experiment_id']],
   ['rd_trace_start', ['rational', 'details', 'experiment_name', 'evolved_from']],
   ['rd_trace_get', ['experiment_id']],

@@ -6,13 +6,13 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   Menubar, MenubarCheckboxItem, MenubarContent, MenubarItem, MenubarLabel, MenubarMenu, MenubarRadioGroup, MenubarRadioItem,
-  MenubarSeparator, MenubarShortcut, MenubarTrigger,
+  MenubarSeparator, MenubarShortcut, MenubarTrigger, MenubarSub, MenubarSubContent, MenubarSubTrigger,
 } from '@/components/ui/menubar'
 import { accelLabel, matchAccel, TRADE_VIEWS, TRADING2_VIEWS, RD_VIEWS, RISKCUBE_VIEWS, type Location, type TradeView, type Trading2View, type RdView, type RiskCubeView } from '../navigation'
 
 const TRADE_ICONS: Record<TradeView, typeof Layers> = { blotter: BookOpenCheck, positions: Layers, recon: ArrowLeftRight, audit: History, import: FileUp, fixings: CalendarClock }
 const TRADING2_ICONS: Record<Trading2View, typeof BriefcaseBusiness> = { overview: BriefcaseBusiness, account: WalletCards, positions: ListChecks, orders: ClipboardList, news: Newspaper, watchlist: Star, macro: Activity, calendar: CalendarClock }
-const RD_ICONS: Record<RdView, typeof BrainCircuit> = { experiments: BrainCircuit, runs: Activity, results: ClipboardList }
+const RD_ICONS: Record<RdView, typeof BrainCircuit> = { dashboard: BrainCircuit, input: ClipboardList, result: ClipboardList, model: BrainCircuit, blotter: Activity, models: Database }
 const RISKCUBE_ICONS: Record<RiskCubeView, typeof Layers> = { scenarios: Layers, versions: History, slice: Columns3, cubes: Database }
 
 export interface MenuCommand { id: string; group: string; label: string; icon: typeof Layers; accel?: string; run: () => void; keywords?: string }
@@ -47,7 +47,7 @@ export function useMenuCommands(p: AppMenuBarProps): MenuCommand[] {
     }))
     const trades = TRADE_VIEWS.map((v) => ({ id: `trades:${v.id}`, group: 'Trades', label: `Trade Repository: ${v.label}`, icon: TRADE_ICONS[v.id], accel: v.accel, keywords: 'trade repository', run: () => p.onNavigate({ kind: 'trades', view: v.id }) }))
     const trading2 = TRADING2_VIEWS.map((v) => ({ id: `trading2:${v.id}`, group: 'Trading 2ⁿᵈ', label: `Trading 2ⁿᵈ: ${v.label}`, icon: TRADING2_ICONS[v.id], accel: v.accel, keywords: 'alpaca account positions orders broker', run: () => p.onNavigate({ kind: 'trading2', view: v.id }) }))
-    const rd = RD_VIEWS.map((v) => ({ id: `rd:${v.id}`, group: 'R&D', label: `R&D: ${v.label}`, icon: RD_ICONS[v.id], accel: v.accel, keywords: 'research experiment run mlflow qlib model metrics', run: () => p.onNavigate({ kind: 'rd', view: v.id }) }))
+    const rd = RD_VIEWS.map((v) => ({ id: `rd:${v.id}`, group: 'R&D', label: `R&D: ${v.label}`, icon: RD_ICONS[v.id], accel: v.accel, keywords: 'research experiment run mlflow qlib model metrics input result blotter registry', run: () => p.onNavigate({ kind: 'rd', view: v.id }) }))
     const riskcube = RISKCUBE_VIEWS.map((v) => ({ id: `riskcube:${v.id}`, group: 'RiskCube', label: `RiskCube: ${v.label}`, icon: RISKCUBE_ICONS[v.id], accel: v.accel, keywords: 'OLAP scenario version sensitivity P&L cube partition', run: () => p.onNavigate({ kind: 'riskcube', view: v.id }) }))
     const narrative = [
       { id: 'narrative:overview', group: 'Narrative', label: 'Narrative Intelligence', icon: BrainCircuit, keywords: 'events evidence claims', run: () => p.onNavigate({ kind: 'narrative', view: 'overview' as const }) },
@@ -172,7 +172,17 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
         </MenubarMenu>
         <MenubarMenu>
           <MenubarTrigger data-testid="menu-rd">R&amp;D</MenubarTrigger>
-          <MenubarContent>{by('R&D').map((c) => <Item key={c.id} cmd={{ ...c, label: c.label.replace('R&D: ', '') }} />)}</MenubarContent>
+          <MenubarContent>
+            {by('R&D').filter((c) => c.id === 'rd:dashboard').map((c) => <Item key={c.id} cmd={{ ...c, label: 'Dashboard' }} />)}
+            <MenubarSub>
+              <MenubarSubTrigger>Runs</MenubarSubTrigger>
+              <MenubarSubContent>
+                {by('R&D').filter((c) => ['rd:input', 'rd:result', 'rd:model', 'rd:blotter'].includes(c.id)).map((c) => <Item key={c.id} cmd={{ ...c, label: c.label.replace('R&D: ', '') }} />)}
+              </MenubarSubContent>
+            </MenubarSub>
+            <MenubarSeparator />
+            {by('R&D').filter((c) => c.id === 'rd:models').map((c) => <Item key={c.id} cmd={{ ...c, label: 'Models' }} />)}
+          </MenubarContent>
         </MenubarMenu>
         <MenubarMenu>
           <MenubarTrigger data-testid="menu-riskcube">RiskCube</MenubarTrigger>
