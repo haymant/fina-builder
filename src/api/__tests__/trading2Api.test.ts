@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TacUnavailableError, setTacTransport } from '../tacTransport'
-import { normalizeLoadJob, normalizeMacroBars, normalizeNews, normalizeOrders, normalizePositions, normalizeWatchlist, trading2Api, Trading2Error } from '../trading2Api'
+import { normalizeFeatureRows, normalizeLoadJob, normalizeMacroBars, normalizeMacroCoverage, normalizeNews, normalizeOrders, normalizePositions, normalizeWatchlist, trading2Api, Trading2Error } from '../trading2Api'
 
 afterEach(() => setTacTransport(null))
 
@@ -18,6 +18,11 @@ describe('Trading 2nd DTO normalization', () => {
   it('normalizes synthetic macro bars', () => {
     expect(normalizeMacroBars({ bars: [{ t: '2026-01-01T00:00:00Z', c: '101', o: '101', h: '101', l: '101' }] })).toEqual([expect.objectContaining({ t: '2026-01-01T00:00:00Z', c: 101, o: 101, h: 101, l: 101, v: 0 })])
     expect(normalizeMacroBars({ bars: { CBOE_VIX: [{ t: '2026-01-02T00:00:00Z', c: 22 }] } }, 'CBOE_VIX')).toEqual([expect.objectContaining({ t: '2026-01-02T00:00:00Z', c: 22 })])
+  })
+  it('keeps TAC feature identifiers and reads coverage counts', () => {
+    expect(normalizeFeatureRows({ features: [{ t: '2026-01-01', sma_5: 1.5, rsi_14: 50, macro_value_ffill: null }] })).toEqual([expect.objectContaining({ timestamp: '2026-01-01', sma_5: 1.5, rsi_14: 50 })])
+    expect(normalizeMacroCoverage({ coverage: [{ symbol: 'CBOE_VIX', num_bars: 6797 }] })).toEqual([expect.objectContaining({ symbol: 'CBOE_VIX', num_bars: 6797 })])
+    expect(normalizeMacroCoverage({ coverage: [{ symbol: 'CBOE_VIX', numBars: 6797 }] })).toEqual([expect.objectContaining({ symbol: 'CBOE_VIX', num_bars: 6797 })])
   })
   it('normalizes lake load jobs for the macro loader', () => {
     expect(normalizeLoadJob({ job_id: 'job-1', status: 'running', total_symbols: 2, processed: 1, symbols: ['CBOE_VIX'], results: [{ symbol: 'CBOE_VIX' }] })).toEqual(expect.objectContaining({ jobId: 'job-1', status: 'running', totalSymbols: 2, processed: 1, symbols: ['CBOE_VIX'], results: [{ symbol: 'CBOE_VIX' }] }))

@@ -85,30 +85,52 @@ function firstText(content: unknown): string | undefined {
   return block?.text
 }
 
-/** Normalises a tool result into the unwrapped domain payload (camelCase). */
-export function unwrapToolResult(result: Record<string, unknown>, tool?: string): unknown {
-  if (result.isError) {
-    const structured = result.structuredContent
-    if (isToolError(structured)) throw new RigaToolError(structured.code, structured.message)
-    // Surface the server's own message (e.g. a parameter deserialisation error)
-    // instead of a generic one, prefixed with the tool that failed.
-    const text = firstText(result.content)
-    const message = text?.trim() || 'The tool reported an error'
-    throw new RigaToolError('tool_error', tool ? `${tool}: ${message}` : message)
-  }
+function throwToolError(result: Record<string, unknown>, tool?: string): void {
+  if (!result.isError) return
+  const structured = result.structuredContent
+  if (isToolError(structured)) throw new RigaToolError(structured.code, structured.message)
+  // Surface the server's own message (e.g. a parameter deserialisation error)
+  // instead of a generic one, prefixed with the tool that failed.
+  const text = firstText(result.content)
+  const message = text?.trim() || 'The tool reported an error'
+  throw new RigaToolError('tool_error', tool ? `${tool}: ${message}` : message)
+}
+
+/** The domain payload before any key-case adaptation. */
+function toolResultPayload(result: Record<string, unknown>): unknown {
   if (result.structuredContent !== undefined && result.structuredContent !== null) {
-    return toCamelKeys(result.structuredContent)
+    return result.structuredContent
   }
   // Fall back to the first text block when a tool returns unstructured content.
   const text = firstText(result.content)
   if (text) {
     try {
-      return toCamelKeys(JSON.parse(text)) as unknown
+      return JSON.parse(text) as unknown
     } catch {
       return text
     }
   }
-  return toCamelKeys(result)
+  return result
+}
+
+/** Normalises a tool result into the unwrapped domain payload (camelCase). */
+export function unwrapToolResult(result: Record<string, unknown>, tool?: string): unknown {
+  throwToolError(result, tool)
+  return toCamelKeys(toolResultPayload(result))
+}
+
+/**
+ * Unwraps a tool result while preserving the server's wire keys.
+ *
+ * Data-shaped engines such as `tac-engine` use snake_case **as identifiers**
+ * (feature columns `sma_5`, `macro_value_ffill`, coverage `num_bars`). Camelising
+ * those keys silently renames them (`sma5`, `macroValueFfill`, `numBars`), so
+ * consumers can no longer match them. RIGA transports keep camelising; TAC uses
+ * this raw variant and its normalisers read the wire spelling.
+ */
+export function unwrapToolResultRaw(result: Record<string, unknown>, tool?: string): unknown {
+  throwToolError(result, tool)
+  return toolResultPayload(result)
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +189,16 @@ function transportError(method: string, baseUrl: string, error: unknown): RigaTo
   )
 }
 
-export function createHttpMcpTransport(baseUrl: string): RigaTransport {
+export interface HttpMcpTransportOptions {
+  /**
+   * Convert inbound result keys to camelCase. Defaults to true. Set false for
+   * engines whose snake_case keys are identifiers (see `unwrapToolResultRaw`).
+   */
+  camelKeys?: boolean
+}
+
+export function createHttpMcpTransport(baseUrl: string, options: HttpMcpTransportOptions = {}): RigaTransport {
+  const unwrap = options.camelKeys === false ? unwrapToolResultRaw : unwrapToolResult
   let sessionId: string | null = null
   let nextId = 1
   let initialized: Promise<void> | null = null
@@ -267,7 +298,7 @@ export function createHttpMcpTransport(baseUrl: string): RigaTransport {
     async callTool<T>(name: string, args?: unknown) {
       await handshake()
       const result = await rpc('tools/call', { name, arguments: toSnakeKeys(args ?? {}) })
-      return unwrapToolResult(result ?? {}, name) as T
+      return unwrap(result ?? {}, name) as T
     },
     async listResources() {
       await handshake()

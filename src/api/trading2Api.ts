@@ -348,13 +348,13 @@ export function normalizeBars(value: unknown, symbol?: string): Trading2Bar[] {
 }
 
 export function normalizeQuote(value: unknown): Trading2Quote {
-  const raw = asRecord(value); const quote = asRecord(raw.latestQuote ?? raw.quote); const trade = asRecord(raw.latestTrade ?? raw.trade); const bar = asRecord(raw.dailyBar ?? raw.bar)
+  const raw = asRecord(value); const quote = asRecord(raw.latest_quote ?? raw.latestQuote ?? raw.quote); const trade = asRecord(raw.latest_trade ?? raw.latestTrade ?? raw.trade); const bar = asRecord(raw.daily_bar ?? raw.dailyBar ?? raw.bar)
   return { bid: numberValue(quote, 'bp', 'bid', 'bid_price'), ask: numberValue(quote, 'ap', 'ask', 'ask_price'), bidSize: numberValue(quote, 'bs', 'bid_size'), askSize: numberValue(quote, 'as', 'ask_size'), last: numberValue(trade, 'p', 'price') ?? numberValue(bar, 'c', 'close'), raw }
 }
 
 export function normalizeOptions(value: unknown): Trading2Option[] {
   const raw = asRecord(value); const snapshots = asRecord(raw.snapshots ?? raw.options ?? value); const items = Array.isArray(value) ? value : Object.entries(snapshots).map(([symbol, item]) => ({ ...asRecord(item), symbol }))
-  return items.map((item) => { const row = asRecord(item); const quote = asRecord(row.latestQuote ?? row.quote); const greeks = asRecord(row.greeks); const bid = numberValue(quote, 'bp', 'bid'); const ask = numberValue(quote, 'ap', 'ask'); return { symbol: stringValue(row, 'symbol', 'contract_symbol'), expiration: stringValue(row, 'expiration_date', 'expiration'), strike: numberValue(row, 'strike_price', 'strike'), type: stringValue(row, 'type', 'option_type'), bid, ask, mid: numberValue(row, 'mid') ?? (bid !== undefined && ask !== undefined ? (bid + ask) / 2 : undefined), volume: numberValue(row, 'volume'), openInterest: numberValue(row, 'open_interest', 'openInterest'), impliedVolatility: numberValue(row, 'implied_volatility', 'impliedVolatility') ?? numberValue(greeks, 'implied_volatility', 'impliedVolatility'), raw: row } })
+  return items.map((item) => { const row = asRecord(item); const quote = asRecord(row.latest_quote ?? row.latestQuote ?? row.quote); const greeks = asRecord(row.greeks); const bid = numberValue(quote, 'bp', 'bid'); const ask = numberValue(quote, 'ap', 'ask'); return { symbol: stringValue(row, 'symbol', 'contract_symbol'), expiration: stringValue(row, 'expiration_date', 'expiration'), strike: numberValue(row, 'strike_price', 'strike'), type: stringValue(row, 'type', 'option_type'), bid, ask, mid: numberValue(row, 'mid') ?? (bid !== undefined && ask !== undefined ? (bid + ask) / 2 : undefined), volume: numberValue(row, 'volume'), openInterest: numberValue(row, 'open_interest', 'openInterest'), impliedVolatility: numberValue(row, 'implied_volatility', 'impliedVolatility') ?? numberValue(greeks, 'implied_volatility', 'impliedVolatility'), raw: row } })
 }
 
 export function normalizeFeatureRows(value: unknown): Trading2FeatureRow[] {
@@ -387,7 +387,7 @@ export function normalizeMacroBars(value: unknown, symbol?: string): MacroBar[] 
 export function normalizeMacroCoverage(value: unknown): MacroCoverageRow[] {
   return asArray(value, 'coverage', 'data').map((item) => {
     const row = asRecord(item)
-    return { symbol: stringValue(row, 'symbol'), first_t: stringValue(row, 'first_t', 'first'), last_t: stringValue(row, 'last_t', 'last'), num_bars: numberValue(row, 'num_bars', 'bars') }
+    return { symbol: stringValue(row, 'symbol'), first_t: stringValue(row, 'first_t', 'firstT', 'first'), last_t: stringValue(row, 'last_t', 'lastT', 'last'), num_bars: numberValue(row, 'num_bars', 'numBars', 'bars') }
   }).filter((row) => row.symbol)
 }
 
@@ -411,7 +411,7 @@ export function normalizeLoadJob(value: unknown): Trading2LoadJob {
   const raw = asRecord(value)
   const results = asArray(raw, 'results').map(asRecord)
   const symbols = asArray(raw, 'symbols').filter((item): item is string => typeof item === 'string')
-  const totalSymbols = numberValue(raw, 'total_symbols', 'total')
+  const totalSymbols = numberValue(raw, 'total_symbols', 'totalSymbols', 'total')
   return {
     jobId: stringValue(raw, 'job_id', 'jobId') ?? '',
     status: stringValue(raw, 'status') ?? 'unknown',

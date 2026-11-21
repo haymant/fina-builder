@@ -87,9 +87,9 @@ export function toBars(payload: unknown): Record<string, TacBarsResponse> {
 /** `get_stock_snapshot` — Alpaca snapshot → `{symbol, price, asOf}`. */
 export function toSnapshot(symbol: string, payload: unknown): TacSnapshot {
   const root = asObject(payload)
-  const trade = asObject(root.latestTrade)
-  const daily = asObject(root.dailyBar)
-  const quote = asObject(root.latestQuote)
+  const trade = asObject(root.latest_trade ?? root.latestTrade)
+  const daily = asObject(root.daily_bar ?? root.dailyBar)
+  const quote = asObject(root.latest_quote ?? root.latestQuote)
   const price = asNumber(trade.p, asNumber(daily.c, asNumber(quote.ap)))
   return { symbol, price, asOf: asString(trade.t ?? daily.t ?? quote.t) }
 }
@@ -123,13 +123,13 @@ export function toVolSurface(payload: unknown): TacVolSurface | undefined {
   if (!underlying || strikes.length === 0 || volatility.length === 0) return undefined
   return {
     underlying,
-    strikeType: asString(root.strike_type, 'absolute'),
+    strikeType: asString(root.strike_type ?? root.strikeType, 'absolute'),
     reference: asNumber(root.reference, strikes[Math.floor(strikes.length / 2)]!),
     maturities,
     strikes,
     volatility,
     model: asString(root.model),
-    calibratedAt: asString(root.calibrated_at),
+    calibratedAt: asString(root.calibrated_at ?? root.calibratedAt),
     source: asString(root.source, 'lake'),
     stale: root.stale === true,
     arbitrage: Array.isArray(root.arbitrage) ? root.arbitrage.map((note) => String(note)) : undefined,
@@ -177,8 +177,8 @@ export function toFxVol(payload: unknown): TacFxVolRow[] {
     const row = asObject(feature)
     const pair = asString(row.symbol)
     if (!pair) continue
-    const rv20 = asNumber(row.rv20_ann)
-    const rv60 = asNumber(row.rv60_ann)
+    const rv20 = asNumber(row.rv20_ann ?? row.rv20Ann)
+    const rv60 = asNumber(row.rv60_ann ?? row.rv60Ann)
     if (Number.isFinite(rv20)) rows.push({ pair, windowDays: 20, realizedVol: rv20, asOf: asString(row.t) })
     if (Number.isFinite(rv60)) rows.push({ pair, windowDays: 60, realizedVol: rv60, asOf: asString(row.t) })
   }
@@ -193,9 +193,9 @@ export function toCoverage(payload: unknown): TacCoverageRow[] {
     return {
       symbol: asString(entry.symbol),
       timeframe: asString(entry.timeframe),
-      start: asString(entry.first_t ?? entry.start),
-      end: asString(entry.last_t ?? entry.end),
-      rows: asNumber(entry.num_bars ?? entry.rows, 0),
+      start: asString(entry.first_t ?? entry.firstT ?? entry.start),
+      end: asString(entry.last_t ?? entry.lastT ?? entry.end),
+      rows: asNumber(entry.num_bars ?? entry.numBars ?? entry.rows, 0),
     }
   })
 }

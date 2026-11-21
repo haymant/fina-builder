@@ -7,7 +7,7 @@
 // their "market source not configured" empty state.
 
 import { invoke } from '@tauri-apps/api/core'
-import { createHttpMcpTransport, unwrapToolResult } from './rigaTransport'
+import { createHttpMcpTransport, unwrapToolResultRaw } from './rigaTransport'
 import { toSnakeKeys } from './keyCase'
 
 export class TacUnavailableError extends Error {
@@ -38,13 +38,13 @@ const tauriTacTransport: TacTransport = {
       name,
       arguments: toSnakeKeys(args ?? {}),
     })
-    return unwrapToolResult(result, name) as T
+    return unwrapToolResultRaw(result, name) as T
   },
 }
 
 /** HTTP bridge transport (`scripts/tac-mcp-http.mjs`): the browser path. */
 function httpTacTransport(): TacTransport {
-  const client = createHttpMcpTransport(tacBaseUrl())
+  const client = createHttpMcpTransport(tacBaseUrl(), { camelKeys: false })
   return {
     async callTool<T>(name: string, args?: unknown) {
       try {

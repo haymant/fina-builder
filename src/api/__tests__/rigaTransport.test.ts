@@ -3,7 +3,7 @@
 // HTTP transport with a stubbed `fetch`.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createHttpRigaTransport, parseRpcBody, RigaToolError, tauriRigaTransport } from '../rigaTransport'
+import { createHttpMcpTransport, createHttpRigaTransport, parseRpcBody, RigaToolError, tauriRigaTransport, unwrapToolResult, unwrapToolResultRaw } from '../rigaTransport'
 import { invoke } from '../../tests/mocks/tauriMock'
 import { RIGA_TRANSCRIPT } from '../../tests/mocks/transcripts'
 
@@ -62,6 +62,39 @@ describe('parseRpcBody', () => {
     expect(() => parseRpcBody('application/json', '{not-json')).toThrowError(
       expect.objectContaining({ name: 'RigaToolError', code: 'serialization_error' }),
     )
+  })
+})
+
+describe('inbound key casing', () => {
+  const result = {
+    content: [{ type: 'text', text: JSON.stringify({ features: [{ t: '2026-01-01', sma_5: 1.5, macro_value_ffill: 2 }], num_bars: 7 }) }],
+  }
+
+  it('camelises RIGA tool results', () => {
+    expect(unwrapToolResult(result)).toEqual({ features: [{ t: '2026-01-01', sma5: 1.5, macroValueFfill: 2 }], numBars: 7 })
+  })
+
+  it('preserves TAC identifiers such as sma_5, macro_value_ffill and num_bars', () => {
+    expect(unwrapToolResultRaw(result)).toEqual({ features: [{ t: '2026-01-01', sma_5: 1.5, macro_value_ffill: 2 }], num_bars: 7 })
+  })
+
+  it('leaves HTTP tool results untouched when camelKeys is disabled', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { method: string; id?: number }
+      const headers = new Headers({ 'Content-Type': 'application/json' })
+      if (body.method === 'initialize') headers.set('Mcp-Session-Id', 'session-123')
+      if (body.id === undefined) return new Response('', { status: 202, headers })
+      if (body.method === 'initialize') {
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: '2025-11-25' } }), { headers })
+      }
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        id: body.id,
+        result: { isError: false, content: result.content },
+      }), { headers })
+    }))
+    const transport = createHttpMcpTransport('http://127.0.0.1:8790', { camelKeys: false })
+    await expect(transport.callTool('get_lake_ta')).resolves.toEqual({ features: [{ t: '2026-01-01', sma_5: 1.5, macro_value_ffill: 2 }], num_bars: 7 })
   })
 })
 
