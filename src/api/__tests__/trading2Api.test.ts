@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TacUnavailableError, setTacTransport } from '../tacTransport'
-import { normalizeMacroBars, normalizeNews, normalizeOrders, normalizePositions, normalizeWatchlist, trading2Api, Trading2Error } from '../trading2Api'
+import { normalizeLoadJob, normalizeMacroBars, normalizeNews, normalizeOrders, normalizePositions, normalizeWatchlist, trading2Api, Trading2Error } from '../trading2Api'
 
 afterEach(() => setTacTransport(null))
 
@@ -18,6 +18,10 @@ describe('Trading 2nd DTO normalization', () => {
   it('normalizes synthetic macro bars', () => {
     expect(normalizeMacroBars({ bars: [{ t: '2026-01-01T00:00:00Z', c: '101', o: '101', h: '101', l: '101' }] })).toEqual([expect.objectContaining({ t: '2026-01-01T00:00:00Z', c: 101, o: 101, h: 101, l: 101, v: 0 })])
     expect(normalizeMacroBars({ bars: { CBOE_VIX: [{ t: '2026-01-02T00:00:00Z', c: 22 }] } }, 'CBOE_VIX')).toEqual([expect.objectContaining({ t: '2026-01-02T00:00:00Z', c: 22 })])
+  })
+  it('normalizes lake load jobs for the macro loader', () => {
+    expect(normalizeLoadJob({ job_id: 'job-1', status: 'running', total_symbols: 2, processed: 1, symbols: ['CBOE_VIX'], results: [{ symbol: 'CBOE_VIX' }] })).toEqual(expect.objectContaining({ jobId: 'job-1', status: 'running', totalSymbols: 2, processed: 1, symbols: ['CBOE_VIX'], results: [{ symbol: 'CBOE_VIX' }] }))
+    expect(normalizeLoadJob({ job_id: 'job-1', status: 'started', symbols: ['CBOE_VIX'] }).totalSymbols).toBe(1)
   })
 })
 
@@ -39,6 +43,16 @@ describe('Trading 2nd API transport boundary', () => {
     expect(callTool).toHaveBeenNthCalledWith(1, 'get_macro_bars', { symbols: 'CBOE_VIX', start: '2026-01-01', end: '2026-02-01', quiet: false })
     expect(callTool).toHaveBeenNthCalledWith(2, 'get_macro_features', { symbol: 'FRED_CPIAUCSL', start: '2026-01-01', end: '2026-02-01' })
     expect(callTool).toHaveBeenNthCalledWith(3, 'get_lake_coverage', { market: 'MACRO', timeframe: '1d' })
+  })
+  it('starts macro load jobs and polls their status', async () => {
+    const callTool = vi.fn(async (name: string) => name === 'load_macro_symbols' ? { job_id: 'job-1', status: 'started', symbols: ['CBOE_VIX'] } : { job_id: 'job-1', status: 'completed', total_symbols: 1, processed: 1, results: [{ symbol: 'CBOE_VIX' }] })
+    setTacTransport({ callTool: callTool as unknown as <T>(name: string, args?: unknown) => Promise<T> })
+    await trading2Api.loadMacroSymbols(['cboe_vix'])
+    await trading2Api.loadMacroSymbols()
+    await trading2Api.getLoadStatus('job-1')
+    expect(callTool).toHaveBeenNthCalledWith(1, 'load_macro_symbols', { symbols: 'CBOE_VIX' })
+    expect(callTool).toHaveBeenNthCalledWith(2, 'load_macro_symbols', {})
+    expect(callTool).toHaveBeenNthCalledWith(3, 'load_lake_status', { job_id: 'job-1' })
   })
   it('maps a missing TAC backend to an unavailable Trading2Error', async () => {
     setTacTransport({ callTool: async () => { throw new TacUnavailableError('TAC credentials are not configured') } })

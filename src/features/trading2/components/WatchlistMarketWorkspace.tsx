@@ -55,12 +55,36 @@ function QuickOrder({ symbol, quote, onOrder }: { symbol: string; quote: Trading
 function OptionChain({ options }: { options: Trading2Option[] }) { const expirations = [...new Set(options.map((option) => option.expiration).filter(Boolean))] as string[]; const [expiration, setExpiration] = useState(''); useEffect(() => { setExpiration((current) => current && expirations.includes(current) ? current : expirations[0] ?? '') }, [options]) ; const rows = options.filter((option) => !expiration || option.expiration === expiration).sort((a, b) => (a.strike ?? 0) - (b.strike ?? 0)); return <div className="space-y-2"><div className="flex items-center justify-between gap-2"><p className="text-[11px] text-muted">Calls and puts from canonical TAC option snapshots.</p><select className={inputClass} value={expiration} onChange={(e) => setExpiration(e.target.value)}><option value="">All expirations</option>{expirations.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>{rows.length ? <div className="max-h-[360px] overflow-auto rounded-md border border-line"><table className="min-w-[700px] w-full text-xs"><thead className="sticky top-0 bg-bg text-[10px] uppercase text-muted"><tr><th className="px-2 py-2">Type</th><th className="px-2 py-2 text-right">Bid</th><th className="px-2 py-2 text-right">Ask</th><th className="px-2 py-2 text-right">Mid</th><th className="px-2 py-2 text-right">Strike</th><th className="px-2 py-2 text-right">Volume</th><th className="px-2 py-2 text-right">IV</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.symbol ?? row.type}-${row.strike}-${index}`} className="border-t border-line"><td className="px-2 py-1.5 uppercase">{row.type ?? '—'}</td><td className="px-2 py-1.5 text-right">{money(row.bid)}</td><td className="px-2 py-1.5 text-right">{money(row.ask)}</td><td className="px-2 py-1.5 text-right">{money(row.mid)}</td><td className="px-2 py-1.5 text-right">{row.strike ?? '—'}</td><td className="px-2 py-1.5 text-right">{row.volume ?? '—'}</td><td className="px-2 py-1.5 text-right">{row.impliedVolatility === undefined ? '—' : `${(row.impliedVolatility * 100).toFixed(2)}%`}</td></tr>)}</tbody></table></div> : <div className="py-8 text-center text-xs text-muted">No option chain data.</div>}</div> }
 
 export function WatchlistMarketWorkspace({ watchlists, selected, onWatchlistsChange, onSelectedChange }: { watchlists: Trading2Watchlist[]; selected: Trading2Watchlist | null; onWatchlistsChange: (lists: Trading2Watchlist[]) => void; onSelectedChange: (list: Trading2Watchlist | null) => void }) {
-  const [symbol, setSymbol] = useState(selected?.symbols[0] ?? ''); const [newName, setNewName] = useState(''); const [bars, setBars] = useState<Trading2Bar[]>([]); const [quote, setQuote] = useState<Trading2Quote | null>(null); const [options, setOptions] = useState<Trading2Option[]>([]); const [rowQuotes, setRowQuotes] = useState<Record<string, Trading2Quote>>({}); const [marketError, setMarketError] = useState(''); const [range, setRange] = useState(180); const [runOpen, setRunOpen] = useState(false); const [pendingAction, setPendingAction] = useState<{ kind: 'create' | 'add'; value: string } | null>(null); const [selection, setSelection] = useState<SelectedIndicator[]>(DEFAULT_SELECTION); const [includeVolume, setIncludeVolume] = useState(DEFAULT_INCLUDE_VOLUME); const [persistFeatures, setPersistFeatures] = useState(false); const [features, setFeatures] = useState<Trading2FeatureRow[]>([]); const [featureError, setFeatureError] = useState('')
+  const [symbol, setSymbol] = useState(selected?.symbols[0] ?? ''); const [newName, setNewName] = useState(''); const [bars, setBars] = useState<Trading2Bar[]>([]); const [quote, setQuote] = useState<Trading2Quote | null>(null); const [options, setOptions] = useState<Trading2Option[]>([]); const [rowQuotes, setRowQuotes] = useState<Record<string, Trading2Quote>>({}); const [marketError, setMarketError] = useState(''); const [range, setRange] = useState(180); const [runOpen, setRunOpen] = useState(false); const [pendingAction, setPendingAction] = useState<{ kind: 'create' | 'add'; value: string } | null>(null); const [selection, setSelection] = useState<SelectedIndicator[]>(DEFAULT_SELECTION); const [includeVolume, setIncludeVolume] = useState(DEFAULT_INCLUDE_VOLUME); const [persistFeatures, setPersistFeatures] = useState(false); const [features, setFeatures] = useState<Trading2FeatureRow[]>([]); const [featureError, setFeatureError] = useState(''); const [barsReady, setBarsReady] = useState<{ symbol: string; range: number } | null>(null)
   useEffect(() => { if (selected && !selected.symbols.includes(symbol)) setSymbol(selected.symbols[0] ?? '') }, [selected?.id, selected?.symbols.join(',')])
   useEffect(() => { let cancelled = false; Promise.all((selected?.symbols ?? []).map(async (item) => [item, await trading2Api.getQuote(item)] as const)).then((entries) => { if (!cancelled) setRowQuotes(Object.fromEntries(entries)) }).catch(() => { if (!cancelled) setRowQuotes({}) }); return () => { cancelled = true } }, [selected?.id, selected?.symbols.join(',')])
-  useEffect(() => { if (!symbol) { setBars([]); setQuote(null); setOptions([]); return }; const end = new Date(); const start = new Date(); start.setUTCDate(end.getUTCDate() - range); let cancelled = false; setMarketError(''); Promise.all([trading2Api.getLakeBars(symbol, dateOnly(start), dateOnly(end)), trading2Api.getQuote(symbol), trading2Api.getOptionChain(symbol)]).then(([nextBars, nextQuote, nextOptions]) => { if (!cancelled) { setBars(nextBars); setQuote(nextQuote); setOptions(nextOptions) } }).catch((cause) => { if (!cancelled) setMarketError(cause instanceof Trading2Error ? cause.message : String(cause)) }); return () => { cancelled = true } }, [symbol, range])
+  useEffect(() => {
+    if (!symbol) { setBars([]); setBarsReady(null); return }
+    const end = new Date(); const start = new Date(); start.setUTCDate(end.getUTCDate() - range)
+    let cancelled = false
+    setMarketError(''); setBarsReady(null)
+    trading2Api.getLakeBars(symbol, dateOnly(start), dateOnly(end)).then((nextBars) => {
+      if (cancelled) return
+      setBars(nextBars)
+      // TA/SP must run after the lazy bar fetch has persisted the bars: get_lake_ta
+      // only reads the lake and returns nothing while the bar file is missing.
+      setBarsReady({ symbol, range })
+    }).catch((cause) => { if (!cancelled) { setBars([]); setMarketError(cause instanceof Trading2Error ? cause.message : String(cause)) } })
+    return () => { cancelled = true }
+  }, [symbol, range])
+  useEffect(() => {
+    if (!symbol) { setQuote(null); setOptions([]); return }
+    let cancelled = false
+    Promise.allSettled([trading2Api.getQuote(symbol), trading2Api.getOptionChain(symbol)]).then(([nextQuote, nextOptions]) => {
+      if (cancelled) return
+      setQuote(nextQuote.status === 'fulfilled' ? nextQuote.value : null)
+      setOptions(nextOptions.status === 'fulfilled' ? nextOptions.value : [])
+    })
+    return () => { cancelled = true }
+  }, [symbol])
   useEffect(() => {
     if (!symbol) { setFeatures([]); return }
+    if (barsReady?.symbol !== symbol || barsReady?.range !== range) { setFeatures([]); return }
     const taSpecs = selectionToTaSpecs(selection)
     const spFamilies = selectionToSpFamilies(selection)
     if (!taSpecs.length && !hasSpSelection(selection)) { setFeatures([]); return }
@@ -77,7 +101,7 @@ export function WatchlistMarketWorkspace({ watchlists, selected, onWatchlistsCha
       setFeatures([...merged.values()])
     }).catch((cause) => { if (!cancelled) { setFeatures([]); setFeatureError(cause instanceof Trading2Error ? cause.message : String(cause)) } })
     return () => { cancelled = true }
-  }, [symbol, range, selection, persistFeatures])
+  }, [symbol, range, selection, persistFeatures, barsReady])
 
   const addSymbol = async () => { const value = pendingAction?.value; setPendingAction(null); if (!selected || !value) return; try { const updated = await trading2Api.addWatchlistAsset(selected.id, value); onSelectedChange(updated); onWatchlistsChange(watchlists.map((list) => list.id === updated.id ? updated : list)); setSymbol(value.trim().toUpperCase()) } catch (cause) { setMarketError(cause instanceof Trading2Error ? cause.message : String(cause)) } }
   const createList = async () => { const value = pendingAction?.value; setPendingAction(null); if (!value) return; try { const created = await trading2Api.createWatchlist(value); onWatchlistsChange([...watchlists, created]); onSelectedChange(created); setNewName(''); setSymbol('') } catch (cause) { setMarketError(cause instanceof Trading2Error ? cause.message : String(cause)) } }

@@ -142,6 +142,7 @@ export interface Trading2Quote { bid?: number; ask?: number; bidSize?: number; a
 export interface Trading2Option { symbol?: string; expiration?: string; strike?: number; type?: string; bid?: number; ask?: number; mid?: number; volume?: number; openInterest?: number; impliedVolatility?: number; raw: Record<string, unknown> }
 export interface Trading2FeatureRow { timestamp: string; raw: Record<string, unknown>; [key: string]: unknown }
 export interface Trading2MacroSymbol { symbol: string; source?: string; sourceId?: string; title?: string; frequency?: string; units?: string; enabled?: boolean; raw: Record<string, unknown> }
+export interface Trading2LoadJob { jobId: string; status: string; market?: string; timeframe?: string; symbols: string[]; totalSymbols?: number; processed: number; results: Record<string, unknown>[]; error?: string; raw: Record<string, unknown> }
 
 const asRecord = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {})
 const asArray = (value: unknown, ...keys: string[]): unknown[] => {
@@ -406,6 +407,25 @@ export function normalizeMacroSymbols(value: unknown): Trading2MacroSymbol[] {
   }).filter((row) => row.symbol)
 }
 
+export function normalizeLoadJob(value: unknown): Trading2LoadJob {
+  const raw = asRecord(value)
+  const results = asArray(raw, 'results').map(asRecord)
+  const symbols = asArray(raw, 'symbols').filter((item): item is string => typeof item === 'string')
+  const totalSymbols = numberValue(raw, 'total_symbols', 'total')
+  return {
+    jobId: stringValue(raw, 'job_id', 'jobId') ?? '',
+    status: stringValue(raw, 'status') ?? 'unknown',
+    market: stringValue(raw, 'market'),
+    timeframe: stringValue(raw, 'timeframe'),
+    symbols,
+    totalSymbols: totalSymbols ?? (results.length || symbols.length || undefined),
+    processed: numberValue(raw, 'processed') ?? 0,
+    results,
+    error: stringValue(raw, 'error'),
+    raw,
+  }
+}
+
 export const trading2Api = {
   getAccount: async () => normalizeAccount(await call('get_account')),
   getPortfolioHistory: async (period = '1M') => normalizePortfolioHistory(await call('get_portfolio_history', { period })),
@@ -432,6 +452,8 @@ export const trading2Api = {
   getMacroBars: async (symbol: string, start?: string, end?: string) => normalizeMacroBars(await call('get_macro_bars', { symbols: symbol.trim().toUpperCase(), ...(start ? { start } : {}), ...(end ? { end } : {}), quiet: false }), symbol.trim().toUpperCase()),
   getMacroCoverage: async () => normalizeMacroCoverage(await call('get_lake_coverage', { market: 'MACRO', timeframe: '1d' })),
   getMacroFeatures: async (symbol: string, start: string, end: string) => normalizeFeatureRows(await call('get_macro_features', { symbol: symbol.trim().toUpperCase(), start, end })),
+  loadMacroSymbols: async (symbols?: string[]) => normalizeLoadJob(await call('load_macro_symbols', symbols?.length ? { symbols: symbols.map((item) => item.trim().toUpperCase()).join(',') } : {})),
+  getLoadStatus: async (jobId: string) => normalizeLoadJob(await call('load_lake_status', { job_id: jobId })),
   placeOrder: async (input: Trading2OrderInput) => normalizeOrders([await call('place_order', {
     symbol: input.symbol.trim().toUpperCase(), side: input.side, type: input.type, time_in_force: input.timeInForce,
     ...(input.qty ? { qty: input.qty } : {}), ...(input.notional ? { notional: input.notional } : {}),
