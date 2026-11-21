@@ -27,6 +27,14 @@ describe('R&D API read-only boundary', () => {
     expect(callTool).toHaveBeenNthCalledWith(1, 'rd_trace_start', { rational: 'test hypothesis', experiment_name: 'alpha' })
     expect(callTool).toHaveBeenNthCalledWith(2, 'rd_train', expect.objectContaining({ experiment_name: 'alpha', train_start: '2025-01-01', train_end: '2025-12-31', wait: false }))
   })
+  it('preflights persisted fields and sends feature-aware runs', async () => {
+    const callTool = vi.fn(async (name: string) => name === 'rd_status' ? { market: 'US', symbol_count: 2, features: [{ timeframe: '1d', columns: ['rsi_14', 'macro_vix'] }] } : name === 'rd_dataset' ? { feature_fields: ['$close', '$rsi_14', '$macro_vix'], universe: ['AAPL', 'MSFT'], universe_size: 2, segments: { train: { rows: 10 } }, all_nan_dropped: [], nan_ratio_nonzero: {} } : { status: 'started' })
+    const api = createRdApi({ callTool })
+    expect((await api.getStatus()).features[0]?.columns).toEqual(['rsi_14', 'macro_vix'])
+    expect((await api.preflight({ trainStart: '2025-01-01', trainEnd: '2025-12-31', features: '$rsi_14,$macro_vix' })).featureFields).toEqual(['$close', '$rsi_14', '$macro_vix'])
+    await api.createRun({ experimentName: 'alpha', trainStart: '2025-01-01', trainEnd: '2025-12-31', features: '$rsi_14,$macro_vix', validStart: '2026-01-01', validEnd: '2026-02-01' })
+    expect(callTool).toHaveBeenLastCalledWith('rd_train', expect.objectContaining({ features: '$rsi_14,$macro_vix', valid_start: '2026-01-01', valid_end: '2026-02-01', record_analysis: true }))
+  })
   it('maps missing sidecar failures to unavailable', async () => {
     const api = createRdApi({ callTool: async () => { throw new Error('TAC_LAKE_DIR is not set') } })
     await expect(api.listExperiments()).rejects.toMatchObject<Partial<RdApiError>>({ kind: 'unavailable', tool: 'rd_exp_list' })

@@ -198,6 +198,7 @@ async function main() {
     return
   }
   const cargoBin = resolve(process.env.CARGO_HOME || resolve(homedir(), '.cargo'), 'bin')
+  process.env.CARGO_TARGET_DIR ??= resolve(root, 'modules/target')
   const cargoExecutable = resolve(cargoBin, process.platform === 'win32' ? 'cargo.exe' : 'cargo')
   if (existsSync(cargoExecutable) && !process.env.PATH.split(delimiter).includes(cargoBin)) {
     process.env.PATH = `${cargoBin}${delimiter}${process.env.PATH}`
@@ -233,9 +234,9 @@ async function main() {
   ], 'Building tac-engine backend')
 
   const exe = process.platform === 'win32' ? '.exe' : ''
-  const rigaBinary = process.env.RIGA_MCP_BIN || resolve(root, `modules/riga-flow/target/release/riga-mcp${exe}`)
+  const rigaBinary = process.env.RIGA_MCP_BIN || resolve(process.env.CARGO_TARGET_DIR, `release/riga-mcp${exe}`)
   if (!existsSync(rigaBinary)) throw new Error(`riga-mcp build output not found: ${rigaBinary}`)
-  const tacBinary = process.env.TAC_ENGINE_BIN || resolve(root, `modules/tac-engine/target/release/tac-engine${exe}`)
+  const tacBinary = process.env.TAC_ENGINE_BIN || resolve(process.env.CARGO_TARGET_DIR, `release/tac-engine${exe}`)
   if (!existsSync(tacBinary)) throw new Error(`tac-engine build output not found: ${tacBinary}`)
 
   startService('riga-mcp', rigaBinary, [

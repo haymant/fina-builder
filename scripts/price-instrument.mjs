@@ -21,7 +21,7 @@
 // `TAC_ENGINE_BIN` overrides, else the submodule default relative path
 // (`modules/<dir>/target/release/<bin>`).
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
@@ -214,8 +214,20 @@ if (deal.symbols.length !== 2) {
 }
 
 const useFile = values.market === 'file' || (values.market === 'auto' && fileMarketBlock(doc) != null)
-const rigaBin = process.env.RIGA_MCP_BIN ?? resolve(ROOT, 'modules/riga-flow/target/release/riga-mcp')
-const tacBin = process.env.TAC_ENGINE_BIN ?? resolve(ROOT, 'modules/tac-engine/target/release/tac-engine')
+function resolveEngineBin(envName, submodule, name) {
+  if (process.env[envName]) return process.env[envName]
+  const target = process.env.CARGO_TARGET_DIR ?? resolve(ROOT, 'modules/target')
+  const candidates = [
+    resolve(target, 'release', name),
+    resolve(target, 'debug', name),
+    resolve(ROOT, `modules/${submodule}/target/release/${name}`),
+    resolve(ROOT, `modules/${submodule}/target/debug/${name}`),
+  ]
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]
+}
+
+const rigaBin = resolveEngineBin('RIGA_MCP_BIN', 'riga-flow', 'riga-mcp')
+const tacBin = resolveEngineBin('TAC_ENGINE_BIN', 'tac-engine', 'tac-engine')
 
 let tac = null
 const riga = createStdioClient(rigaBin, ['--transport', 'stdio'])

@@ -26,14 +26,23 @@ pub struct McpState {
 
 /// Ordered candidate paths for an engine binary, excluding the env override.
 ///
-/// The **default relative path** (`modules/<dir>/target/{release,debug}`) comes
-/// first so a submodule build resolves with no per-developer configuration.
+/// The shared `modules/target` directory is canonical; old submodule-local
+/// paths remain as compatibility fallbacks for existing checkouts.
 pub fn engine_binary_candidates(
     workspace: &std::path::Path,
     submodule_dir: &str,
     exe_name: &str,
 ) -> Vec<std::path::PathBuf> {
     let mut candidates = Vec::new();
+    for profile in ["release", "debug"] {
+        candidates.push(
+            workspace
+                .join("modules")
+                .join("target")
+                .join(profile)
+                .join(exe_name),
+        );
+    }
     for profile in ["release", "debug"] {
         candidates.push(
             workspace
@@ -94,7 +103,7 @@ fn resolve_engine_binary(
         }
     }
     Err(format!(
-        "{bin_name} binary not found. Build it (cargo build --release --manifest-path modules/{submodule_dir}/Cargo.toml) or set {env_var}."
+        "{bin_name} binary not found. Run `npm run runtime:prepare` or set {env_var}."
     ))
 }
 
@@ -478,6 +487,12 @@ pub fn rd_mcp_reset(state: State<'_, McpState>) -> Result<(), String> {
 
 pub fn validate_rd_tool_call(name: &str, arguments: &Value) -> Result<(), String> {
     let allowed: &[&str] = match name {
+        "rd_status" => &["market"],
+        "rd_dataset" => &[
+            "market", "universe", "start_time", "end_time", "fit_start_time", "fit_end_time",
+            "freq", "features", "label", "train_start", "train_end", "valid_start",
+            "valid_end", "test_start", "test_end",
+        ],
         "rd_exp_list" => &[],
         "rd_exp_get_experiment" => &["experiment_id"],
         "rd_exp_get_run" | "rd_exp_input" | "rd_exp_result" | "rd_exp_model" | "rd_exp_lineage" => {
@@ -777,16 +792,16 @@ mod tests {
     }
 
     #[test]
-    fn engine_binary_search_prefers_the_submodule_default_relative_path() {
+    fn engine_binary_search_prefers_the_shared_target_path() {
         let workspace = std::path::Path::new("/ws");
         let candidates = engine_binary_candidates(workspace, "riga-flow", "riga-mcp");
         assert_eq!(
             candidates[0],
-            std::path::Path::new("/ws/modules/riga-flow/target/release/riga-mcp")
+            std::path::Path::new("/ws/modules/target/release/riga-mcp")
         );
         assert_eq!(
             candidates[1],
-            std::path::Path::new("/ws/modules/riga-flow/target/debug/riga-mcp")
+            std::path::Path::new("/ws/modules/target/debug/riga-mcp")
         );
         assert_eq!(
             candidates[candidates.len() - 1],

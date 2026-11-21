@@ -19,13 +19,22 @@ import { createStdioClient } from './lib/mcpStdio.mjs'
 import { validateTacToolCall } from './lib/mcpAllowlist.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const binary = process.env.TAC_ENGINE_BIN ?? resolve(root, 'modules/tac-engine/target/release/tac-engine')
+const targetRoot = process.env.CARGO_TARGET_DIR ?? resolve(root, 'modules/target')
+const binaryCandidates = process.env.TAC_ENGINE_BIN
+  ? [process.env.TAC_ENGINE_BIN]
+  : [
+      resolve(targetRoot, 'release/tac-engine'),
+      resolve(targetRoot, 'debug/tac-engine'),
+      resolve(root, 'modules/tac-engine/target/release/tac-engine'),
+      resolve(root, 'modules/tac-engine/target/debug/tac-engine'),
+    ]
+const binary = binaryCandidates.find((candidate) => existsSync(candidate)) ?? binaryCandidates[0]
 const cwd = resolve(root, 'modules/tac-engine')
 const port = Number(process.env.TAC_MCP_HTTP_PORT ?? 8790)
 
 if (!existsSync(binary)) {
   console.error(`tac-engine binary not found at ${binary}`)
-  console.error('Build it: cargo build --release --manifest-path modules/tac-engine/Cargo.toml')
+  console.error('Build it: npm run runtime:prepare')
   process.exit(1)
 }
 

@@ -16,6 +16,7 @@
     "tauri:dev:cpu": "tauri dev",
     "tauri:dev:cuda": "node scripts/tauri-cuda.mjs dev",
     "tauri:dev:stable-webview": "bash scripts/dev-linux-stable-webview.sh",
+    "runtime:prepare": "node scripts/prepare-runtimes.mjs",
     "watch:renderer": "bash scripts/watch-renderer.sh",
     "tauri:build": "tauri build",
     "tauri:build:cpu": "tauri build",
@@ -25,7 +26,7 @@
     "mcp:sidecar:nip": "bash scripts/build-nip-sidecar.sh",
     "mcp:sidecar:engines": "npm run mcp:sidecar:riga && npm run mcp:sidecar:tac && npm run mcp:sidecar:nip",
     "mcp:http:tac": "node scripts/tac-mcp-http.mjs",
-    "mcp:http:riga": "modules/riga-flow/target/release/riga-mcp --transport http --bind 127.0.0.1:8788 --allowed-host localhost --allowed-host 127.0.0.1",
+    "mcp:http:riga": "modules/target/release/riga-mcp --transport http --bind 127.0.0.1:8788 --allowed-host localhost --allowed-host 127.0.0.1",
     "mcp:http:trade-repo": "node scripts/trade-repo-mcp-http.mjs --seed",
     "mcp:http:trade-repo:reset": "node scripts/trade-repo-mcp-http.mjs --reset --seed",
     "mcp:http:book": "node scripts/book-mcp-http.mjs",
@@ -72,8 +73,8 @@
     "version:set": "node scripts/set-version.mjs",
     "mcp:stdio:rd": "node scripts/tac-qlib-mcp.mjs rd",
     "mcp:stdio:book": "node scripts/tac-qlib-mcp.mjs book",
-    "mcp:qlib:sync": "uv sync --project modules/tac-qlib --locked",
-    "test:tac-qlib:lake": "uv run --project modules/tac-qlib --locked python scripts/test-tac-qlib-lake.py"
+    "mcp:qlib:sync": "UV_PROJECT_ENVIRONMENT=modules/.venv uv sync --project modules/tac-qlib --locked",
+    "test:tac-qlib:lake": "UV_PROJECT_ENVIRONMENT=modules/.venv uv run --project modules/tac-qlib --locked python scripts/test-tac-qlib-lake.py"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.15.23",

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Stage an engine MCP server (riga-mcp / tac-engine) as a Tauri sidecar.
 #
-# The primary resolution path for these servers is the **submodule default
-# relative path** (`modules/<dir>/target/release/<bin>`, §3.10), which the Rust
+# The primary development output is the shared target path
+# (`modules/target/release/<bin>`), which the Rust
 # resolver checks first. Staging into `src-tauri/binaries/` is a convenience for
-# packaged builds only, so this script is **best-effort**: a missing submodule or
-# a missing submodule or build failure must fail early with an actionable setup
+# packaged builds only. A missing submodule or build failure must fail early with an actionable setup
 # error rather than allowing Tauri to start and later report an opaque MCP
 # connection-closed error.
 #
@@ -14,6 +13,7 @@ set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$root/modules/target}"
 
 dir="${1:?usage: build-engine-sidecar.sh <submodule-dir> <bin> <env-var>}"
 bin="${2:?usage: build-engine-sidecar.sh <submodule-dir> <bin> <env-var>}"
@@ -35,11 +35,11 @@ if ! cargo build --release --manifest-path "$manifest" --bin "$bin"; then
   exit 1
 fi
 
-src="modules/$dir/target/release/$out"
+src="$CARGO_TARGET_DIR/release/$out"
 dest="src-tauri/binaries/$bin-$triple$exe_suffix"
 if [[ ! -f "$src" ]]; then
   echo "$bin sidecar: expected build output at $src" >&2
-  exit 0
+  exit 1
 fi
 
 mkdir -p "src-tauri/binaries"

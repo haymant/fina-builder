@@ -38,8 +38,8 @@ drives them.
   builds their HTTP binaries automatically; Rust/Cargo must be installed first:
 
   ```bash
-  cargo build --release --manifest-path modules/riga-flow/Cargo.toml   # → modules/riga-flow/target/release/riga-mcp
-  cargo build --release --manifest-path modules/tac-engine/Cargo.toml  # → modules/tac-engine/target/release/tac-engine
+  CARGO_TARGET_DIR="$PWD/modules/target" cargo build --release --manifest-path modules/riga-flow/Cargo.toml   # → modules/target/release/riga-mcp
+  CARGO_TARGET_DIR="$PWD/modules/target" cargo build --release --manifest-path modules/tac-engine/Cargo.toml  # → modules/target/release/tac-engine
   ```
 
   `npm run mcp:sidecar:engines` stages them into `src-tauri/binaries/` for packaged builds.
@@ -59,7 +59,7 @@ drives them.
 For a fresh Manus Ubuntu sandbox, run the following from the repository root. It installs the
 native build prerequisites, installs the pinned Rust toolchain from `rust-toolchain.toml`,
 installs JavaScript dependencies, installs the optional Tauri desktop libraries, and prepares
-the module-local qlib environment. The command does not require Alpaca, database, MLflow, or
+the shared `modules/.venv` qlib environment. The command does not require Alpaca, database, MLflow, or
 other production credentials.
 
 ```bash
@@ -71,7 +71,7 @@ rustup toolchain install 1.99.0 --profile minimal
 git submodule update --init --recursive
 npm ci
 ./scripts/ci/install-tauri-linux-deps.sh       # optional for browser-only work
-uv sync --project modules/tac-qlib --locked    # optional for RD/book sidecars
+npm run runtime:prepare                        # builds Rust sidecars and syncs shared TAC Python env
 cargo --version && rustc --version && npm --version
 ```
 
@@ -160,12 +160,14 @@ npm run tauri:build    # native bundles for the current platform
 `git pull` updates the parent repository but does not populate or update gitlink submodules.
 The Trading 2ⁿd MCP sidecar is built from the checked-out `modules/tac-engine` submodule and
 the RIGA sidecar from `modules/riga-flow`; they are compiled locally rather than committed as
-binaries. `npm run tauri:dev` builds them before starting the desktop app. If either submodule
+binaries. `npm run tauri:dev` builds them before starting the desktop app and synchronizes the
+shared TAC Python environment at `modules/.venv`. If either submodule
 is missing, startup now stops with an instruction to run the recursive submodule command
 instead of allowing a later opaque “MCP connection closed” error.
 
-The shell resolves `riga-mcp` / `tac-engine` from `RIGA_MCP_BIN` / `TAC_ENGINE_BIN`, else the
-submodule default path (`modules/<dir>/target/{release,debug}`), else a bundled sidecar. It
+The shell resolves `riga-mcp` / `tac-engine` from `RIGA_MCP_BIN` / `TAC_ENGINE_BIN`, then the
+shared target path (`modules/target/{release,debug}`), then legacy submodule paths, and finally a
+bundled sidecar. It
 forwards `.env` files (repo root, app-data, `modules/tac-engine/.env`, `modules/riga-flow/.env`)
 to the engine children, so `TAC_LAKE_DIR`, `APCA_*` and `FRED_API_KEY` work without exporting
 shell variables. Keys live in the host environment or a user-owned `.env` only — never in the
@@ -177,7 +179,7 @@ mode as web mode; account/order tools are omitted, and Alpaca-only market data r
 When `TAC_LAKE_DIR` is not set, desktop mode passes the disposable workspace default
 `<checkout>/.lake` to TAC and R&D, matching web mode. R&D is launched by the tracked
 `scripts/tac-qlib-rd-mcp` wrapper, which runs `uv sync --project modules/tac-qlib --locked`
-and starts `modules/tac-qlib/tac_qlib/rd_server.py`; install `uv` before opening the desktop app.
+and starts `modules/tac-qlib/tac_qlib/rd_server.py` using `modules/.venv`; install `uv` before opening the desktop app.
 
 ### Sidecar catalog and setup
 
@@ -194,21 +196,22 @@ or an app-data `.env` file.
 | Trade repository MCP | `scripts/lib/trade-repo`; fina-owned operational trade persistence | `npm run mcp:http:trade-repo` | HTTP `127.0.0.1:8792` |
 | `nip-engine` | NIP narrative ingestion, evidence and media lifecycle | `npm run mcp:sidecar:nip` | Tauri/HTTP `127.0.0.1:8794` |
 | `tac-qlib-rd` | `modules/tac-qlib`; TradeAC-derived research, experiment, model and result tools | `uv sync --project modules/tac-qlib --locked`; `npm run mcp:http:rd` (browser) or `npm run mcp:stdio:rd` (desktop) | HTTP `127.0.0.1:8796/mcp`; Tauri-owned stdio |
-| `tac-rd-book` (new) | `modules/tac-qlib`; TradeAC-derived round book, facts, intents, decisions and reconciliation | `uv sync --project modules/tac-qlib --locked`; `npm run mcp:stdio:book` | stdio; module-local `.venv` |
+| `tac-rd-book` (new) | `modules/tac-qlib`; TradeAC-derived round book, facts, intents, decisions and reconciliation | `uv sync --project modules/tac-qlib --locked`; `npm run mcp:stdio:book` | stdio; shared `modules/.venv` |
 | Fina Phase 3A book adapter | fina-owned read-only DTO/transport boundary over the qlib book service | `npm run mcp:http:book` (browser) or `scripts/tac-qlib-book-mcp` (desktop) | HTTP `127.0.0.1:8795/mcp`; Tauri-owned stdio |
 | RiskCube OLAP (planned) | A canonical `fina-pricer`/OLAP capability, not ordinary TAC market data | set host-only `RISK_CUBE_MCP_BIN` and run `npm run mcp:http:riskcube` | HTTP `127.0.0.1:8797/mcp`; Tauri-owned named sidecar |
 
 Build and stage the compiled Rust sidecars for a packaged Tauri build with:
 
 ```bash
-npm run mcp:sidecar:engines       # riga-mcp, tac-engine and nip-engine
-uv sync --project modules/tac-qlib --locked
+npm run runtime:prepare           # Rust sidecars plus shared TAC Python environment
 npm run mcp:stdio:rd              # stdio service; Ctrl-C stops the child
 npm run mcp:stdio:book             # stdio service; Ctrl-C stops the child
 ```
 
-`modules/tac-qlib/.venv` is intentionally module-local and ignored; `uv.lock` is committed so a
-clean checkout resolves the same Python dependencies. The RD and book services are separate named
+The TAC qlib RD and book services use the shared ignored environment `modules/.venv`; `uv.lock` is
+committed so a clean checkout resolves the same Python dependencies. Set `TAC_QLIB_PYTHON_BIN` to
+override the interpreter, while the old `modules/tac-qlib/.venv` remains a compatibility fallback.
+The RD and book services are separate named
 processes even though they share package source. They own qlib/MLflow and round-book calculations;
 React must consume their DTOs rather than reimplementing metrics or reconciliation. The default
 fina-builder test suite must use temporary fixtures and does not require Alpaca credentials,
@@ -255,10 +258,10 @@ not copy model files, runs, artifacts, or TradeAC records.
 The fina book API is read-only and allowlists `round_list`, `round_get`, `trail_query`,
 `trail_funnel`, and `round_metrics`. It does not expose round writes, order placement, fill
 synchronization, cancellation, or broker mutations. For browser development, prepare the
-module-local qlib environment and start the bridge:
+shared qlib environment and start the bridge:
 
 ```bash
-uv sync --project modules/tac-qlib --locked
+UV_PROJECT_ENVIRONMENT=modules/.venv uv sync --project modules/tac-qlib --locked
 npm run mcp:http:book                 # http://127.0.0.1:8795/mcp
 ```
 
@@ -352,8 +355,8 @@ present (Murex equity spots + dividends, correlation, the `eqVol` surface, and t
 curve — `evaluationDate` anchors the tenors), otherwise it falls back to `tac-engine`
 (`--market file|lake|auto`). It builds the `riga-flow` `PriceRequest` — including the Dupire
 `local_vol.grids[]` from the surface — and reports both the flat-ATM and the surface-calibrated
-lanes. It resolves the engines exactly like the app (`RIGA_MCP_BIN` / `TAC_ENGINE_BIN`, else
-`modules/<dir>/target/release/<bin>`). To reconcile against another pricer, `--no-call` drops
+lanes. It resolves the engines through `RIGA_MCP_BIN` / `TAC_ENGINE_BIN`, then
+`modules/target/{release,debug}`, with legacy module-local target paths as fallbacks. To reconcile against another pricer, `--no-call` drops
 the autocall gate, `--strike X` overrides the put strike, and `--vol a,b` overrides the flat
 vols (and disables the surface grid).
 

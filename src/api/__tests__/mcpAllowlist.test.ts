@@ -3,6 +3,9 @@ import { validateRdToolCall, validateRiskcubeToolCall, validateTacToolCall } fro
 
 describe('browser MCP host allowlists', () => {
   it('accepts only the named R&D read operations and identifiers', () => {
+    expect(() => validateRdToolCall({ name: 'rd_status', arguments: { market: 'US' } })).not.toThrow()
+    expect(() => validateRdToolCall({ name: 'rd_dataset', arguments: { market: 'US', universe: 'all', features: '$rsi_14' } })).not.toThrow()
+    expect(() => validateRdToolCall({ name: 'rd_dataset', arguments: { lake_root: '/tmp/lake' } })).toThrow(/argument is not allowed: lake_root/)
     expect(() => validateRdToolCall({ name: 'rd_exp_result', arguments: { run_id: 'run-1', experiment_id: 'exp-1' } })).not.toThrow()
     expect(() => validateRdToolCall({ name: 'rd_exp_result', arguments: { uri: 'file:///tmp/x' } })).toThrow(/argument is not allowed: uri/)
     expect(() => validateRdToolCall({ name: 'rd_exp_result', arguments: { path: '/tmp/x' } })).toThrow(/argument is not allowed: path/)

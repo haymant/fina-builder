@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Launch one tac-qlib MCP service from its module-local uv environment.
+ * Launch one tac-qlib MCP service from the shared modules/.venv environment.
  *
  * Usage:
  *   node scripts/tac-qlib-mcp.mjs rd
@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const moduleRoot = resolve(root, 'modules/tac-qlib')
+const sharedEnv = resolve(root, 'modules/.venv')
 const service = process.argv[2]
 const entry = service === 'rd' ? 'tac_qlib.rd_server' : service === 'book' ? 'tac_qlib.book_server' : null
 if (!entry) {
@@ -39,7 +40,7 @@ function syncModuleEnvironment() {
     execFileSync('uv', ['sync', '--project', moduleRoot, '--locked'], {
       cwd: moduleRoot,
       stdio: 'inherit',
-      env: process.env,
+      env: { ...process.env, UV_PROJECT_ENVIRONMENT: process.env.UV_PROJECT_ENVIRONMENT ?? sharedEnv },
     })
   } catch (error) {
     console.error(
@@ -88,9 +89,17 @@ function buildChildEnvironment() {
 
 syncModuleEnvironment()
 
-const python = resolve(moduleRoot, '.venv/bin/python')
-if (!existsSync(python)) {
-  console.error(`uv sync completed but the tac-qlib interpreter was not created at ${python}`)
+const explicitPython = process.env.TAC_QLIB_PYTHON_BIN
+const configuredEnv = process.env.UV_PROJECT_ENVIRONMENT ?? sharedEnv
+const pythonCandidates = explicitPython
+  ? [explicitPython]
+  : [
+      resolve(configuredEnv, process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
+      resolve(moduleRoot, process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python'),
+    ]
+const python = pythonCandidates.find((candidate) => existsSync(candidate))
+if (!python) {
+  console.error(`uv sync completed but no TAC qlib interpreter was found. Checked: ${pythonCandidates.join(', ')}`)
   process.exit(1)
 }
 

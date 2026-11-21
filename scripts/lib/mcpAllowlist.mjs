@@ -1,4 +1,6 @@
 const RD_TOOL_ARGS = new Map([
+  ['rd_status', ['market']],
+  ['rd_dataset', ['market', 'universe', 'start_time', 'end_time', 'fit_start_time', 'fit_end_time', 'freq', 'features', 'label', 'train_start', 'train_end', 'valid_start', 'valid_end', 'test_start', 'test_end']],
   ['rd_exp_list', []],
   ['rd_exp_get_experiment', ['experiment_id']],
   ['rd_exp_get_run', ['run_id', 'experiment_id']],

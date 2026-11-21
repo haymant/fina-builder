@@ -10,7 +10,7 @@
 // under `errors[name]` and omitted from `tools`.
 
 import { createHash } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createStdioClient } from './lib/mcpStdio.mjs'
@@ -18,16 +18,28 @@ import { createStdioClient } from './lib/mcpStdio.mjs'
 const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '..')
 
+function engineBin(envName, submodule, name) {
+  if (process.env[envName]) return process.env[envName]
+  const target = process.env.CARGO_TARGET_DIR ?? resolve(root, 'modules/target')
+  const candidates = [
+    resolve(target, 'release', name),
+    resolve(target, 'debug', name),
+    resolve(root, `modules/${submodule}/target/release/${name}`),
+    resolve(root, `modules/${submodule}/target/debug/${name}`),
+  ]
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]
+}
+
 const CONFIG = {
   riga: {
-    binary: resolve(root, 'modules/riga-flow/target/release/riga-mcp'),
+    binary: engineBin('RIGA_MCP_BIN', 'riga-flow', 'riga-mcp'),
     args: ['--transport', 'stdio'],
     out: 'src/features/riga/__tests__/fixtures/termsheet1.transcript.json',
     protocol: '2025-11-25',
     timeoutMs: 60_000,
   },
   tac: {
-    binary: resolve(root, 'modules/tac-engine/target/release/tac-engine'),
+    binary: engineBin('TAC_ENGINE_BIN', 'tac-engine', 'tac-engine'),
     args: [],
     cwd: resolve(root, 'modules/tac-engine'),
     out: 'src/features/tac/__tests__/fixtures/tac-market.transcript.json',

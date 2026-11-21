@@ -18,6 +18,7 @@ dist-ssr
 # that sets its own output directory. The previous commits missed this and
 # committed 1,093 object files under `target/`; see the Phase 2 commit message.
 target/
+modules/target/
 
 # Editor directories and files
 .vscode/*
@@ -71,9 +72,10 @@ artifacts/demo/
 # Local TTS tooling for demo narration
 .venv-tts/
 
-# Module-local Python environments for TradeAC-derived MCP services.
+# Shared Python environment for TradeAC-derived MCP services.
+modules/.venv/
 modules/tac-qlib/.venv/
 modules/tac-qlib/.pytest_cache/
-# Generated artifacts from the module-local qlib environment
+# Generated qlib package artifacts (the shared runtime is modules/.venv)
 modules/tac-qlib/**/__pycache__/
 modules/tac-qlib/*.egg-info/

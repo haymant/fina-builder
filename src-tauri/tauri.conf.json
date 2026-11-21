@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "npm run mcp:sidecar:engines && npm run dev:tauri",
-    "beforeBuildCommand": "npm run build && npm run mcp:sidecar:engines"
+    "beforeDevCommand": "npm run runtime:prepare && npm run dev:tauri",
+    "beforeBuildCommand": "npm run build && npm run runtime:prepare"
   },
   "app": {
     "windows": [
