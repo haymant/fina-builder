@@ -12,6 +12,8 @@ const RD_TOOL_ARGS = new Map([
   ['rd_trace_start', ['rational', 'details', 'experiment_name', 'evolved_from']],
   ['rd_trace_get', ['experiment_id']],
   ['rd_trace_list', ['limit']],
+  ['rd_validate_workflow', ['config_yaml']],
+  ['rd_run_workflow', ['config_yaml', 'experiment_name']],
   ['rd_predict', ['model_path', 'run_id', 'experiment_name', 'market', 'universe', 'train_start', 'train_end', 'valid_start', 'valid_end', 'test_start', 'test_end', 'freq', 'features', 'label', 'out_dir', 'top']],
   ['rd_backtest', ['pred_path', 'start_time', 'end_time', 'market', 'topk', 'n_drop', 'risk_degree', 'benchmark', 'account', 'universe', 'open_cost', 'close_cost', 'min_cost', 'out_dir', 'risk_limits']],
   ['rd_strategy_targets', ['pred_path', 'signal_date', 'account', 'risk_degree', 'topk', 'n_drop', 'prices', 'risk_limits', 'equity', 'peak_equity']],
@@ -53,6 +55,11 @@ export function validateRdToolCall(params) {
     for (const key of ['train_start', 'train_end', 'valid_start', 'valid_end', 'test_start', 'test_end', 'experiment_name', 'market', 'universe', 'freq', 'features', 'label', 'benchmark', 'risk_limits']) if (args[key] !== undefined && typeof args[key] !== 'string') throw new Error(`R&D ${key} must be a string`)
     for (const key of ['learning_rate', 'colsample_bytree', 'subsample', 'reg_alpha', 'reg_lambda', 'risk_degree', 'open_cost', 'close_cost', 'min_cost']) if (args[key] !== undefined && (typeof args[key] !== 'number' || !Number.isFinite(args[key]))) throw new Error(`R&D ${key} must be a finite number`)
     for (const key of ['num_leaves', 'num_boost_round', 'early_stopping_rounds', 'subsample_freq', 'seed', 'topk', 'n_drop', 'account']) if (args[key] !== undefined && (!Number.isInteger(args[key]) || args[key] < 0)) throw new Error(`R&D ${key} must be a non-negative integer`)
+  }
+  if (name === 'rd_validate_workflow' || name === 'rd_run_workflow') {
+    if (typeof args.config_yaml !== 'string' || !args.config_yaml.trim() || Buffer.byteLength(args.config_yaml, 'utf8') > 128 * 1024) throw new Error('R&D config_yaml must be a non-empty string no larger than 128 KiB')
+    if (name === 'rd_run_workflow' && (typeof args.experiment_name !== 'string' || args.experiment_name.trim().length < 1 || args.experiment_name.length > 64)) throw new Error('R&D experiment_name must be a 1-64 character string')
+    if (name === 'rd_validate_workflow' && args.experiment_name !== undefined) throw new Error('R&D experiment_name is not accepted for validation')
   }
 }
 

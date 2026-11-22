@@ -7484,6 +7484,7 @@ dependencies = [
     { name = "pyarrow", version = "26.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pyqlib" },
     { name = "python-dotenv" },
+    { name = "ruamel-yaml" },
 ]
 
 [package.dev-dependencies]
@@ -7500,6 +7501,7 @@ requires-dist = [
     { name = "pyarrow" },
     { name = "pyqlib" },
     { name = "python-dotenv" },
+    { name = "ruamel-yaml", specifier = ">=0.18" },
 ]
 
 [package.metadata.requires-dev]

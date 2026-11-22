@@ -158,7 +158,7 @@ the two engines (see `vite.config.ts`). To run the pieces separately:
 npm run backend:dev      # npm run mcp:http:riga   (riga-mcp --transport http)
 npm run mcp:http:tac     # the tac-engine HTTP bridge
 npm run mcp:http:trade-repo # seeded local trade repository MCP server
-npm run mcp:http:rd        # read-only qlib/MLflow R&D MCP bridge
+npm run mcp:http:rd        # qlib/MLflow R&D MCP bridge
 npm run dev:web          # frontend-only Vite process
 ```
 
@@ -217,7 +217,7 @@ or an app-data `.env` file.
 | `tac-engine` | `modules/tac-engine`; market data, lake, account and order tools | `npm run mcp:sidecar:tac` | stdio in Tauri; HTTP `127.0.0.1:8790` |
 | Trade repository MCP | `scripts/lib/trade-repo`; fina-owned operational trade persistence | `npm run mcp:http:trade-repo` | HTTP `127.0.0.1:8792` |
 | `nip-engine` | NIP narrative ingestion, evidence and media lifecycle | `npm run mcp:sidecar:nip` | Tauri/HTTP `127.0.0.1:8794` |
-| `tac-qlib-rd` | `modules/tac-qlib`; TradeAC-derived research, experiment, model and result tools | `uv sync --project modules/tac-qlib --locked`; `npm run mcp:http:rd` (browser) or `npm run mcp:stdio:rd` (desktop) | HTTP `127.0.0.1:8796/mcp`; Tauri-owned stdio |
+| `tac-qlib-rd` | `modules/tac-qlib`; TradeAC-derived research, experiment, model and result tools, including bounded YAML validation and dispatch | `uv sync --project modules/tac-qlib --locked`; `npm run mcp:http:rd` (browser) or `npm run mcp:stdio:rd` (desktop) | HTTP `127.0.0.1:8796/mcp`; Tauri-owned stdio |
 | `tac-rd-book` (new) | `modules/tac-qlib`; TradeAC-derived round book, facts, intents, decisions and reconciliation | `uv sync --project modules/tac-qlib --locked`; `npm run mcp:stdio:book` | stdio; shared `modules/.venv` |
 | Fina Phase 3A book adapter | fina-owned read-only DTO/transport boundary over the qlib book service | `npm run mcp:http:book` (browser) or `scripts/tac-qlib-book-mcp` (desktop) | HTTP `127.0.0.1:8795/mcp`; Tauri-owned stdio |
 | RiskCube OLAP (planned) | A canonical `fina-pricer`/OLAP capability, not ordinary TAC market data | set host-only `RISK_CUBE_MCP_BIN` and run `npm run mcp:http:riskcube` | HTTP `127.0.0.1:8797/mcp`; Tauri-owned named sidecar |
@@ -254,18 +254,21 @@ There is intentionally no `modules/riskcube` Cargo submodule in this repository;
 does not attempt to build one and reports setup as unavailable until an approved host-side
 `RISK_CUBE_MCP_BIN` is configured.
 
-The read-only R&D workspace is fixture-tested with an experiment → run → result journey:
+The R&D workspace is fixture-tested with an experiment → run → result journey. The Experiments card's **+ YAML** action opens a Qlib workflow editor; validation checks the bounded schema and preflights the persisted lake before the user reviews the summary and confirms the exact experiment/config fingerprint. Preprocessing fit dates cannot extend beyond the training segment, and optional portfolio backtests must stay inside the test segment. Submitted YAML runs through the existing isolated R&D worker, not a renderer-side process. The R&D Notebook button has its own notes and a copyable prompt plus starter YAML for external agents, so authoring does not depend on RIGA availability.
 
 ```bash
 npm run test:run -- src/api/__tests__/rdApi.test.ts
+npm run test:run -- src/features/rd/components/WorkflowYamlDialog.test.tsx src/features/workspace/components/NotebookDrawer.test.tsx
 npm run test:e2e:journey:rd
 npm run test:run -- src/api/__tests__/riskcubeApi.test.ts src/api/__tests__/mcpAllowlist.test.ts
 npm run test:e2e:journey:riskcube
 ```
 
 The browser journey intercepts only `/rd/mcp` with synthetic JSON-RPC responses. It does not
-require a lake, MLflow, credentials, or production artifacts. Training, deletion, note mutation,
-and artifact writes are intentionally not exposed by the renderer API.
+require a lake, MLflow, credentials, or production artifacts. The YAML write path accepts only
+the service's constrained declarative Qlib subset, caps payload size, rejects renderer-supplied
+paths/providers/tracking URIs, and requires server validation plus an immediate dispatch
+confirmation. It does not expose arbitrary filesystem or artifact writes.
 
 #### Phase 3A metadata and book boundary
 
@@ -521,6 +524,6 @@ See [playwright/README.md](./playwright/README.md) for browser-suite setup, reco
 
 The current write slice is capability-first and host-authorized. Trading 2ⁿd exposes named TAC `place_order`, `get_order`, and `cancel_order` operations. Order fields are validated at both the browser bridge and Tauri host boundary, decimal quantities/prices remain strings, and the UI confirms the exact symbol, side, quantity, type, price, time-in-force, and host-controlled account/environment immediately before dispatch. After a mutation, the UI refreshes through the read API; it does not optimistically fabricate broker state. No automatic retry is performed after an ambiguous broker result.
 
-R&D exposes the tracked `rd_trace_start`, `rd_trace_get`, `rd_trace_list`, and `rd_train` operations through the named qlib service. Experiment creation and run dispatch require immediate confirmation; qlib/MLflow artifacts and model files remain owned by the service and are not copied into fina-builder. Renderer arguments cannot select a path, URI, tracking store, executable, database, or credentials. Scheduler create/update/enable/pause/resume remains explicitly unsupported until a canonical scheduler owner and lifecycle are selected.
+R&D exposes the tracked `rd_trace_start`, `rd_trace_get`, `rd_trace_list`, `rd_train`, `rd_validate_workflow`, and `rd_run_workflow` operations through the named qlib service. The `+ YAML` editor submits only a bounded workflow document: the service validates its allowlisted Qlib classes/fields, preflights actual lake data, injects host-owned provider/tracking configuration, fixes LightGBM seed/thread/determinism settings, and dispatches through an isolated worker. The user confirms the exact experiment and config fingerprint immediately before dispatch. qlib/MLflow artifacts and model files remain owned by the service and are not copied into fina-builder. Renderer arguments cannot select a path, URI, tracking store, executable, database, or credentials. The separate R&D Notebook offers an external-agent authoring prompt and starter YAML, so RIGA is optional for this path. Scheduler create/update/enable/pause/resume remains explicitly unsupported until a canonical scheduler owner and lifecycle are selected.
 
 The default tests use fixtures/stubs only. Passing fixture journeys does not imply live broker or production R&D readiness: host credentials, paper/live configuration, lake, MLflow/tracking store, and service availability remain runtime prerequisites.

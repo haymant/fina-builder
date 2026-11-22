@@ -18,6 +18,8 @@ describe('R&D API read-only boundary', () => {
     expect(api).toHaveProperty('createRun')
     expect(api).not.toHaveProperty('deleteExperiment')
     expect(api).not.toHaveProperty('setNotes')
+    expect(api).toHaveProperty('validateWorkflowYaml')
+    expect(api).toHaveProperty('runWorkflowYaml')
   })
   it('sends safe experiment and run payloads', async () => {
     const callTool = vi.fn(async (name: string) => name === 'rd_trace_start' ? { experiment_id: 9 } : { status: 'started', background: true })
@@ -34,6 +36,22 @@ describe('R&D API read-only boundary', () => {
     expect((await api.preflight({ trainStart: '2025-01-01', trainEnd: '2025-12-31', features: '$rsi_14,$macro_vix' })).featureFields).toEqual(['$close', '$rsi_14', '$macro_vix'])
     await api.createRun({ experimentName: 'alpha', trainStart: '2025-01-01', trainEnd: '2025-12-31', features: '$rsi_14,$macro_vix', validStart: '2026-01-01', validEnd: '2026-02-01' })
     expect(callTool).toHaveBeenLastCalledWith('rd_train', expect.objectContaining({ features: '$rsi_14,$macro_vix', valid_start: '2026-01-01', valid_end: '2026-02-01', record_analysis: true }))
+  })
+  it('validates YAML on the service and dispatches the same exact text through rd_run_workflow', async () => {
+    const configYaml = 'experiment_name: alpha\ntask: {}\n'
+    const callTool = vi.fn(async (name: string) => name === 'rd_validate_workflow' ? {
+      valid: true, experiment_name: 'alpha', model_class: 'RankICLGBModel', market: 'US', universe: 'SPY,QQQ',
+      train: ['2020-01-01', '2023-12-31'], valid_window: ['2024-01-01', '2024-12-31'], test: ['2025-01-01', '2025-12-31'],
+      seed: 2026, num_threads: 1, feature_fields: ['$close'], record_classes: ['SignalRecord', 'SigAnaRecord'],
+      config_sha256: 'a'.repeat(64), determinism_profile: 'lightgbm-seeded-single-thread-v1',
+      dataset_preflight: { universe_size: 2, universe: ['SPY', 'QQQ'], segments: { train: { rows: 12 } }, feature_fields: ['$close'], all_nan_dropped: [] },
+    } : { status: 'started', background: true, process_mode: 'subprocess' })
+    const api = createRdApi({ callTool })
+    const checked = await api.validateWorkflowYaml(configYaml)
+    expect(checked).toMatchObject({ valid: true, experimentName: 'alpha', seed: 2026, numThreads: 1, validWindow: ['2024-01-01', '2024-12-31'], datasetPreflight: { universeSize: 2 } })
+    await api.runWorkflowYaml(configYaml, checked.experimentName)
+    expect(callTool).toHaveBeenNthCalledWith(1, 'rd_validate_workflow', { config_yaml: configYaml })
+    expect(callTool).toHaveBeenNthCalledWith(2, 'rd_run_workflow', { config_yaml: configYaml, experiment_name: 'alpha' })
   })
   it('maps missing sidecar failures to unavailable', async () => {
     const api = createRdApi({ callTool: async () => { throw new Error('TAC_LAKE_DIR is not set') } })

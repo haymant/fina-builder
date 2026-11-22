@@ -317,18 +317,26 @@ data. It verifies account/positions/orders/news rendering, the explicit read-onl
 Trading 2ⁿd navigation, and location persistence after reload. Run it with
 `npm run test:e2e:journey:trading2`.
 
-**Read-only R&D slice status (2026-11-20):** implemented. Fina now has a typed read-only
-`rdApi`, browser `/rd` MCP bridge, named Tauri `rd_mcp_*` commands, a lazy R&D workspace with
-validated persisted locations, and explicit unavailable/error states. The workspace covers the
-experiment → run → result path while leaving qlib/MLflow records and artifacts owned by the
-sidecar. `playwright/rd-read-only.spec.ts` intercepts only the browser MCP boundary with
-synthetic JSON-RPC fixtures and requires no lake, MLflow service, credentials, or production
-artifacts. Evidence: 3 R&D API unit tests passed and the focused journey passed with
-`npm run test:e2e:journey:rd`.
+**R&D transport and YAML-authoring status (2026-11-22):** the initial experiment → run → result
+workspace remains fixture-tested, and the typed `rdApi`, browser `/rd` MCP bridge, and named
+Tauri `rd_mcp_*` commands now also expose bounded workflow validation and submission. The
+Experiments card's **+ YAML** editor requires server-side schema validation and persisted-lake
+preflight, then shows the experiment, model, universe, date segments, determinism settings and
+config fingerprint before immediate confirmation. The validator prevents fit-window leakage past
+the training segment and bounds optional portfolio analysis to the test segment. The service
+injects provider/tracking settings, stages normalized YAML privately, and uses its existing
+isolated Qlib subprocess runner; renderer inputs cannot choose paths, providers, tracking URIs,
+executables or credentials. The R&D Notebook
+button now opens an isolated R&D notebook with a copyable external-agent prompt and starter YAML,
+so YAML authoring can proceed when RIGA is unavailable. qlib/MLflow records and artifacts remain
+sidecar-owned. Browser tests use synthetic JSON-RPC fixtures and need no lake, MLflow service,
+credentials or production artifacts; `playwright/rd-read-only.spec.ts` continues to cover the
+read-only experiment → run → result browsing journey.
 
-The Trading 2ⁿd, R&D, and initial RiskCube read-only transport/navigation slices are complete.
-Broker mutations, cancellation, durable scheduling, authentication, RiskCube editing, and
-RiskCube persistence remain intentionally unavailable.
+The Trading 2ⁿd, R&D browsing, and initial RiskCube transport/navigation slices are complete.
+The bounded R&D YAML workflow is the exception to read-only browsing: it is a narrowly allowlisted,
+confirmed write through the qlib service. Broker mutations, cancellation, durable scheduling,
+authentication, RiskCube editing, and RiskCube persistence remain intentionally unavailable.
 
 1. Add typed APIs for Trading 2ⁿᵈ, R&D, and RiskCube. Each API exposes stable DTOs and a closed error shape.
 2. Add desktop Tauri commands only for named service operations and MCP process controls. Add corresponding browser HTTP bridges and Vite proxy entries.
@@ -358,11 +366,15 @@ Port the selected R&D views and their existing MCP contracts:
 - experiment list/detail and traced experiment search;
 - input, model, result, blotter, notes, Git graph, and lineage;
 - model registry only if its persistence owner and lifecycle are defined;
-- run wizard only after RIGA replacement behavior and side effects are explicitly specified.
+- bounded Qlib workflow YAML authoring/validation/dispatch, including explicit confirmation and
+  service-owned provider, lake, and MLflow settings; this is the RIGA-optional experiment path.
 
 Replace server actions with typed `rdApi` calls. The UI renders DTOs and does not calculate qlib metrics. Use local deterministic fixtures for experiment/run/model/result responses. For delete or destructive operations, require explicit confirmation and test idempotency/error behavior.
 
-**Exit criteria:** RD MCP server starts from module-local `uv`; Python tests cover provider and tool contracts with temporary fixtures; frontend tests cover all view states; one end-to-end local-fixture journey covers experiment → run selection → result/model/lineage; no remote embedding or MLflow service is required for the default test suite.
+**Exit criteria:** RD MCP server starts from module-local `uv`; Python tests cover provider, YAML
+schema and tool contracts with temporary fixtures; frontend tests cover all view states and exact
+workflow confirmation; one end-to-end local-fixture journey covers experiment → run selection →
+result/model/lineage; no remote embedding or MLflow service is required for the default test suite.
 
 ### Phase 7 — Migrate RiskCube
 
@@ -448,4 +460,13 @@ npm run tauri:build
 
 The first write slice is implemented in `fina-builder` only. Trading 2ⁿd uses the canonical TAC tools `place_order`, `get_order`, and `cancel_order` from the pinned `modules/tac-engine` source (`89fb0c89e19e72c05131f8b1022016a9098e254f`; definitions in `src/server.rs` and `src/params.rs`). The browser bridge and Tauri host enforce exact mutation argument allowlists and bounded order validation. The UI performs immediate exact-action confirmation and refreshes the acknowledgement through `list_orders`/`get_order`; it does not retry ambiguous mutations.
 
-R&D uses the tracked `modules/tac-qlib` service tools `rd_trace_start`, `rd_trace_get`, `rd_trace_list`, and `rd_train` (registration in `tac_qlib/trace.py` and `tac_qlib/rd_server.py`). Experiment creation and run dispatch are confirmed durable/compute actions. Paths such as `out_dir`, `lake_root`, `model_path`, `mlruns_dir`, tracking-store URIs, database URLs, and credentials are not renderer-selectable. Schedule writes remain unsupported because no canonical scheduler owner/lifecycle has been selected; no fake schedule success is rendered. TradeAC remains an unchanged read-only reference.
+R&D uses the tracked `modules/tac-qlib` service tools `rd_trace_start`, `rd_trace_get`,
+`rd_trace_list`, `rd_train`, `rd_validate_workflow`, and `rd_run_workflow` (registration in
+`tac_qlib/trace.py` and `tac_qlib/rd_server.py`). The YAML tools accept only a bounded,
+declarative subset and reject renderer paths, providers, tracking URIs, database URLs, custom
+modules, and credentials. Validation and data preflight are non-run operations; workflow dispatch
+requires immediate confirmation and records a reproducibility fingerprint/profile in MLflow.
+RIGA is optional for this workflow because the R&D Notebook provides a copyable prompt/starter YAML
+for external agents. qlib/MLflow remain the owners of run records and artifacts. Schedule writes
+remain unsupported because no canonical scheduler owner/lifecycle has been selected; no fake
+schedule success is rendered. TradeAC remains an unchanged read-only reference.

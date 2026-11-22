@@ -22,6 +22,7 @@ the MCP protocol.
 from __future__ import annotations
 
 import datetime as _dt
+import copy
 import json
 import os
 import pickle
@@ -1277,13 +1278,125 @@ def _spawn_subprocess_workflow(config_path: str, experiment_name: str, uri_folde
     }
 
 
+def _prepare_submitted_workflow(config_yaml: str, experiment_name: str = "") -> tuple[str, dict]:
+    """Validate declarative YAML and stage its normalized form in a private lake temp dir."""
+    from tac_qlib.data.config import resolve_lake_root
+    from tac_qlib.workflows.rd_workflow_yaml import prepare_rd_workflow_yaml
+
+    lake = resolve_lake_root(None).resolve()
+    _config, summary, normalized_yaml = prepare_rd_workflow_yaml(
+        config_yaml,
+        lake_root=str(lake),
+        expected_experiment_name=experiment_name or None,
+    )
+    staging = lake / ".rd-workflow-tmp"
+    staging.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if staging.is_symlink() or staging.resolve() != staging:
+        raise RuntimeError("R&D workflow staging directory must remain inside the configured lake")
+    try:
+        os.chmod(staging, 0o700)
+    except OSError:
+        pass
+    fd, staged_path = tempfile.mkstemp(prefix="rd-workflow-user-", suffix=".yaml", dir=staging)
+    try:
+        try:
+            os.fchmod(fd, 0o600)
+        except (AttributeError, OSError):
+            os.chmod(staged_path, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(normalized_yaml)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        Path(staged_path).unlink(missing_ok=True)
+        raise
+    return staged_path, summary
+
+
+def _cleanup_submitted_workflow(config_path: str) -> None:
+    """Delete only files created by _prepare_submitted_workflow."""
+    try:
+        from tac_qlib.data.config import resolve_lake_root
+        path = Path(config_path).absolute()
+        expected = resolve_lake_root(None).resolve() / ".rd-workflow-tmp"
+        if not expected.is_symlink() and path.parent == expected and path.name.startswith("rd-workflow-user-") and path.suffix == ".yaml" and not path.is_symlink():
+            path.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001 - cleanup must not mask a workflow result
+        pass
+
+
 @server.tool(structured_output=False)
-def rd_run_workflow(config_path: str, experiment_name: str = "workflow", uri_folder: str = "", wait: bool = False, run_in_new_process: bool = False) -> dict:
+def rd_validate_workflow(config_yaml: str) -> dict:
+    """Validate bounded workflow YAML and preflight its lake data without creating a run."""
+    from tac_qlib.data.config import resolve_lake_root
+    from tac_qlib.workflows.rd_workflow_yaml import prepare_rd_workflow_yaml
+
+    lake = str(resolve_lake_root(None).resolve())
+    runtime_cfg, summary, _normalized = prepare_rd_workflow_yaml(
+        config_yaml, lake_root=lake
+    )
+    task = runtime_cfg["task"]
+    handler = task["dataset"]["kwargs"]["handler"]["kwargs"]
+    segments = task["dataset"]["kwargs"]["segments"]
+    data = rd_dataset(
+        lake_root=lake,
+        market=handler["market"],
+        universe=handler["instruments"],
+        start_time=handler["start_time"],
+        end_time=handler["end_time"],
+        fit_start_time=handler["fit_start_time"],
+        fit_end_time=handler["fit_end_time"],
+        freq=handler["freq"],
+        features=handler["feature_fields"],
+        label=handler["label"],
+        train_start=segments["train"][0],
+        train_end=segments["train"][1],
+        valid_start=segments["valid"][0],
+        valid_end=segments["valid"][1],
+        test_start=segments["test"][0],
+        test_end=segments["test"][1],
+    )
+    summary["dataset_preflight"] = {
+        "universe_size": data["universe_size"],
+        "universe": data["universe"],
+        "segments": data["segments"],
+        "feature_fields": data["feature_fields"],
+        "all_nan_dropped": data["all_nan_dropped"],
+    }
+    return {"valid": True, **summary}
+
+
+@server.tool(structured_output=False)
+def rd_run_workflow(config_path: str = "", experiment_name: str = "", uri_folder: str = "", wait: bool = False, run_in_new_process: bool = False, config_yaml: str = "") -> dict:
     """Execute a full qrun workflow yaml in one shot (render jinja -> init qlib from its qlib_init -> train model -> run all records: SignalRecord, SigAnaRecord, PortAnaRecord). Returns run info, mlflow metrics and saved artifact list. Equivalent to: qrun <config> --experiment_name <name>.
 
     A 4-year training run can outlive the MCP call timeout, so `wait` defaults to False: the workflow runs in a background thread and the tool returns immediately with `status: started`. Poll rd_exp_get_run / rd_exp_list for the newest run of `experiment_name` (status RUNNING until it finishes), then reuse its run_id. Set wait=True only for small windows that finish within the call timeout.
 
     `run_in_new_process=true` runs the workflow in a separate OS process (stdout/stderr redirected to <lake>/logs/rd-workflow-<exp>-<ts>.log, returned as `log_path`). qlib init sets process-global state, so use this for concurrent or long workflows — it isolates crashes and releases memory, and the same rd_exp_* polling works because the child writes to the same mlflow store."""
+    if config_yaml:
+        if config_path or uri_folder or wait or run_in_new_process:
+            raise ValueError("submitted YAML runs accept only config_yaml and experiment_name; execution mode is service-owned")
+        staged_path, summary = _prepare_submitted_workflow(config_yaml, experiment_name)
+        try:
+            result = _spawn_subprocess_workflow(staged_path, summary["experiment_name"])
+        except Exception:
+            _cleanup_submitted_workflow(staged_path)
+            raise
+        # Paths are deliberately omitted from the renderer-facing response.
+        return {
+            "status": result.get("status", "started"),
+            "background": True,
+            "process_mode": "subprocess",
+            "experiment_name": summary["experiment_name"],
+            "config_sha256": summary["config_sha256"],
+            "determinism_profile": summary["determinism_profile"],
+            "seed": summary["seed"],
+            "note": "workflow submitted to an isolated Qlib worker; poll rd_exp_get_run or rd_exp_list for its persisted run",
+        }
+    if not config_path:
+        raise ValueError("config_path or config_yaml is required")
     if run_in_new_process:
         return _spawn_subprocess_workflow(config_path, experiment_name, uri_folder)
     kwargs = {"config_path": config_path, "experiment_name": experiment_name, "uri_folder": uri_folder}
@@ -1346,7 +1459,17 @@ def _rd_run_workflow_impl(config_path: str, experiment_name: str = "workflow", u
 
     rendered = render_template(str(cp))
     cfg = YAML(typ="safe", pure=True).load(rendered)
+    from tac_qlib.workflows.rd_workflow_yaml import workflow_fingerprint
+    config_sha256 = workflow_fingerprint(cfg)
+    model_cfg = ((cfg.get("task") or {}).get("model") or {})
+    model_kwargs = model_cfg.get("kwargs") or {}
+    deterministic_profile = "lightgbm-seeded-single-thread-v1" if model_cfg.get("class") in {"LGBModel", "RankICLGBModel"} and model_kwargs.get("num_threads") == 1 else "workflow-config-only"
     sys_config(cfg, str(cp))
+    cfg["rd_reproducibility"] = {
+        "config_sha256": config_sha256,
+        "determinism_profile": deterministic_profile,
+        "seed": model_kwargs.get("seed"),
+    }
 
     qlib_init_cfg = cfg.get("qlib_init", {}) or {}
     from tac_qlib.data.config import resolve_lake_root
@@ -1385,11 +1508,19 @@ def _rd_run_workflow_impl(config_path: str, experiment_name: str = "workflow", u
     task = cfg.get("task", {}) or {}
     _pin_artifact_location(exp_manager["kwargs"]["uri"], experiment_name)
     recorder = task_train(task, experiment_name=experiment_name)
-    recorder.save_objects(config=cfg)
+    artifact_cfg = copy.deepcopy(cfg)
+    artifact_manager = ((artifact_cfg.get("qlib_init") or {}).get("exp_manager") or {})
+    artifact_manager_kwargs = artifact_manager.get("kwargs") or {}
+    if "uri" in artifact_manager_kwargs:
+        artifact_manager_kwargs["uri"] = "<host-managed>"
+    recorder.save_objects(config=artifact_cfg)
     try:
         recorder.set_tags(**{
             "rd.experiment_id": str(getattr(recorder, "experiment_id", "")),
             "rd.run_id": str(recorder.id),
+            "rd.config_sha256": config_sha256,
+            "rd.determinism_profile": deterministic_profile,
+            "rd.seed": str(model_kwargs.get("seed", "")),
         })
     except Exception:  # noqa: BLE001 - tags are best-effort
         pass
@@ -1405,10 +1536,12 @@ def _rd_run_workflow_impl(config_path: str, experiment_name: str = "workflow", u
 
     return {
         "config_path": str(cp),
+        "config_sha256": config_sha256,
+        "determinism_profile": deterministic_profile,
         "experiment_name": experiment_name,
         "run_id": info.get("id"),
         "status": info.get("status"),
-        "qlib_init": _jsonable(qlib_init_cfg),
+        "qlib_init": _jsonable({**qlib_init_cfg, "exp_manager": {**(qlib_init_cfg.get("exp_manager") or {}), "kwargs": {**((qlib_init_cfg.get("exp_manager") or {}).get("kwargs") or {}), "uri": "<host-managed>"}}}),
         "model": _jsonable(task.get("model")),
         "dataset": _jsonable(task.get("dataset")),
         "records": _jsonable(task.get("record")),
@@ -1636,19 +1769,21 @@ def main() -> None:
             os.environ.setdefault("TAC_LAKE_DIR", str(_resolve_lake_root(None)))
         except Exception:  # noqa: BLE001 - env pinning is best-effort; validator tolerates raw {{ LAKE }}
             pass
-        _problems = _workflow_preflight_problems(cfg)
-        if _problems:
-            print("[rd_server] workflow config FAILED pre-flight validation; refusing to run:", flush=True)
-            for _p in _problems:
-                print(f"  - {_p}", flush=True)
-            sys.exit(2)
         try:
+            _problems = _workflow_preflight_problems(cfg)
+            if _problems:
+                print("[rd_server] workflow config FAILED pre-flight validation; refusing to run:", flush=True)
+                for _p in _problems:
+                    print(f"  - {_p}", flush=True)
+                sys.exit(2)
             _rd_run_workflow_impl(config_path=cfg, experiment_name=name, uri_folder=uri)
         except Exception:  # noqa: BLE001 - log the traceback (stderr -> the parent's log file) and fail loudly
             import traceback
 
             traceback.print_exc()
             sys.exit(1)
+        finally:
+            _cleanup_submitted_workflow(cfg)
         return
 
     register_tools(server)

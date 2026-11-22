@@ -13,6 +13,7 @@ dependencies = [
     "pandas>=1.1",
     "pyqlib",
     "mcp[cli]",
+    "ruamel.yaml>=0.18",
     "python-dotenv",
     "psycopg[binary]",
 ]

@@ -389,9 +389,11 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
         </div>
       ) : null}
       <NotebookDrawer
+        key={location.kind === 'rd' ? 'rd-workspace' : dashboard.id}
         dashboardId={dashboard.id}
         dashboardName={dashboard.name}
         open={notebookOpen}
+        rdMode={location.kind === 'rd'}
         onClose={() => setNotebookOpen(false)}
       />
       <TemplateGallery

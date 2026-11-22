@@ -28,6 +28,17 @@ describe('browser MCP host allowlists', () => {
     expect(() => validateRdToolCall({ name: 'rd_train', arguments: { out_dir: '/tmp' } })).toThrow(/argument is not allowed/)
   })
 
+  it('admits only bounded declarative YAML validation and workflow dispatch', () => {
+    const config = 'experiment_name: alpha\ntask: {}'
+    expect(() => validateRdToolCall({ name: 'rd_validate_workflow', arguments: { config_yaml: config } })).not.toThrow()
+    expect(() => validateRdToolCall({ name: 'rd_run_workflow', arguments: { config_yaml: config, experiment_name: 'alpha' } })).not.toThrow()
+    expect(() => validateRdToolCall({ name: 'rd_run_workflow', arguments: { config_yaml: config, experiment_name: 'alpha', config_path: '/tmp/x' } })).toThrow(/argument is not allowed/)
+    expect(() => validateRdToolCall({ name: 'rd_run_workflow', arguments: { config_yaml: config, experiment_name: 'alpha', uri_folder: '/tmp' } })).toThrow(/argument is not allowed/)
+    expect(() => validateRdToolCall({ name: 'rd_validate_workflow', arguments: { config_yaml: ' ' } })).toThrow(/non-empty/)
+    expect(() => validateRdToolCall({ name: 'rd_validate_workflow', arguments: { config_yaml: 'x'.repeat(128 * 1024 + 1) } })).toThrow(/128 KiB/)
+    expect(() => validateRdToolCall({ name: 'rd_run_workflow', arguments: { config_yaml: config, experiment_name: ' ' } })).toThrow(/experiment_name/)
+  })
+
   it('accepts bounded semantic RiskCube queries and rejects SQL/path escape hatches', () => {
     expect(() => validateRiskcubeToolCall({ name: 'olap_query', arguments: { scope: { partitionId: 'p1' }, dimensions: ['underlying'], measures: ['pv_amount'], aggregation: 'sum', filters: [], limit: 10 } })).not.toThrow()
     expect(() => validateRiskcubeToolCall({ name: 'olap_query', arguments: { sql: 'select * from riskcube_cells', limit: 10 } })).toThrow(/argument is not allowed: sql/)

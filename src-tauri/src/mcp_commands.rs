@@ -495,12 +495,14 @@ pub fn validate_rd_tool_call(name: &str, arguments: &Value) -> Result<(), String
         ],
         "rd_exp_list" => &[],
         "rd_exp_get_experiment" => &["experiment_id"],
-        "rd_exp_get_run" | "rd_exp_input" | "rd_exp_result" | "rd_exp_model" | "rd_exp_lineage" => {
+        "rd_exp_get_run" | "rd_exp_input" | "rd_exp_result" | "rd_exp_model" | "rd_exp_blotter" | "rd_exp_lineage" => {
             &["run_id", "experiment_id"]
         }
         "rd_trace_start" => &["rational", "details", "experiment_name", "evolved_from"],
         "rd_trace_get" => &["experiment_id"],
         "rd_trace_list" => &["limit"],
+        "rd_validate_workflow" => &["config_yaml"],
+        "rd_run_workflow" => &["config_yaml", "experiment_name"],
         "rd_train" => &[
             "wait",
             "market",
@@ -543,6 +545,24 @@ pub fn validate_rd_tool_call(name: &str, arguments: &Value) -> Result<(), String
         .ok_or_else(|| "R&D arguments must be an object".to_string())?;
     if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
         return Err(format!("R&D argument is not allowed: {key}"));
+    }
+    if name == "rd_validate_workflow" || name == "rd_run_workflow" {
+        let yaml = object
+            .get("config_yaml")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "R&D config_yaml must be a string".to_string())?;
+        if yaml.trim().is_empty() || yaml.len() > 128 * 1024 {
+            return Err("R&D config_yaml must be non-empty and no larger than 128 KiB".into());
+        }
+        if name == "rd_run_workflow" {
+            let experiment_name = object
+                .get("experiment_name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "R&D experiment_name must be a string".to_string())?;
+            if experiment_name.trim().is_empty() || experiment_name.len() > 64 {
+                return Err("R&D experiment_name must be 1-64 characters".into());
+            }
+        }
     }
     Ok(())
 }
@@ -855,6 +875,31 @@ mod tests {
                 .is_err()
         );
         assert!(validate_rd_tool_call("delete_experiment", &json!({})).is_err());
+    }
+
+    #[test]
+    fn rd_workflow_yaml_calls_are_bounded_and_pathless() {
+        let yaml = "experiment_name: alpha\ntask: {}";
+        assert!(validate_rd_tool_call(
+            "rd_validate_workflow",
+            &json!({"config_yaml": yaml})
+        )
+        .is_ok());
+        assert!(validate_rd_tool_call(
+            "rd_run_workflow",
+            &json!({"config_yaml": yaml, "experiment_name": "alpha"})
+        )
+        .is_ok());
+        assert!(validate_rd_tool_call(
+            "rd_run_workflow",
+            &json!({"config_yaml": yaml, "experiment_name": "alpha", "config_path": "/tmp/x"})
+        )
+        .is_err());
+        assert!(validate_rd_tool_call(
+            "rd_validate_workflow",
+            &json!({"config_yaml": "x".repeat(128 * 1024 + 1)})
+        )
+        .is_err());
     }
 
     #[test]
