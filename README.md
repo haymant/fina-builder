@@ -38,15 +38,17 @@ version is [`fina.toml`](./fina.toml), driven by [`scripts/fina.mjs`](./scripts/
 ```bash
 node scripts/fina.mjs doctor
 node scripts/fina.mjs config --json
+node scripts/fina.mjs --profile ci config --json
 node scripts/fina.mjs dev
 node scripts/fina.mjs build
 node scripts/fina.mjs test
 ```
 
 Read [FINA.md](./FINA.md) for the control-plane requirements, configuration contract,
-current scope, and the planned experiment/release extensions. Existing `npm run ...`
-commands remain supported; the launcher currently delegates to them rather than
-duplicating their implementation.
+current scope, profile/path contract, and the planned experiment/release extensions.
+`npm run test:control-plane` runs the focused launcher contract tests. Existing `npm run ...`
+commands remain supported; the launcher delegates to them rather than duplicating their
+implementation.
 
 ## Requirements
 

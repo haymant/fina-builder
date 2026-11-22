@@ -17,6 +17,7 @@
     "tauri:dev:cuda": "node scripts/tauri-cuda.mjs dev",
     "tauri:dev:stable-webview": "bash scripts/dev-linux-stable-webview.sh",
     "runtime:prepare": "node scripts/prepare-runtimes.mjs",
+    "test:control-plane": "node --test scripts/fina.control-plane.node.mjs",
     "watch:renderer": "bash scripts/watch-renderer.sh",
     "tauri:build": "tauri build",
     "tauri:build:cpu": "tauri build",

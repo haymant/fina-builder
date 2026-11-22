@@ -2,40 +2,31 @@
 /**
  * Fina Builder control plane.
  *
- * This first version deliberately uses only Node's standard library. It reads the
- * repository-owned fina.toml, validates the checkout, and delegates lifecycle
- * commands to the existing package scripts. It is the stable user/CI entry point;
- * package managers and Git plumbing remain implementation details behind it.
+ * This launcher owns project discovery, profile-aware path resolution, environment
+ * construction, diagnostics, and dispatch. Ecosystem lockfiles and existing npm
+ * scripts remain authoritative behind this stable interface.
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const START_DIR = process.cwd();
 const CONFIG_NAME = "fina.toml";
-
-function fail(message, code = 1) {
-  console.error(`fina: ${message}`);
-  process.exitCode = code;
-}
+const DEFAULT_PROFILE = "development";
+const SUPPORTED_CONFIG_VERSION = 1;
 
 function stripComment(line) {
   let quoted = false;
   let escaped = false;
   for (let index = 0; index < line.length; index += 1) {
     const char = line[index];
-    if (escaped) {
-      escaped = false;
-    } else if (char === "\\" && quoted) {
-      escaped = true;
-    } else if (char === '"') {
-      quoted = !quoted;
-    } else if (char === "#" && !quoted) {
-      return line.slice(0, index);
-    }
+    if (escaped) escaped = false;
+    else if (char === "\\" && quoted) escaped = true;
+    else if (char === '"') quoted = !quoted;
+    else if (char === "#" && !quoted) return line.slice(0, index);
   }
   return line;
 }
@@ -57,14 +48,23 @@ function parseValue(raw, source, lineNumber) {
     const items = [];
     let current = "";
     let quoted = false;
+    let escaped = false;
     for (const char of body) {
+      if (escaped) {
+        current += char;
+        escaped = false;
+        continue;
+      }
+      if (char === "\\" && quoted) {
+        current += char;
+        escaped = true;
+        continue;
+      }
       if (char === '"') quoted = !quoted;
       if (char === "," && !quoted) {
         items.push(parseValue(current, source, lineNumber));
         current = "";
-      } else {
-        current += char;
-      }
+      } else current += char;
     }
     if (current.trim()) items.push(parseValue(current, source, lineNumber));
     return items;
@@ -73,7 +73,7 @@ function parseValue(raw, source, lineNumber) {
 }
 
 /** Parse the intentionally small TOML subset used by fina.toml. */
-function parseToml(text, source) {
+export function parseToml(text, source = "fina.toml") {
   const result = {};
   let section = result;
   for (const [index, original] of text.split(/\r?\n/).entries()) {
@@ -100,14 +100,12 @@ function parseToml(text, source) {
       let target = section;
       for (const part of parts.slice(0, -1)) target = target[part] ??= {};
       target[parts.at(-1)] = parseValue(assignment[2], source, lineNumber);
-    } else {
-      section[key] = parseValue(assignment[2], source, lineNumber);
-    }
+    } else section[key] = parseValue(assignment[2], source, lineNumber);
   }
   return result;
 }
 
-function findRoot(start) {
+export function findRoot(start) {
   let current = resolve(start);
   while (true) {
     if (existsSync(join(current, CONFIG_NAME))) return current;
@@ -117,8 +115,73 @@ function findRoot(start) {
   }
 }
 
-function loadProject() {
-  const root = findRoot(START_DIR) ?? findRoot(SCRIPT_DIR);
+function requireString(value, label) {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be a non-empty string`);
+  return value.trim();
+}
+
+export function resolvePath(root, value, label = "path") {
+  const path = requireString(value, label);
+  return isAbsolute(path) ? resolve(path) : resolve(root, path);
+}
+
+export function selectProfile(config, profile = DEFAULT_PROFILE) {
+  const selected = profile?.trim() || DEFAULT_PROFILE;
+  const profiles = config.profiles;
+  if (!profiles || typeof profiles[selected] !== "object" || Array.isArray(profiles[selected])) {
+    const available = profiles ? Object.keys(profiles).join(", ") : "none";
+    throw new Error(`unknown profile '${selected}' (available: ${available})`);
+  }
+  return { name: selected, values: profiles[selected] };
+}
+
+export function resolveProject(project, profile = DEFAULT_PROFILE) {
+  const selected = selectProfile(project.config, profile);
+  const paths = project.config.paths ?? {};
+  const profileDataRoot = selected.values.data_root ?? paths.local_data;
+  const resolvedPaths = {
+    frontend: resolvePath(project.root, paths.frontend, "paths.frontend"),
+    rust_workspace: resolvePath(project.root, paths.rust_workspace, "paths.rust_workspace"),
+    rust_target: resolvePath(project.root, paths.rust_target, "paths.rust_target"),
+    skills: resolvePath(project.root, paths.skills, "paths.skills"),
+    modules: resolvePath(project.root, paths.modules, "paths.modules"),
+    qlib: resolvePath(project.root, paths.qlib, "paths.qlib"),
+    data_root: resolvePath(project.root, profileDataRoot, "profile data_root"),
+    local_data: resolvePath(project.root, paths.local_data, "paths.local_data"),
+    experiment_repository: resolvePath(project.root, paths.experiment_repository, "paths.experiment_repository"),
+    mcp_manifest: resolvePath(project.root, project.config.mcp?.manifest, "mcp.manifest"),
+  };
+  resolvedPaths.tac_lake = resolvePath(project.root, selected.values.tac_lake ?? join(profileDataRoot, "lake"), "profile tac_lake");
+  resolvedPaths.nip_data = resolvePath(project.root, selected.values.nip_data ?? join(profileDataRoot, "nip"), "profile nip_data");
+  resolvedPaths.nip_lake = resolvePath(project.root, selected.values.nip_lake ?? join(profileDataRoot, "nip", "lake"), "profile nip_lake");
+  return {
+    ...project,
+    profile: selected.name,
+    profile_config: selected.values,
+    paths: resolvedPaths,
+  };
+}
+
+export function buildRuntimeEnvironment(project, baseEnv = process.env) {
+  const releaseTarget = join(project.paths.rust_target, "release");
+  return {
+    FINA_PROFILE: project.profile,
+    FINA_ROOT: project.root,
+    FINA_WORKSPACE_ROOT: project.root,
+    FINA_DATA_ROOT: project.paths.data_root,
+    FINA_RUST_TARGET_DIR: project.paths.rust_target,
+    FINA_QLIB_ROOT: project.paths.qlib,
+    CARGO_TARGET_DIR: baseEnv.CARGO_TARGET_DIR ?? project.paths.rust_target,
+    TAC_LAKE_DIR: baseEnv.TAC_LAKE_DIR ?? project.paths.tac_lake,
+    NIP_DATA_DIR: baseEnv.NIP_DATA_DIR ?? project.paths.nip_data,
+    NIP_LAKE_DIR: baseEnv.NIP_LAKE_DIR ?? project.paths.nip_lake,
+    TAC_ENGINE_BIN: baseEnv.TAC_ENGINE_BIN ?? join(releaseTarget, process.platform === "win32" ? "tac-engine.exe" : "tac-engine"),
+    TAC_QLIB_PYTHON_BIN: baseEnv.TAC_QLIB_PYTHON_BIN ?? join(project.paths.modules, ".venv", process.platform === "win32" ? "Scripts" : "bin", "python"),
+  };
+}
+
+export function loadProject(start = START_DIR, requestedProfile = DEFAULT_PROFILE) {
+  const root = findRoot(start) ?? findRoot(SCRIPT_DIR);
   if (!root) throw new Error(`could not find ${CONFIG_NAME}; run this command inside a Fina Builder checkout`);
   const configPath = join(root, CONFIG_NAME);
   let config;
@@ -127,18 +190,15 @@ function loadProject() {
   } catch (error) {
     throw new Error(error instanceof Error ? error.message : String(error));
   }
-  if (config.project?.name !== "fina-builder") {
-    throw new Error(`${configPath}: project.name must be \"fina-builder\"`);
+  if (config.project?.name !== "fina-builder") throw new Error(`${configPath}: project.name must be "fina-builder"`);
+  if (config.project?.config_version !== SUPPORTED_CONFIG_VERSION) {
+    throw new Error(`${configPath}: project.config_version must be ${SUPPORTED_CONFIG_VERSION}`);
   }
-  return { root, config, configPath };
+  return resolveProject({ root, config, configPath }, requestedProfile);
 }
 
 function commandName() {
   return process.platform === "win32" ? "npm.cmd" : "npm";
-}
-
-function resolvePath(root, value) {
-  return isAbsolute(value) ? value : resolve(root, value);
 }
 
 function versionParts(value) {
@@ -146,7 +206,7 @@ function versionParts(value) {
   return match ? match.slice(1).map(Number) : null;
 }
 
-function atLeast(actual, minimum) {
+export function atLeast(actual, minimum) {
   const a = versionParts(actual);
   const b = versionParts(minimum);
   if (!a || !b) return false;
@@ -166,9 +226,7 @@ function runProcess(command, args, options = {}) {
       shell: false,
     });
     child.on("error", reject);
-    child.on("exit", (code, signal) => {
-      resolvePromise(signal ? 1 : code ?? 1);
-    });
+    child.on("exit", (code, signal) => resolvePromise(signal ? 1 : code ?? 1));
   });
 }
 
@@ -184,33 +242,37 @@ async function capture(command, args, cwd) {
 }
 
 function printHelp() {
-  console.log(`Fina Builder control plane\n\nUsage:\n  fina <command> [options]\n\nControl-plane commands:\n  help                 Show this help\n  config [--json]      Print the resolved fina.toml configuration\n  doctor [--json]      Check the checkout and required development tools\n  run <name> [args...] Run a command declared in fina.toml\n\nConfigured command aliases:\n  dev, web, dev_http, build, test, lint, runtime_prepare, package\n\nExamples:\n  node scripts/fina.mjs doctor\n  node scripts/fina.mjs dev\n  node scripts/fina.mjs run build\n  node scripts/fina.mjs config --json`);
+  console.log(`Fina Builder control plane\n\nUsage:\n  fina [--profile <name>] <command> [options]\n\nControl-plane commands:\n  help                 Show this help\n  config [--json]      Print the resolved fina.toml configuration\n  doctor [--json]      Check the checkout and required development tools\n  run <name> [args...] Run a command declared in fina.toml\n\nProfiles:\n  development          Local checkout and ignored .fina/data root (default)\n  ci                   CI paths and release Rust build policy\n  packaged             Immutable-install layout with external data root\n\nConfigured command aliases:\n  dev, web, dev_http, desktop, build, test, lint, runtime_prepare, package`);
 }
 
 function printConfig(project, json) {
-  const resolved = {
+  const output = {
     ...project.config,
     _resolved: {
       root: project.root,
       config: project.configPath,
+      profile: project.profile,
+      profile_config: project.profile_config,
       workspace_root: project.root,
-      skills: resolvePath(project.root, project.config.paths.skills),
-      mcp_manifest: resolvePath(project.root, project.config.mcp.manifest),
-      data_root: resolvePath(project.root, project.config.profiles.development.data_root),
+      ...project.paths,
     },
   };
-  console.log(json ? JSON.stringify(resolved, null, 2) : JSON.stringify(resolved, null, 2));
+  console.log(json ? JSON.stringify(output, null, 2) : JSON.stringify(output, null, 2));
 }
 
-async function doctor(project, json) {
+export async function doctor(project, json) {
   const checks = [];
   const add = (name, ok, detail, required = true) => checks.push({ name, ok, detail, required });
-  const nodeMin = project.config.toolchain.node_min;
+  const nodeMin = project.config.toolchain?.node_min;
   add("node", atLeast(process.versions.node, nodeMin), `${process.versions.node} (minimum ${nodeMin})`);
+  add("config version", project.config.project?.config_version === SUPPORTED_CONFIG_VERSION, `supported version ${SUPPORTED_CONFIG_VERSION}`);
   add("fina.toml", existsSync(project.configPath), project.configPath);
   add("package.json", existsSync(join(project.root, "package.json")), join(project.root, "package.json"));
-  add("skills", existsSync(resolvePath(project.root, project.config.paths.skills)), resolvePath(project.root, project.config.paths.skills));
-  add("MCP manifest", existsSync(resolvePath(project.root, project.config.mcp.manifest)), resolvePath(project.root, project.config.mcp.manifest), false);
+  add("version source", existsSync(join(project.root, project.config.project.version_source)), project.config.project.version_source);
+  add("skills", existsSync(project.paths.skills), project.paths.skills);
+  add("MCP manifest", existsSync(project.paths.mcp_manifest), project.paths.mcp_manifest, false);
+  add("rust toolchain", existsSync(resolvePath(project.root, project.config.toolchain.rust_toolchain_file, "rust_toolchain_file")), project.config.toolchain.rust_toolchain_file, false);
+  add("profile data root", !isAbsolute(project.profile_config.data_root), `${project.profile} → ${project.paths.data_root}`);
 
   const git = await capture("git", ["--version"], project.root);
   add("git", Boolean(git), git ?? "not found");
@@ -222,10 +284,9 @@ async function doctor(project, json) {
   add("npm", Boolean(npm), npm ?? "not found");
 
   const failed = checks.filter((check) => check.required && !check.ok);
-  if (json) {
-    console.log(JSON.stringify({ root: project.root, config: project.configPath, checks, ok: failed.length === 0 }, null, 2));
-  } else {
-    console.log(`Fina doctor — ${project.root}`);
+  if (json) console.log(JSON.stringify({ root: project.root, config: project.configPath, profile: project.profile, paths: project.paths, checks, ok: failed.length === 0 }, null, 2));
+  else {
+    console.log(`Fina doctor — ${project.root} (${project.profile})`);
     for (const check of checks) console.log(`${check.ok ? "PASS" : check.required ? "FAIL" : "WARN"}  ${check.name}: ${check.detail}`);
     console.log(failed.length ? `\n${failed.length} required check(s) failed.` : "\nAll required checks passed.");
   }
@@ -234,43 +295,51 @@ async function doctor(project, json) {
 
 async function runConfigured(project, name, args) {
   const command = project.config.commands?.[name];
-  if (typeof command !== "string" || !command.trim()) {
-    throw new Error(`command '${name}' is not declared in ${project.configPath}`);
-  }
-  // The initial schema intentionally delegates to npm scripts. Validate that
-  // contract here so quoting or a future non-npm command cannot fail silently.
+  if (typeof command !== "string" || !command.trim()) throw new Error(`command '${name}' is not declared in ${project.configPath}`);
   const match = command.trim().match(/^npm\s+run\s+([^\s]+)$/);
-  if (!match) {
-    throw new Error(`command '${name}' must currently use the form: npm run <script>`);
-  }
+  if (!match) throw new Error(`command '${name}' must currently use the form: npm run <script>`);
+  const env = buildRuntimeEnvironment(project);
   const npmArgs = ["run", match[1]];
   if (args.length) npmArgs.push("--", ...args);
-  const code = await runProcess(commandName(), npmArgs, { cwd: project.root });
-  return code;
+  return runProcess(commandName(), npmArgs, { cwd: project.root, env });
 }
 
-async function main() {
-  const [, , requested = "help", ...args] = process.argv;
-  const project = loadProject();
+function parseInvocation(argv) {
+  let profile = DEFAULT_PROFILE;
+  const remaining = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (value === "--profile") {
+      profile = argv[++index];
+      if (!profile) throw new Error("--profile requires a profile name");
+    } else if (value.startsWith("--profile=")) profile = value.slice("--profile=".length);
+    else remaining.push(value);
+  }
+  return { profile, args: remaining };
+}
+
+export async function main(argv = process.argv.slice(2), start = START_DIR) {
+  const invocation = parseInvocation(argv);
+  const [requested = "help", ...args] = invocation.args;
+  const project = loadProject(start, invocation.profile);
   const command = requested === "run" ? args.shift() : requested;
   if (!command || command === "help" || command === "--help" || command === "-h") {
     printHelp();
-    return;
+    return 0;
   }
   if (command === "config") {
     printConfig(project, args.includes("--json"));
-    return;
+    return 0;
   }
-  if (command === "doctor") {
-    process.exitCode = await doctor(project, args.includes("--json"));
-    return;
+  if (command === "doctor") return doctor(project, args.includes("--json"));
+  if (command === "run" || !project.config.commands?.[command]) {
+    throw new Error(command === "run" ? "run requires a command name; use `fina help`" : `unknown command '${command}'; use 'fina help'`);
   }
-  if (command === "run") throw new Error("run requires a command name; use `fina run help` or `fina help`");
-  if (project.config.commands?.[command]) {
-    process.exitCode = await runConfigured(project, command, args);
-    return;
-  }
-  throw new Error(`unknown command '${command}'; use \'fina help\'`);
+  return runConfigured(project, command, args);
 }
 
-main().catch((error) => fail(error instanceof Error ? error.message : String(error)));
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+if (isMain) main().then((code) => { process.exitCode = code; }).catch((error) => {
+  console.error(`fina: ${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
+});
