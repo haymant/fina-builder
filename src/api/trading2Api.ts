@@ -441,6 +441,7 @@ export const trading2Api = {
   getWatchlist: async (watchlistId: string) => normalizeWatchlistRecord(await call('get_watchlist', { watchlist_id: watchlistId })),
   createWatchlist: async (name: string) => normalizeWatchlistRecord(await call('create_watchlist', { name: name.trim() })),
   addWatchlistAsset: async (watchlistId: string, symbol: string) => normalizeWatchlistRecord(await call('add_watchlist_asset', { watchlist_id: watchlistId, symbol: symbol.trim().toUpperCase() })),
+  removeWatchlistAsset: async (watchlistId: string, symbol: string) => normalizeWatchlistRecord(await call('remove_watchlist_asset', { watchlist_id: watchlistId, symbol: symbol.trim().toUpperCase() })),
   getBars: async (symbol: string, start: string, end: string, timeframe = '1Day') => normalizeBars(await call('get_stock_bars', { symbols: symbol, timeframe, start, end, feed: 'iex', adjustment: 'split', limit: 1000 }), symbol),
   getLakeBars: async (symbol: string, start: string, end: string, timeframe = '1d') => normalizeBars(await call('get_lake_bars', { market: 'US', symbols: symbol.trim().toUpperCase(), timeframe, start, end, feed: 'iex', adjustment: 'raw', lazy: true }), symbol.trim().toUpperCase()),
   getQuote: async (symbol: string) => normalizeQuote(await call('get_stock_snapshot', { symbol })),
