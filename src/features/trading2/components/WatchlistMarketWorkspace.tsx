@@ -16,12 +16,33 @@ const ghostClass = 'inline-flex min-h-8 items-center justify-center gap-1.5 roun
 function money(value?: number) { return value === undefined ? '—' : `$${value.toFixed(2)}` }
 function dateOnly(value: Date) { return value.toISOString().slice(0, 10) }
 
+// Share only in-flight reads. This removes the selected-symbol duplicate while
+// avoiding a stale quote cache for later symbol changes or manual refreshes.
+const quoteRequests = new Map<string, Promise<Trading2Quote>>()
+function getQuoteOnce(symbol: string): Promise<Trading2Quote> {
+  const key = symbol.trim().toUpperCase()
+  const existing = quoteRequests.get(key)
+  if (existing) return existing
+  const request = trading2Api.getQuote(key).finally(() => quoteRequests.delete(key))
+  quoteRequests.set(key, request)
+  return request
+}
+
+function scheduleOptional(task: () => void): () => void {
+  const timer = setTimeout(task, 0)
+  return () => clearTimeout(timer)
+}
+
 function CandleChart({ bars, features, series }: { bars: Trading2Bar[]; features: Trading2FeatureRow[]; series: IndicatorSeries[] }) {
   const option = useMemo(() => {
     const visible = bars.length > 300 ? bars.slice(-300) : bars
     const dates = visible.map((bar) => bar.timestamp.slice(0, 16))
     const keys = new Map<string, Trading2FeatureRow>()
-    for (const row of features) keys.set(row.timestamp, row)
+    const dateKeys = new Map<string, Trading2FeatureRow>()
+    for (const row of features) {
+      keys.set(row.timestamp, row)
+      dateKeys.set(row.timestamp.slice(0, 10), row)
+    }
     const panes = ['price', ...Array.from(new Set(series.filter((item) => item.pane !== 'price').map((item) => item.pane)))]
     const paneIndex = (pane: string) => Math.max(0, panes.indexOf(pane))
     const height = panes.length === 1 ? 70 : panes.length === 2 ? 56 : 42
@@ -31,7 +52,7 @@ function CandleChart({ bars, features, series }: { bars: Trading2Bar[]; features
     const outSeries: Record<string, unknown>[] = [{ name: 'Candlestick', type: 'candlestick', xAxisIndex: 0, yAxisIndex: 0, data: visible.map((bar) => [bar.open ?? null, bar.close ?? null, bar.low ?? null, bar.high ?? null]), itemStyle: { color: '#16a34a', color0: '#dc2626', borderColor: '#16a34a', borderColor0: '#dc2626' } }]
     for (const item of series) {
       const data = visible.map((bar) => {
-        const row = keys.get(bar.timestamp) ?? features.find((feature) => feature.timestamp.slice(0, 10) === bar.timestamp.slice(0, 10))
+        const row = keys.get(bar.timestamp) ?? dateKeys.get(bar.timestamp.slice(0, 10))
         if (item.key === 'volume') return bar.volume ?? null
         const value = row?.[item.key]
         return typeof value === 'number' && Number.isFinite(value) ? value : null
@@ -57,7 +78,13 @@ function OptionChain({ options }: { options: Trading2Option[] }) { const expirat
 export function WatchlistMarketWorkspace({ watchlists, selected, onWatchlistsChange, onSelectedChange }: { watchlists: Trading2Watchlist[]; selected: Trading2Watchlist | null; onWatchlistsChange: (lists: Trading2Watchlist[]) => void; onSelectedChange: (list: Trading2Watchlist | null) => void }) {
   const [symbol, setSymbol] = useState(selected?.symbols[0] ?? ''); const [newName, setNewName] = useState(''); const [bars, setBars] = useState<Trading2Bar[]>([]); const [quote, setQuote] = useState<Trading2Quote | null>(null); const [options, setOptions] = useState<Trading2Option[]>([]); const [rowQuotes, setRowQuotes] = useState<Record<string, Trading2Quote>>({}); const [marketError, setMarketError] = useState(''); const [range, setRange] = useState(180); const [runOpen, setRunOpen] = useState(false); const [pendingAction, setPendingAction] = useState<{ kind: 'create' | 'add'; value: string } | null>(null); const [selection, setSelection] = useState<SelectedIndicator[]>(DEFAULT_SELECTION); const [includeVolume, setIncludeVolume] = useState(DEFAULT_INCLUDE_VOLUME); const [persistFeatures, setPersistFeatures] = useState(false); const [features, setFeatures] = useState<Trading2FeatureRow[]>([]); const [featureError, setFeatureError] = useState(''); const [barsReady, setBarsReady] = useState<{ symbol: string; range: number } | null>(null)
   useEffect(() => { if (selected && !selected.symbols.includes(symbol)) setSymbol(selected.symbols[0] ?? '') }, [selected?.id, selected?.symbols.join(',')])
-  useEffect(() => { let cancelled = false; Promise.all((selected?.symbols ?? []).map(async (item) => [item, await trading2Api.getQuote(item)] as const)).then((entries) => { if (!cancelled) setRowQuotes(Object.fromEntries(entries)) }).catch(() => { if (!cancelled) setRowQuotes({}) }); return () => { cancelled = true } }, [selected?.id, selected?.symbols.join(',')])
+  useEffect(() => {
+    let cancelled = false
+    const cancelSchedule = scheduleOptional(() => {
+      Promise.all((selected?.symbols ?? []).map(async (item) => [item, await getQuoteOnce(item)] as const)).then((entries) => { if (!cancelled) setRowQuotes(Object.fromEntries(entries)) }).catch(() => { if (!cancelled) setRowQuotes({}) })
+    })
+    return () => { cancelled = true; cancelSchedule() }
+  }, [selected?.id, selected?.symbols.join(',')])
   useEffect(() => {
     if (!symbol) { setBars([]); setBarsReady(null); return }
     const end = new Date(); const start = new Date(); start.setUTCDate(end.getUTCDate() - range)
@@ -75,12 +102,14 @@ export function WatchlistMarketWorkspace({ watchlists, selected, onWatchlistsCha
   useEffect(() => {
     if (!symbol) { setQuote(null); setOptions([]); return }
     let cancelled = false
-    Promise.allSettled([trading2Api.getQuote(symbol), trading2Api.getOptionChain(symbol)]).then(([nextQuote, nextOptions]) => {
-      if (cancelled) return
-      setQuote(nextQuote.status === 'fulfilled' ? nextQuote.value : null)
-      setOptions(nextOptions.status === 'fulfilled' ? nextOptions.value : [])
+    const cancelSchedule = scheduleOptional(() => {
+      Promise.allSettled([getQuoteOnce(symbol), trading2Api.getOptionChain(symbol)]).then(([nextQuote, nextOptions]) => {
+        if (cancelled) return
+        setQuote(nextQuote.status === 'fulfilled' ? nextQuote.value : null)
+        setOptions(nextOptions.status === 'fulfilled' ? nextOptions.value : [])
+      })
     })
-    return () => { cancelled = true }
+    return () => { cancelled = true; cancelSchedule() }
   }, [symbol])
   useEffect(() => {
     if (!symbol) { setFeatures([]); return }
