@@ -86,38 +86,48 @@ function scheduleOptional(task: () => void, delay = 0): () => void {
   return () => clearTimeout(timer)
 }
 
+const CANDLE_ITEM_STYLE = {
+  color: '#16a34a',
+  color0: '#dc2626',
+  borderColor: '#166534',
+  borderColor0: '#991b1b',
+  borderWidth: 1.5,
+}
+
+export function buildCandleChartOption(bars: Trading2Bar[], features: Trading2FeatureRow[], series: IndicatorSeries[], vixBars: MacroBar[]) {
+  const visible = bars.length > 300 ? bars.slice(-300) : bars
+  const dates = visible.map((bar) => bar.timestamp.slice(0, 16))
+  const keys = new Map<string, Trading2FeatureRow>()
+  const dateKeys = new Map<string, Trading2FeatureRow>()
+  for (const row of features) {
+    keys.set(row.timestamp, row)
+    dateKeys.set(row.timestamp.slice(0, 10), row)
+  }
+  const panes = ['price', ...Array.from(new Set(series.filter((item) => item.pane !== 'price').map((item) => item.pane))), ...(vixBars.length ? ['vix'] : [])]
+  const paneIndex = (pane: string) => Math.max(0, panes.indexOf(pane))
+  const height = panes.length === 1 ? 70 : panes.length === 2 ? 56 : 42
+  const grid = panes.map((_, index) => ({ left: 52, right: 18, top: 30 + index * (height + 8) + '%', height: `${height}%` }))
+  const xAxis = panes.map((_, index) => ({ type: 'category', data: dates, gridIndex: index, boundaryGap: true, axisLabel: { show: index === panes.length - 1, fontSize: 10 } }))
+  const yAxis = panes.map((_, index) => ({ type: 'value', scale: true, gridIndex: index, axisLabel: { fontSize: 9 } }))
+  const outSeries: Record<string, unknown>[] = [{ name: 'Candlestick', type: 'candlestick', xAxisIndex: 0, yAxisIndex: 0, data: visible.map((bar) => [bar.open ?? null, bar.close ?? null, bar.low ?? null, bar.high ?? null]), itemStyle: { ...CANDLE_ITEM_STYLE } }]
+  for (const item of series) {
+    const data = visible.map((bar) => {
+      const row = keys.get(bar.timestamp) ?? dateKeys.get(bar.timestamp.slice(0, 10))
+      if (item.key === 'volume') return bar.volume ?? null
+      const value = row?.[item.key]
+      return typeof value === 'number' && Number.isFinite(value) ? value : null
+    })
+    outSeries.push({ name: item.label, type: item.kind === 'bar' ? 'bar' : 'line', xAxisIndex: paneIndex(item.pane), yAxisIndex: paneIndex(item.pane), data, showSymbol: false, smooth: true, lineStyle: { width: 1.4 }, itemStyle: { color: item.color } })
+  }
+  if (vixBars.length) {
+    const byDate = new Map(vixBars.map((bar) => [bar.t.slice(0, 10), [bar.o, bar.c, bar.l, bar.h]]))
+    outSeries.push({ name: 'VIX', type: 'candlestick', xAxisIndex: paneIndex('vix'), yAxisIndex: paneIndex('vix'), data: dates.map((date) => byDate.get(date.slice(0, 10)) ?? [null, null, null, null]), itemStyle: { ...CANDLE_ITEM_STYLE } })
+  }
+  return { animation: false, grid, xAxis, yAxis, legend: { top: 3, type: 'scroll', data: ['Candlestick', ...series.map((item) => item.label), ...(vixBars.length ? ['VIX'] : [])], textStyle: { fontSize: 10 } }, tooltip: { trigger: 'axis' }, dataZoom: [{ type: 'inside', xAxisIndex: panes.map((_, index) => index), start: 0, end: 100 }, { type: 'slider', xAxisIndex: panes.map((_, index) => index), bottom: 6, height: 18, start: 0, end: 100 }], series: outSeries }
+}
+
 function CandleChart({ bars, features, series, vixBars }: { bars: Trading2Bar[]; features: Trading2FeatureRow[]; series: IndicatorSeries[]; vixBars: MacroBar[] }) {
-  const option = useMemo(() => {
-    const visible = bars.length > 300 ? bars.slice(-300) : bars
-    const dates = visible.map((bar) => bar.timestamp.slice(0, 16))
-    const keys = new Map<string, Trading2FeatureRow>()
-    const dateKeys = new Map<string, Trading2FeatureRow>()
-    for (const row of features) {
-      keys.set(row.timestamp, row)
-      dateKeys.set(row.timestamp.slice(0, 10), row)
-    }
-    const panes = ['price', ...Array.from(new Set(series.filter((item) => item.pane !== 'price').map((item) => item.pane))), ...(vixBars.length ? ['vix'] : [])]
-    const paneIndex = (pane: string) => Math.max(0, panes.indexOf(pane))
-    const height = panes.length === 1 ? 70 : panes.length === 2 ? 56 : 42
-    const grid = panes.map((_, index) => ({ left: 52, right: 18, top: 30 + index * (height + 8) + '%', height: `${height}%` }))
-    const xAxis = panes.map((_, index) => ({ type: 'category', data: dates, gridIndex: index, boundaryGap: true, axisLabel: { show: index === panes.length - 1, fontSize: 10 } }))
-    const yAxis = panes.map((_, index) => ({ type: 'value', scale: true, gridIndex: index, axisLabel: { fontSize: 9 } }))
-    const outSeries: Record<string, unknown>[] = [{ name: 'Candlestick', type: 'candlestick', xAxisIndex: 0, yAxisIndex: 0, data: visible.map((bar) => [bar.open ?? null, bar.close ?? null, bar.low ?? null, bar.high ?? null]), itemStyle: { color: '#16a34a', color0: '#dc2626', borderColor: '#16a34a', borderColor0: '#dc2626' } }]
-    for (const item of series) {
-      const data = visible.map((bar) => {
-        const row = keys.get(bar.timestamp) ?? dateKeys.get(bar.timestamp.slice(0, 10))
-        if (item.key === 'volume') return bar.volume ?? null
-        const value = row?.[item.key]
-        return typeof value === 'number' && Number.isFinite(value) ? value : null
-      })
-      outSeries.push({ name: item.label, type: item.kind === 'bar' ? 'bar' : 'line', xAxisIndex: paneIndex(item.pane), yAxisIndex: paneIndex(item.pane), data, showSymbol: false, smooth: true, lineStyle: { width: 1.4 }, itemStyle: { color: item.color } })
-    }
-    if (vixBars.length) {
-      const byDate = new Map(vixBars.map((bar) => [bar.t.slice(0, 10), [bar.o, bar.c, bar.l, bar.h]]))
-      outSeries.push({ name: 'VIX', type: 'candlestick', xAxisIndex: paneIndex('vix'), yAxisIndex: paneIndex('vix'), data: dates.map((date) => byDate.get(date.slice(0, 10)) ?? [null, null, null, null]), itemStyle: { color: '#16a34a', color0: '#dc2626', borderColor: '#16a34a', borderColor0: '#dc2626' } })
-    }
-    return { animation: false, grid, xAxis, yAxis, legend: { top: 3, type: 'scroll', data: ['Candlestick', ...series.map((item) => item.label), ...(vixBars.length ? ['VIX'] : [])], textStyle: { fontSize: 10 } }, tooltip: { trigger: 'axis' }, dataZoom: [{ type: 'inside', xAxisIndex: panes.map((_, index) => index), start: 0, end: 100 }, { type: 'slider', xAxisIndex: panes.map((_, index) => index), bottom: 6, height: 18, start: 0, end: 100 }], series: outSeries }
-  }, [bars, features, series, vixBars])
+  const option = useMemo(() => buildCandleChartOption(bars, features, series, vixBars), [bars, features, series, vixBars])
   return bars.length ? <Chart option={option} style={{ height: 560, width: '100%' }} /> : <div className="flex h-[560px] items-center justify-center text-xs text-muted">No bar data for this symbol and date range.</div>
 }
 

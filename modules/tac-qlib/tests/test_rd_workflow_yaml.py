@@ -143,6 +143,22 @@ def test_rejects_oversized_yaml():
         prepare(VALID + ("#" + "x" * (128 * 1024)))
 
 
+def test_validation_returns_actionable_mcp_error_for_lake_preflight_failure(tmp_path, monkeypatch):
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from tac_qlib import rd_server
+    from tac_qlib.data import config
+
+    monkeypatch.setattr(config, "resolve_lake_root", lambda _root: tmp_path)
+
+    def fail_preflight(**_kwargs):
+        raise ValueError("lake calendar is empty; seed it first with tac-engine backfill_lake_calendar")
+
+    monkeypatch.setattr(rd_server, "rd_dataset", fail_preflight)
+    with pytest.raises(ToolError, match="lake calendar is empty"):
+        rd_server.rd_validate_workflow(VALID)
+
+
 def test_submitted_workflow_is_staged_privately_and_cleaned(tmp_path, monkeypatch):
     from pathlib import Path
 

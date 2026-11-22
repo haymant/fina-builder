@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime as _dt
 import copy
 import json
+import logging
 import os
 import pickle
 import re
@@ -40,6 +41,7 @@ import numpy as np
 import pandas as pd
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from tac_qlib.risk_limits import parse_limits
 
@@ -1330,42 +1332,57 @@ def _cleanup_submitted_workflow(config_path: str) -> None:
 @server.tool(structured_output=False)
 def rd_validate_workflow(config_yaml: str) -> dict:
     """Validate bounded workflow YAML and preflight its lake data without creating a run."""
-    from tac_qlib.data.config import resolve_lake_root
-    from tac_qlib.workflows.rd_workflow_yaml import prepare_rd_workflow_yaml
+    try:
+        from tac_qlib.data.config import resolve_lake_root
+        from tac_qlib.workflows.rd_workflow_yaml import prepare_rd_workflow_yaml
 
-    lake = str(resolve_lake_root(None).resolve())
-    runtime_cfg, summary, _normalized = prepare_rd_workflow_yaml(
-        config_yaml, lake_root=lake
-    )
-    task = runtime_cfg["task"]
-    handler = task["dataset"]["kwargs"]["handler"]["kwargs"]
-    segments = task["dataset"]["kwargs"]["segments"]
-    data = rd_dataset(
-        lake_root=lake,
-        market=handler["market"],
-        universe=handler["instruments"],
-        start_time=handler["start_time"],
-        end_time=handler["end_time"],
-        fit_start_time=handler["fit_start_time"],
-        fit_end_time=handler["fit_end_time"],
-        freq=handler["freq"],
-        features=handler["feature_fields"],
-        label=handler["label"],
-        train_start=segments["train"][0],
-        train_end=segments["train"][1],
-        valid_start=segments["valid"][0],
-        valid_end=segments["valid"][1],
-        test_start=segments["test"][0],
-        test_end=segments["test"][1],
-    )
-    summary["dataset_preflight"] = {
-        "universe_size": data["universe_size"],
-        "universe": data["universe"],
-        "segments": data["segments"],
-        "feature_fields": data["feature_fields"],
-        "all_nan_dropped": data["all_nan_dropped"],
-    }
-    return {"valid": True, **summary}
+        lake = str(resolve_lake_root(None).resolve())
+        runtime_cfg, summary, _normalized = prepare_rd_workflow_yaml(
+            config_yaml, lake_root=lake
+        )
+        task = runtime_cfg["task"]
+        handler = task["dataset"]["kwargs"]["handler"]["kwargs"]
+        segments = task["dataset"]["kwargs"]["segments"]
+        data = rd_dataset(
+            lake_root=lake,
+            market=handler["market"],
+            universe=handler["instruments"],
+            start_time=handler["start_time"],
+            end_time=handler["end_time"],
+            fit_start_time=handler["fit_start_time"],
+            fit_end_time=handler["fit_end_time"],
+            freq=handler["freq"],
+            features=handler["feature_fields"],
+            label=handler["label"],
+            train_start=segments["train"][0],
+            train_end=segments["train"][1],
+            valid_start=segments["valid"][0],
+            valid_end=segments["valid"][1],
+            test_start=segments["test"][0],
+            test_end=segments["test"][1],
+        )
+        summary["dataset_preflight"] = {
+            "universe_size": data["universe_size"],
+            "universe": data["universe"],
+            "segments": data["segments"],
+            "feature_fields": data["feature_fields"],
+            "all_nan_dropped": data["all_nan_dropped"],
+        }
+        return {"valid": True, **summary}
+    except Exception as exc:
+        logging.getLogger(__name__).exception("rd_validate_workflow preflight failed")
+        if isinstance(exc, (ValueError, RuntimeError)):
+            detail = str(exc).strip() or type(exc).__name__
+            detail = re.sub(r"([a-z][a-z0-9+.-]*://)[^\s/@]+:[^\s/@]+@", r"\1[REDACTED]@", detail, flags=re.IGNORECASE)
+            detail = re.sub(r"(password|secret|token|api[_-]?key)\s*[=:]\s*[^\s,;]+", r"\1=[REDACTED]", detail, flags=re.IGNORECASE)
+            message = f"Workflow validation or persisted-lake preflight failed: {detail}"
+        elif isinstance(exc, (FileNotFoundError, PermissionError)):
+            message = "Could not read required data from the configured lake. Check its path and requested symbol/date/feature coverage."
+        elif isinstance(exc, (IndexError, KeyError)):
+            message = "The configured lake does not appear to cover the requested symbols or date segments. Check its calendar, bars, and features."
+        else:
+            message = f"Unexpected {type(exc).__name__} during R&D preflight. Check the R&D service log for details."
+        raise ToolError(message) from exc
 
 
 @server.tool(structured_output=False)
