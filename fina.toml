@@ -1,0 +1,56 @@
+# Fina Builder control-plane configuration.
+#
+# This file defines logical paths, supported profiles, and the commands exposed by
+# scripts/fina.mjs. It is intentionally free of secrets and machine-specific paths.
+# Keep ecosystem lockfiles (package-lock.json, Cargo.lock, uv.lock) authoritative
+# for dependency versions; do not duplicate those versions here.
+
+[project]
+name = "fina-builder"
+config_version = 1
+version_source = "package.json"
+
+[toolchain]
+node_min = "22.19.0"
+rust_toolchain_file = "rust-toolchain.toml"
+python_manager = "uv"
+
+[paths]
+frontend = "."
+rust_workspace = "."
+rust_target = "modules/target"
+skills = "skills"
+modules = "modules"
+qlib = "modules/tac-qlib"
+local_data = ".fina/data"
+experiment_repository = ".fina/experiments"
+
+[mcp]
+manifest = ".mcp.json"
+
+[profiles.development]
+use_source_modules = true
+build_mode = "debug"
+data_root = ".fina/data"
+
+[profiles.ci]
+use_source_modules = true
+build_mode = "release"
+data_root = ".fina/ci-data"
+
+[profiles.packaged]
+use_source_modules = false
+build_mode = "release"
+data_root = "platform-data"
+
+[commands]
+# Commands are delegated to the repository's existing scripts. Arguments supplied
+# after `fina <command>` are appended to the configured command.
+dev = "npm run dev"
+web = "npm run dev:web"
+dev_http = "npm run dev:http"
+build = "npm run build"
+test = "npm run test:run"
+lint = "npm run lint"
+runtime_prepare = "npm run runtime:prepare"
+package = "npm run tauri:build"

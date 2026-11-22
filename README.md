@@ -16,6 +16,7 @@ drives them.
 | Document | What it covers |
 | --- | --- |
 | **[FEATURES.md](./FEATURES.md)** | What is implemented: the engine surfaces, tiles, the chat panel and known gaps, followed by the migration specification and its completion record. |
+| **[FINA.md](./FINA.md)** | The single control-plane configuration and launcher for local development, CI, future experiments, and releases. |
 | **[AGENT-LOCAL.md](./AGENT-LOCAL.md)** | The RIGA assistant chat panel (desktop shell ↔ `riga-server`). |
 | **[docs/51-portfolio-risk-architecture.md](./docs/51-portfolio-risk-architecture.md)** | Proposed canonical portfolio/position/instrument/market/sensitivity/P&L/scenario/risk-matrix documents, the complete SQLite/PostgreSQL relational schema (ER diagram + table definitions) and the extension architecture (PROPOSAL — not implemented). |
 | **[docs/54-trade-fixing-workflows.md](./docs/54-trade-fixing-workflows.md)** | Individual and bulk Phoenix fixing capture, the due-observation queue, operational best practices and remaining correction/automation gaps. |
@@ -27,6 +28,25 @@ drives them.
 | **[docs/60-narrative-intelligence-comfyui-handoff.md](./docs/60-narrative-intelligence-comfyui-handoff.md)** | Copy-ready handoff prompt for the next agent to implement and validate the optional local ASR adapter without crossing the NIP/ComfyUI ownership boundary. |
 | **[docs/63-nip-desktop-user-journey.md](./docs/63-nip-desktop-user-journey.md)** | User journey from the desktop app through first-run setup, approved feed configuration, local transcription, extraction consent, claim/evidence review, and the narrated Playwright demonstration. |
 | [README.md](./README.md) (this file) | How to run it and how to release it. |
+
+### Single control plane
+
+The repository is moving toward one maintained control plane instead of requiring
+developers to remember separate Cargo, npm, uv, MCP, and Git commands. The initial
+version is [`fina.toml`](./fina.toml), driven by [`scripts/fina.mjs`](./scripts/fina.mjs):
+
+```bash
+node scripts/fina.mjs doctor
+node scripts/fina.mjs config --json
+node scripts/fina.mjs dev
+node scripts/fina.mjs build
+node scripts/fina.mjs test
+```
+
+Read [FINA.md](./FINA.md) for the control-plane requirements, configuration contract,
+current scope, and the planned experiment/release extensions. Existing `npm run ...`
+commands remain supported; the launcher currently delegates to them rather than
+duplicating their implementation.
 
 ## Requirements
 
