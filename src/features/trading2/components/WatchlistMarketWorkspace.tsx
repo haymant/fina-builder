@@ -140,19 +140,21 @@ export function WatchlistMarketWorkspace({ watchlists, selected, onWatchlistsCha
     const end = new Date(); const start = new Date(); start.setUTCDate(end.getUTCDate() - range)
     let cancelled = false
     setMarketError(''); setBarsReady(null)
-    getLakeBarsOnce(symbol, dateOnly(start), dateOnly(end)).then((nextBars) => {
-      if (cancelled) return
-      setBars(nextBars)
-      // TA/SP must run after the lazy bar fetch has persisted the bars: get_lake_ta
-      // only reads the lake and returns nothing while the bar file is missing.
-      setBarsReady({ symbol, range })
-    }).catch((cause) => { if (!cancelled) { setBars([]); setMarketError(cause instanceof Trading2Error ? cause.message : String(cause)) } })
-    return () => { cancelled = true }
+    const timer = window.setTimeout(() => {
+      getLakeBarsOnce(symbol, dateOnly(start), dateOnly(end)).then((nextBars) => {
+        if (cancelled) return
+        setBars(nextBars)
+        // TA/SP must run after the lazy bar fetch has persisted the bars: get_lake_ta
+        // only reads the lake and returns nothing while the bar file is missing.
+        setBarsReady({ symbol, range })
+      }).catch((cause) => { if (!cancelled) { setBars([]); setMarketError(cause instanceof Trading2Error ? cause.message : String(cause)) } })
+    }, 180)
+    return () => { cancelled = true; window.clearTimeout(timer) }
   }, [symbol, range])
   useEffect(() => {
     if (!symbol) { setQuote(null); setOptions([]); return }
-    if (barsReady?.symbol !== symbol || barsReady.range !== range) return
     let cancelled = false
+    setQuote(null); setOptions([])
     const cancelSchedule = scheduleOptional(() => {
       selectedDetailsQueue.enqueue(async () => {
         const [nextQuote, nextOptions] = await Promise.allSettled([getQuoteOnce(symbol), trading2Api.getOptionChain(symbol)])
@@ -164,7 +166,7 @@ export function WatchlistMarketWorkspace({ watchlists, selected, onWatchlistsCha
       })
     })
     return () => { cancelled = true; cancelSchedule() }
-  }, [symbol, range, barsReady])
+  }, [symbol])
   useEffect(() => {
     if (!symbol) { setFeatures([]); return }
     if (barsReady?.symbol !== symbol || barsReady?.range !== range) { setFeatures([]); return }
