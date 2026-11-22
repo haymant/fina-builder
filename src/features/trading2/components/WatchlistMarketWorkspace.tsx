@@ -30,16 +30,50 @@ function getQuoteOnce(symbol: string): Promise<Trading2Quote> {
 
 const barsCache = new Map<string, Trading2Bar[]>()
 const barsRequests = new Map<string, Promise<Trading2Bar[]>>()
+class LatestRequestQueue<T> {
+  private active = false
+  private pending: { run: () => Promise<T>; resolve: (value: T) => void; reject: (reason: unknown) => void } | null = null
+
+  enqueue(run: () => Promise<T>, staleValue: T): Promise<T> {
+    const promise = new Promise<T>((resolve, reject) => {
+      if (this.pending) this.pending.resolve(staleValue)
+      this.pending = { run, resolve, reject }
+    })
+    void this.pump()
+    return promise
+  }
+
+  private async pump() {
+    if (this.active || !this.pending) return
+    this.active = true
+    const task = this.pending
+    this.pending = null
+    try {
+      task.resolve(await task.run())
+    } catch (cause) {
+      task.reject(cause)
+    } finally {
+      this.active = false
+      if (this.pending) void this.pump()
+    }
+  }
+}
+
+const barsQueue = new LatestRequestQueue<Trading2Bar[]>()
+const selectedDetailsQueue = new LatestRequestQueue<[Trading2Quote | null, Trading2Option[]]>()
+const featuresQueue = new LatestRequestQueue<Trading2FeatureRow[]>()
+
 function getLakeBarsOnce(symbol: string, start: string, end: string): Promise<Trading2Bar[]> {
   const key = `${symbol.trim().toUpperCase()}|${start}|${end}`
   const cached = barsCache.get(key)
   if (cached) return Promise.resolve(cached)
   const existing = barsRequests.get(key)
   if (existing) return existing
-  const request = trading2Api.getLakeBars(symbol, start, end).then((bars) => {
+  const request = barsQueue.enqueue(() => trading2Api.getLakeBars(symbol, start, end).then((bars) => {
     barsCache.set(key, bars)
     return bars
-  }).finally(() => barsRequests.delete(key))
+  }), [])
+  request.finally(() => barsRequests.delete(key)).catch(() => undefined)
   barsRequests.set(key, request)
   return request
 }
@@ -120,10 +154,13 @@ export function WatchlistMarketWorkspace({ watchlists, selected, onWatchlistsCha
     if (barsReady?.symbol !== symbol || barsReady.range !== range) return
     let cancelled = false
     const cancelSchedule = scheduleOptional(() => {
-      Promise.allSettled([getQuoteOnce(symbol), trading2Api.getOptionChain(symbol)]).then(([nextQuote, nextOptions]) => {
+      selectedDetailsQueue.enqueue(async () => {
+        const [nextQuote, nextOptions] = await Promise.allSettled([getQuoteOnce(symbol), trading2Api.getOptionChain(symbol)])
+        return [nextQuote.status === 'fulfilled' ? nextQuote.value : null, nextOptions.status === 'fulfilled' ? nextOptions.value : []]
+      }, [null, []]).then(([nextQuote, nextOptions]) => {
         if (cancelled) return
-        setQuote(nextQuote.status === 'fulfilled' ? nextQuote.value : null)
-        setOptions(nextOptions.status === 'fulfilled' ? nextOptions.value : [])
+        setQuote(nextQuote)
+        setOptions(nextOptions)
       })
     })
     return () => { cancelled = true; cancelSchedule() }
@@ -138,14 +175,16 @@ export function WatchlistMarketWorkspace({ watchlists, selected, onWatchlistsCha
     let cancelled = false
     setFeatureError('')
     const cancelSchedule = scheduleOptional(() => {
-      Promise.all([
+      featuresQueue.enqueue(() => Promise.all([
         taSpecs.length ? trading2Api.getLakeTa(symbol, '1d', start, end, taSpecs, persistFeatures) : Promise.resolve([]),
         hasSpSelection(selection) ? trading2Api.getLakeSp(symbol, '1d', start, end, spFamilies, persistFeatures) : Promise.resolve([]),
       ]).then(([ta, sp]) => {
-        if (cancelled) return
         const merged = new Map<string, Trading2FeatureRow>()
         for (const row of [...ta, ...sp]) merged.set(row.timestamp, { ...(merged.get(row.timestamp) ?? {}), ...row })
-        setFeatures([...merged.values()])
+        return [...merged.values()]
+      }), []).then((nextFeatures) => {
+        if (cancelled) return
+        setFeatures(nextFeatures)
       }).catch((cause) => { if (!cancelled) { setFeatures([]); setFeatureError(cause instanceof Trading2Error ? cause.message : String(cause)) } })
     })
     return () => { cancelled = true; cancelSchedule() }
