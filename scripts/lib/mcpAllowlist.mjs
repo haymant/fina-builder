@@ -12,6 +12,9 @@ const RD_TOOL_ARGS = new Map([
   ['rd_trace_start', ['rational', 'details', 'experiment_name', 'evolved_from']],
   ['rd_trace_get', ['experiment_id']],
   ['rd_trace_list', ['limit']],
+  ['rd_predict', ['model_path', 'run_id', 'experiment_name', 'market', 'universe', 'train_start', 'train_end', 'valid_start', 'valid_end', 'test_start', 'test_end', 'freq', 'features', 'label', 'out_dir', 'top']],
+  ['rd_backtest', ['pred_path', 'start_time', 'end_time', 'market', 'topk', 'n_drop', 'risk_degree', 'benchmark', 'account', 'universe', 'open_cost', 'close_cost', 'min_cost', 'out_dir', 'risk_limits']],
+  ['rd_strategy_targets', ['pred_path', 'signal_date', 'account', 'risk_degree', 'topk', 'n_drop', 'prices', 'risk_limits', 'equity', 'peak_equity']],
   ['rd_train', ['wait', 'market', 'universe', 'train_start', 'train_end', 'valid_start', 'valid_end', 'test_start', 'test_end', 'freq', 'features', 'label', 'learning_rate', 'num_leaves', 'num_boost_round', 'early_stopping_rounds', 'colsample_bytree', 'subsample', 'subsample_freq', 'reg_alpha', 'reg_lambda', 'seed', 'experiment_name', 'record_analysis', 'benchmark', 'topk', 'n_drop', 'account', 'risk_degree', 'open_cost', 'close_cost', 'min_cost', 'risk_limits']],
 ])
 

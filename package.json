@@ -37,6 +37,7 @@
     "riga:fixture": "node scripts/record-transcripts.mjs riga",
     "smoke": "node scripts/smoke.mjs",
     "tac:fixture": "node scripts/record-transcripts.mjs tac",
+    "test:tac:dry-run": "node scripts/tac-dry-run-smoke.mjs",
     "lint": "oxlint",
     "test": "vitest",
     "test:run": "vitest run",

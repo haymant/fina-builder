@@ -1,0 +1,24 @@
+{
+  "fixture_name": "fina-builder credential-free TAC dry run",
+  "fixture_version": 1,
+  "synthetic": true,
+  "account": {
+    "id": "fixture-account",
+    "status": "ACTIVE",
+    "currency": "USD",
+    "buying_power": "100000.00",
+    "cash": "100000.00",
+    "equity": "100000.00",
+    "pattern_day_trader": false
+  },
+  "positions": [],
+  "orders": [],
+  "quotes": {
+    "SPY": {"symbol": "SPY", "bid_price": 500.00, "ask_price": 500.01, "bid_size": 100, "ask_size": 100, "timestamp": "2026-11-19T20:59:00Z"},
+    "QQQ": {"symbol": "QQQ", "bid_price": 480.00, "ask_price": 480.01, "bid_size": 100, "ask_size": 100, "timestamp": "2026-11-19T20:59:00Z"}
+  },
+  "snapshots": {
+    "SPY": {"symbol": "SPY", "latestTrade": {"p": 500.005, "s": 100, "t": "2026-11-19T20:59:00Z"}, "latestQuote": {"bp": 500.00, "bs": 100, "ap": 500.01, "as": 100, "t": "2026-11-19T20:59:00Z"}}
+  },
+  "news": []
+}

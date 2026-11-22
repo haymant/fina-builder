@@ -9,6 +9,25 @@
       "type": "stdio",
       "command": "modules/tac-engine/target/release/tac-engine",
       "args": []
+    },
+    "tac-engine-dry-run": {
+      "type": "stdio",
+      "command": "modules/tac-engine/target/release/tac-engine",
+      "args": [],
+      "env": {
+        "TAC_LAKE_DIR": "./lake",
+        "TAC_DRY_RUN_FIXTURE": "./fixtures/tac-dry-run.json"
+      }
+    },
+    "tac-qlib-rd": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["scripts/tac-qlib-mcp.mjs", "rd"]
+    },
+    "tac-qlib-book": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["scripts/tac-qlib-mcp.mjs", "book"]
     }
   }
 }

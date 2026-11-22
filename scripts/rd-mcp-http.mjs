@@ -8,12 +8,14 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const port = Number(process.env.RD_MCP_HTTP_PORT ?? 8796)
 const child = createStdioClient(process.execPath, [resolve(root, 'scripts/tac-qlib-mcp.mjs'), 'rd'], { cwd: root, env: process.env })
 await child.initialize()
+const toolCatalog = await child.request('tools/list', {})
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', 'Access-Control-Allow-Headers': 'content-type, mcp-session-id, accept, mcp-protocol-version', 'Access-Control-Expose-Headers': 'Mcp-Session-Id' }
 async function handle(message) {
   const { id, method, params } = message
   if (id === undefined) return null
   if (method === 'initialize') return { jsonrpc: '2.0', id, result: { protocolVersion: params?.protocolVersion ?? '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'fina-tac-qlib-rd', version: '0.1.0' } } }
   if (method === 'notifications/initialized' || method === 'ping') return { jsonrpc: '2.0', id, result: {} }
+  if (method === 'tools/list') return { jsonrpc: '2.0', id, result: toolCatalog }
   if (method !== 'tools/call') throw new Error(`R&D method is not allowed: ${method}`)
   validateRdToolCall(params)
   const result = await child.call({ jsonrpc: '2.0', id, method, params })
