@@ -28,8 +28,24 @@ function getQuoteOnce(symbol: string): Promise<Trading2Quote> {
   return request
 }
 
-function scheduleOptional(task: () => void): () => void {
-  const timer = setTimeout(task, 0)
+const barsCache = new Map<string, Trading2Bar[]>()
+const barsRequests = new Map<string, Promise<Trading2Bar[]>>()
+function getLakeBarsOnce(symbol: string, start: string, end: string): Promise<Trading2Bar[]> {
+  const key = `${symbol.trim().toUpperCase()}|${start}|${end}`
+  const cached = barsCache.get(key)
+  if (cached) return Promise.resolve(cached)
+  const existing = barsRequests.get(key)
+  if (existing) return existing
+  const request = trading2Api.getLakeBars(symbol, start, end).then((bars) => {
+    barsCache.set(key, bars)
+    return bars
+  }).finally(() => barsRequests.delete(key))
+  barsRequests.set(key, request)
+  return request
+}
+
+function scheduleOptional(task: () => void, delay = 0): () => void {
+  const timer = setTimeout(task, delay)
   return () => clearTimeout(timer)
 }
 
@@ -90,7 +106,7 @@ export function WatchlistMarketWorkspace({ watchlists, selected, onWatchlistsCha
     const end = new Date(); const start = new Date(); start.setUTCDate(end.getUTCDate() - range)
     let cancelled = false
     setMarketError(''); setBarsReady(null)
-    trading2Api.getLakeBars(symbol, dateOnly(start), dateOnly(end)).then((nextBars) => {
+    getLakeBarsOnce(symbol, dateOnly(start), dateOnly(end)).then((nextBars) => {
       if (cancelled) return
       setBars(nextBars)
       // TA/SP must run after the lazy bar fetch has persisted the bars: get_lake_ta
@@ -101,6 +117,7 @@ export function WatchlistMarketWorkspace({ watchlists, selected, onWatchlistsCha
   }, [symbol, range])
   useEffect(() => {
     if (!symbol) { setQuote(null); setOptions([]); return }
+    if (barsReady?.symbol !== symbol || barsReady.range !== range) return
     let cancelled = false
     const cancelSchedule = scheduleOptional(() => {
       Promise.allSettled([getQuoteOnce(symbol), trading2Api.getOptionChain(symbol)]).then(([nextQuote, nextOptions]) => {
@@ -110,7 +127,7 @@ export function WatchlistMarketWorkspace({ watchlists, selected, onWatchlistsCha
       })
     })
     return () => { cancelled = true; cancelSchedule() }
-  }, [symbol])
+  }, [symbol, range, barsReady])
   useEffect(() => {
     if (!symbol) { setFeatures([]); return }
     if (barsReady?.symbol !== symbol || barsReady?.range !== range) { setFeatures([]); return }
@@ -120,16 +137,18 @@ export function WatchlistMarketWorkspace({ watchlists, selected, onWatchlistsCha
     const end = dateOnly(new Date()); const startDate = new Date(); startDate.setUTCDate(startDate.getUTCDate() - range); const start = dateOnly(startDate)
     let cancelled = false
     setFeatureError('')
-    Promise.all([
-      taSpecs.length ? trading2Api.getLakeTa(symbol, '1d', start, end, taSpecs, persistFeatures) : Promise.resolve([]),
-      hasSpSelection(selection) ? trading2Api.getLakeSp(symbol, '1d', start, end, spFamilies, persistFeatures) : Promise.resolve([]),
-    ]).then(([ta, sp]) => {
-      if (cancelled) return
-      const merged = new Map<string, Trading2FeatureRow>()
-      for (const row of [...ta, ...sp]) merged.set(row.timestamp, { ...(merged.get(row.timestamp) ?? {}), ...row })
-      setFeatures([...merged.values()])
-    }).catch((cause) => { if (!cancelled) { setFeatures([]); setFeatureError(cause instanceof Trading2Error ? cause.message : String(cause)) } })
-    return () => { cancelled = true }
+    const cancelSchedule = scheduleOptional(() => {
+      Promise.all([
+        taSpecs.length ? trading2Api.getLakeTa(symbol, '1d', start, end, taSpecs, persistFeatures) : Promise.resolve([]),
+        hasSpSelection(selection) ? trading2Api.getLakeSp(symbol, '1d', start, end, spFamilies, persistFeatures) : Promise.resolve([]),
+      ]).then(([ta, sp]) => {
+        if (cancelled) return
+        const merged = new Map<string, Trading2FeatureRow>()
+        for (const row of [...ta, ...sp]) merged.set(row.timestamp, { ...(merged.get(row.timestamp) ?? {}), ...row })
+        setFeatures([...merged.values()])
+      }).catch((cause) => { if (!cancelled) { setFeatures([]); setFeatureError(cause instanceof Trading2Error ? cause.message : String(cause)) } })
+    })
+    return () => { cancelled = true; cancelSchedule() }
   }, [symbol, range, selection, persistFeatures, barsReady])
 
   const addSymbol = async () => { const value = pendingAction?.value; setPendingAction(null); if (!selected || !value) return; try { const updated = await trading2Api.addWatchlistAsset(selected.id, value); onSelectedChange(updated); onWatchlistsChange(watchlists.map((list) => list.id === updated.id ? updated : list)); setSymbol(value.trim().toUpperCase()) } catch (cause) { setMarketError(cause instanceof Trading2Error ? cause.message : String(cause)) } }
