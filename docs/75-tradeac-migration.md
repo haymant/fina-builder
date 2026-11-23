@@ -456,7 +456,26 @@ npm run tauri:build
 9. Any change to database ownership, OLAP engine choice, Python packaging, or broker side-effect policy requires an ADR or an update to this document before implementation.
 
 
-## 7. Write-capability slice (2026-11-20)
+## 7. Dataset reads and lake-ingestion ownership decision (2026-11-23)
+
+TradeAC and fina-builder keep lake writes in the TAC lake tools and keep qlib/R&D dataset
+selection read-only. `get_lake_bars` may lazily fill the explicitly requested window when
+called with `lazy=true`; that is a lake-tool operation, not a side effect of asking qlib to
+prepare a dataset. Bulk historical loading is separately started through `load_lake_symbols`
+and follows the configured lake-history start. Coverage is derived from persisted bars and
+must not be treated as proof of per-session continuity; use the lake validation tool for a
+quality check.
+
+**Decision:** `rd_exp_dataset`, workflow validation, and qlib dataset preparation do not
+automatically fetch or backfill missing bars/features. They read the persisted run
+configuration and current lake, report the configured date segment and observed rows, and
+surface missing/short coverage as a read/preflight problem. Population remains an explicit,
+user-confirmed lake action (`get_lake_bars` for a bounded interval or
+`load_lake_symbols` for a bulk load); it is never triggered by opening or paging the Dataset
+table. This matches the current fina-builder YAML recovery confirmation and TradeAC ownership
+conventions. No ingestion behavior or default lazy setting is changed by the Dataset fix.
+
+## 8. Write-capability slice (2026-11-20)
 
 The first write slice is implemented in `fina-builder` only. Trading 2ⁿd uses the canonical TAC tools `place_order`, `get_order`, and `cancel_order` from the pinned `modules/tac-engine` source (`89fb0c89e19e72c05131f8b1022016a9098e254f`; definitions in `src/server.rs` and `src/params.rs`). The browser bridge and Tauri host enforce exact mutation argument allowlists and bounded order validation. The UI performs immediate exact-action confirmation and refreshes the acknowledgement through `list_orders`/`get_order`; it does not retry ambiguous mutations.
 
@@ -474,9 +493,14 @@ schedule success is rendered. TradeAC remains an unchanged read-only reference.
 The R&D traceability slice also exposes `rd_exp_dataset` through the browser and desktop named
 boundaries. It resolves the saved run `config` artifact and service-owned lake rather than accepting
 renderer paths, URIs, SQL, or tracking-store arguments. `group` is one of `train`, `valid`, `test`,
-or `backtest`; `instrument`, `page`, `page_size` (maximum 200), and `sort` are bounded and validated
-at both bridges. The response carries stable columns, rows, total, `has_next`, provenance, and
-warnings. Train/valid/test rows include `label`; backtest rows include `deal_price`. The R&D Dataset
-view defaults to the first persisted handler instrument and keeps pagination/sorting server-side.
-Fixture-backed Vitest, Python workflow, Playwright, lint, and production-build checks cover the
-transport/UI contract; real lake and MLflow services remain runtime prerequisites.
+or `backtest`; `instrument`, `page`, `page_size` (maximum 200), `sort`, and the optional
+`representation` (`raw` or `inference`) are bounded and validated at both bridges. `raw` is the
+default and maps to qlib `DataHandlerLP.DK_R`; `inference` maps to `DK_I` and therefore applies the
+saved inference processor pipeline. The UI labels the selection instead of treating normalized
+values as raw market features. The transport preserves dynamic feature-field identifiers verbatim.
+The response carries stable columns, rows, total, `has_next`, the configured segment, observed date
+range, provenance, and warnings. Train/valid/test rows include `label`; backtest rows include
+`deal_price`. The R&D Dataset view defaults to the first persisted handler instrument and keeps
+pagination/sorting server-side. Fixture-backed Vitest, Python
+dataset/workflow, Playwright, lint, and production-build checks cover the transport/UI contract;
+real lake and MLflow services remain runtime prerequisites.

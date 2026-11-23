@@ -1475,7 +1475,8 @@ def rd_exp_input(run_id: str, experiment_id: str = "", uri: str = "") -> dict:
 
 
 def rd_exp_dataset(run_id: str, group: str = "train", instrument: str = "", page: int = 1,
-                   page_size: int = 50, sort: str = "asc", experiment_id: str = "", uri: str = "") -> dict:
+                   page_size: int = 50, sort: str = "asc", experiment_id: str = "", uri: str = "",
+                   representation: str = "raw") -> dict:
     """Return a bounded page of rows from a persisted run dataset.
 
     The run artifact owns the configuration and lake location; callers may only
@@ -1485,6 +1486,8 @@ def rd_exp_dataset(run_id: str, group: str = "train", instrument: str = "", page
         raise ValueError("group must be train, valid, test, or backtest")
     if sort not in {"asc", "desc"}:
         raise ValueError("sort must be asc or desc")
+    if representation not in {"raw", "inference"}:
+        raise ValueError("representation must be raw or inference")
     if not isinstance(page, int) or not 1 <= page <= 100000:
         raise ValueError("page must be between 1 and 100000")
     if not isinstance(page_size, int) or not 1 <= page_size <= 200:
@@ -1540,7 +1543,11 @@ def rd_exp_dataset(run_id: str, group: str = "train", instrument: str = "", page
     handler_kwargs.update(instruments=instruments, lake_root=lake_root, market=market)
     handler = TACHandler(**handler_kwargs)
     dataset = DatasetH(handler=handler, segments={group: tuple(segments[group])})
-    data = dataset.prepare(group, col_set=["feature", "label"], data_key=DataHandlerLP.DK_I)
+    # DataHandlerLP distinguishes source values (DK_R) from values after the
+    # configured inference processor pipeline (DK_I). Keep that choice explicit
+    # at the service boundary instead of silently presenting normalized values.
+    data_key = DataHandlerLP.DK_R if representation == "raw" else DataHandlerLP.DK_I
+    data = dataset.prepare(group, col_set=["feature", "label"], data_key=data_key)
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = [str(col[-1]) for col in data.columns]
     data = data.reset_index()
@@ -1566,6 +1573,10 @@ def rd_exp_dataset(run_id: str, group: str = "train", instrument: str = "", page
         data["label"] = data[label_columns[0]]
         columns.append("label")
     total = len(data)
+    observed_range = []
+    if total:
+        observed_range = [data[date_column].min().date().isoformat(), data[date_column].max().date().isoformat()]
+    requested_segment = [str(segments[group][0]), str(segments[group][1])]
     start = (page - 1) * page_size
     page_data = data.iloc[start:start + page_size]
     def clean(value):
@@ -1581,7 +1592,10 @@ def rd_exp_dataset(run_id: str, group: str = "train", instrument: str = "", page
                       "instruments": instruments, "universe_source": universe_source, "columns": columns,
                       "rows": rows, "page": page, "page_size": page_size, "total": total,
                       "has_next": start + len(rows) < total, "sort": sort,
-                      "provenance": {"source": "run-config", "feature_fields": feature_fields, "segments": segments},
+                      "representation": representation, "data_key": data_key,
+                      "provenance": {"source": "run-config", "feature_fields": feature_fields,
+                                     "requested_segment": requested_segment, "observed_range": observed_range,
+                                     "segments": segments},
                       "warnings": []})
 
 

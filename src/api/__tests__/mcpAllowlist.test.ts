@@ -13,6 +13,13 @@ describe('browser MCP host allowlists', () => {
     expect(() => validateRdToolCall({ name: 'delete_experiment', arguments: {} })).toThrow(/tool is not allowed/)
   })
 
+  it('allows only the two explicit qlib dataset representations', () => {
+    const base = { run_id: 'run-1', group: 'train', instrument: 'AAPL', page: 1, page_size: 50, sort: 'asc' }
+    expect(() => validateRdToolCall({ name: 'rd_exp_dataset', arguments: { ...base, representation: 'raw' } })).not.toThrow()
+    expect(() => validateRdToolCall({ name: 'rd_exp_dataset', arguments: { ...base, representation: 'inference' } })).not.toThrow()
+    expect(() => validateRdToolCall({ name: 'rd_exp_dataset', arguments: { ...base, representation: 'learn' } })).toThrow(/representation is invalid/)
+  })
+
   it('accepts the complete named R&D execution sequence without shell/path escape hatches', () => {
     expect(() => validateRdToolCall({ name: 'rd_predict', arguments: { model_path: 'run/params.pkl', experiment_name: 'new-run', test_start: '2026-11-19', test_end: '2026-11-19' } })).not.toThrow()
     expect(() => validateRdToolCall({ name: 'rd_strategy_targets', arguments: { pred_path: 'run/pred.pkl', signal_date: '2026-11-19', account: 100000, topk: 2, n_drop: 1, risk_degree: 0.95, prices: '{}', risk_limits: '{}' } })).not.toThrow()

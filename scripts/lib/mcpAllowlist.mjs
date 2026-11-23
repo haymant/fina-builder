@@ -5,7 +5,7 @@ const RD_TOOL_ARGS = new Map([
   ['rd_exp_get_experiment', ['experiment_id']],
   ['rd_exp_get_run', ['run_id', 'experiment_id']],
   ['rd_exp_input', ['run_id', 'experiment_id']],
-  ['rd_exp_dataset', ['run_id', 'experiment_id', 'group', 'instrument', 'page', 'page_size', 'sort']],
+  ['rd_exp_dataset', ['run_id', 'experiment_id', 'group', 'instrument', 'page', 'page_size', 'sort', 'representation']],
   ['rd_exp_result', ['run_id', 'experiment_id']],
   ['rd_exp_model', ['run_id', 'experiment_id']],
   ['rd_exp_blotter', ['run_id', 'experiment_id']],
@@ -70,6 +70,7 @@ export function validateRdToolCall(params) {
     if (!Number.isInteger(args.page) || args.page < 1 || args.page > 100000) throw new Error('R&D dataset page is invalid')
     if (!Number.isInteger(args.page_size) || args.page_size < 1 || args.page_size > 200) throw new Error('R&D dataset page_size is invalid')
     if (!['asc', 'desc'].includes(args.sort)) throw new Error('R&D dataset sort is invalid')
+    if (args.representation !== undefined && !['raw', 'inference'].includes(args.representation)) throw new Error('R&D dataset representation is invalid')
   }
 }
 

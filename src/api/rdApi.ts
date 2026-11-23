@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import { createHttpMcpTransport, unwrapToolResult } from './rigaTransport'
+import { createHttpMcpTransport, unwrapToolResult, unwrapToolResultRaw } from './rigaTransport'
 import { toSnakeKeys } from './keyCase'
 
 export type RdErrorKind = 'unavailable' | 'backend' | 'validation' | 'timeout'
@@ -67,7 +67,8 @@ export interface RdBlotter {
   warnings: string[]
 }
 export type RdDatasetGroup = 'train' | 'valid' | 'test' | 'backtest'
-export interface RdDatasetPage { runId: string; experimentId: string; group: RdDatasetGroup; instrument: string; instruments: string[]; columns: string[]; rows: Record<string, unknown>[]; page: number; pageSize: number; total: number; hasNext: boolean; sort: 'asc' | 'desc'; provenance: Record<string, unknown>; warnings: string[] }
+export type RdDatasetRepresentation = 'raw' | 'inference'
+export interface RdDatasetPage { runId: string; experimentId: string; group: RdDatasetGroup; instrument: string; instruments: string[]; columns: string[]; rows: Record<string, unknown>[]; page: number; pageSize: number; total: number; hasNext: boolean; sort: 'asc' | 'desc'; representation: RdDatasetRepresentation; dataKey: string; provenance: Record<string, unknown>; warnings: string[] }
 export interface RdResult {
   runId: string
   experimentId: string
@@ -90,6 +91,14 @@ const record = (value: unknown): Record<string, unknown> => value && typeof valu
 const array = (value: unknown, key: string): unknown[] => Array.isArray(value) ? value : Array.isArray(record(value)[key]) ? record(value)[key] as unknown[] : []
 const text = (value: unknown): string | null => value === null || value === undefined ? null : String(value)
 const number = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) ? value : Number(value ?? 0) || 0
+const datasetProvenance = (value: unknown): Record<string, unknown> => {
+  const provenance = record(value)
+  return {
+    ...provenance,
+    requested_segment: provenance.requested_segment ?? provenance.requestedSegment,
+    observed_range: provenance.observed_range ?? provenance.observedRange,
+  }
+}
 const yamlScalar = (yaml: string, key: string): string | null => {
   const match = yaml.match(new RegExp(`^\\s{0,16}${key}\\s*:\\s*["']?([^"'\\n#]+?)["']?\\s*(?:#.*)?$`, 'm'))
   return match?.[1]?.trim() || null
@@ -160,7 +169,7 @@ export function createRdApi(transport: RdTransport) {
     async getResult(runId: string, experimentId?: string): Promise<RdResult> { const raw = record(await call('rd_exp_result', { run_id: runId, ...(experimentId ? { experiment_id: experimentId } : {}) })); return { runId: text(raw.run_id ?? raw.runId) ?? runId, experimentId: text(raw.experiment_id ?? raw.experimentId) ?? experimentId ?? '', metrics: record(raw.metrics), headline: record(raw.headline), icSeries: array(raw.ic_series ?? raw.icSeries, '').map(record), icHistogram: array(raw.ic_histogram ?? raw.icHistogram, '').map(record), monthlyIc: array(raw.monthly_ic ?? raw.monthlyIc, '').map(record), groupReturns: record(raw.group_returns ?? raw.groupReturns), predStats: record(raw.pred_stats ?? raw.predStats), backtest: record(raw.backtest), explanation: record(raw.explanation), warnings: array(raw.warnings, '').map(String) } },
     async getModel(runId: string, experimentId?: string): Promise<Record<string, unknown>> { return record(await call('rd_exp_model', { run_id: runId, ...(experimentId ? { experiment_id: experimentId } : {}) })) },
     async getInput(runId: string, experimentId?: string): Promise<Record<string, unknown>> { return record(await call('rd_exp_input', { run_id: runId, ...(experimentId ? { experiment_id: experimentId } : {}) })) },
-    async getDataset(runId: string, group: RdDatasetGroup, instrument: string, page = 1, pageSize = 50, sort: 'asc' | 'desc' = 'asc', experimentId?: string): Promise<RdDatasetPage> { const raw = record(await call('rd_exp_dataset', { run_id: runId, group, instrument, page, page_size: pageSize, sort, ...(experimentId ? { experiment_id: experimentId } : {}) })); return { runId: text(raw.run_id ?? raw.runId) ?? runId, experimentId: text(raw.experiment_id ?? raw.experimentId) ?? experimentId ?? '', group: (text(raw.group) ?? group) as RdDatasetGroup, instrument: text(raw.instrument) ?? instrument, instruments: array(raw.instruments, '').map(String), columns: array(raw.columns, '').map(String), rows: array(raw.rows, '').map(record), page: number(raw.page) || page, pageSize: number(raw.page_size ?? raw.pageSize) || pageSize, total: number(raw.total), hasNext: raw.has_next === true || raw.hasNext === true, sort: (text(raw.sort) ?? sort) as 'asc' | 'desc', provenance: record(raw.provenance), warnings: array(raw.warnings, '').map(String) } },
+    async getDataset(runId: string, group: RdDatasetGroup, instrument: string, page = 1, pageSize = 50, sort: 'asc' | 'desc' = 'asc', experimentId?: string, representation: RdDatasetRepresentation = 'raw'): Promise<RdDatasetPage> { const raw = record(await call('rd_exp_dataset', { run_id: runId, group, instrument, page, page_size: pageSize, sort, representation, ...(experimentId ? { experiment_id: experimentId } : {}) })); return { runId: text(raw.run_id ?? raw.runId) ?? runId, experimentId: text(raw.experiment_id ?? raw.experimentId) ?? experimentId ?? '', group: (text(raw.group) ?? group) as RdDatasetGroup, instrument: text(raw.instrument) ?? instrument, instruments: array(raw.instruments, '').map(String), columns: array(raw.columns, '').map(String), rows: array(raw.rows, '').map(record), page: number(raw.page) || page, pageSize: number(raw.page_size ?? raw.pageSize) || pageSize, total: number(raw.total), hasNext: raw.has_next === true || raw.hasNext === true, sort: (text(raw.sort) ?? sort) as 'asc' | 'desc', representation: text(raw.representation) === 'inference' ? 'inference' : 'raw', dataKey: text(raw.data_key ?? raw.dataKey) ?? 'raw', provenance: datasetProvenance(raw.provenance), warnings: array(raw.warnings, '').map(String) } },
     async getBlotter(runId: string, experimentId?: string): Promise<RdBlotter> { const raw = record(await call('rd_exp_blotter', { run_id: runId, ...(experimentId ? { experiment_id: experimentId } : {}) })); return { runId: text(raw.run_id ?? raw.runId) ?? runId, experimentId: text(raw.experiment_id ?? raw.experimentId) ?? experimentId ?? '', summary: record(raw.summary), daily: array(raw.daily, '').map(record), positions: array(raw.positions, '').map(record), positionHistory: array(raw.position_history ?? raw.positionHistory, '').map(record), trades: array(raw.trades, '').map(record), signals: array(raw.signals, '').map(record), warnings: array(raw.warnings, '').map(String) } },
     async createExperiment(draft: RdExperimentDraft): Promise<Record<string, unknown>> { return record(await call('rd_trace_start', { rational: draft.rational, ...(draft.details ? { details: draft.details } : {}), ...(draft.experimentName ? { experiment_name: draft.experimentName } : {}), ...(draft.evolvedFrom ? { evolved_from: draft.evolvedFrom } : {}) })) },
     async getTraceExperiment(experimentId: string): Promise<Record<string, unknown>> { return record(await call('rd_trace_get', { experiment_id: experimentId })) },
@@ -172,9 +181,12 @@ export function createRdApi(transport: RdTransport) {
 }
 export function rdBaseUrl(): string { return (import.meta.env.VITE_RD_MCP_URL as string | undefined) ?? '/rd' }
 function inTauri(): boolean { return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window }
-const httpRdClient = createHttpMcpTransport(rdBaseUrl())
-const httpRdTransport: RdTransport = { async callTool(name, args = {}) { return unwrapToolResult(await httpRdClient.callTool<Record<string, unknown>>(name, args), name) as unknown } }
-const tauriRdTransport: RdTransport = { async callTool(name, args = {}) { return unwrapToolResult(await invoke<Record<string, unknown>>('rd_mcp_call_tool', { name, arguments: toSnakeKeys(args) }), name) as unknown } }
+const httpRdClient = createHttpMcpTransport(rdBaseUrl(), { camelKeys: false })
+function unwrapRdToolResult(result: Record<string, unknown>, name: string): unknown {
+  return name === 'rd_exp_dataset' ? unwrapToolResultRaw(result, name) : unwrapToolResult(result, name)
+}
+const httpRdTransport: RdTransport = { async callTool(name, args = {}) { return unwrapRdToolResult(await httpRdClient.callTool<Record<string, unknown>>(name, args), name) } }
+const tauriRdTransport: RdTransport = { async callTool(name, args = {}) { return unwrapRdToolResult(await invoke<Record<string, unknown>>('rd_mcp_call_tool', { name, arguments: toSnakeKeys(args) }), name) } }
 let activeRdTransport: RdTransport = inTauri() ? tauriRdTransport : httpRdTransport
 export function setRdTransport(transport: RdTransport | null): void { activeRdTransport = transport ?? (inTauri() ? tauriRdTransport : httpRdTransport) }
 export const rdApi = createRdApi({ callTool: (name, args) => activeRdTransport.callTool(name, args) })

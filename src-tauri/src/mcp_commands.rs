@@ -498,7 +498,7 @@ pub fn validate_rd_tool_call(name: &str, arguments: &Value) -> Result<(), String
         "rd_exp_get_run" | "rd_exp_input" | "rd_exp_result" | "rd_exp_model" | "rd_exp_blotter" | "rd_exp_lineage" => {
             &["run_id", "experiment_id"]
         }
-        "rd_exp_dataset" => &["run_id", "experiment_id", "group", "instrument", "page", "page_size", "sort"],
+        "rd_exp_dataset" => &["run_id", "experiment_id", "group", "instrument", "page", "page_size", "sort", "representation"],
         "rd_trace_start" => &["rational", "details", "experiment_name", "evolved_from"],
         "rd_trace_get" => &["experiment_id"],
         "rd_trace_list" => &["limit"],
@@ -559,6 +559,10 @@ pub fn validate_rd_tool_call(name: &str, arguments: &Value) -> Result<(), String
         if !(1..=100000).contains(&page) || !(1..=200).contains(&page_size) { return Err("R&D dataset pagination is invalid".into()); }
         let sort = object.get("sort").and_then(Value::as_str).ok_or_else(|| "R&D dataset sort must be a string".to_string())?;
         if !matches!(sort, "asc" | "desc") { return Err("R&D dataset sort is invalid".into()); }
+        if let Some(representation) = object.get("representation") {
+            let representation = representation.as_str().ok_or_else(|| "R&D dataset representation must be a string".to_string())?;
+            if !matches!(representation, "raw" | "inference") { return Err("R&D dataset representation is invalid".into()); }
+        }
     }
     if name == "rd_validate_workflow" || name == "rd_run_workflow" {
         let yaml = object
@@ -888,6 +892,16 @@ mod tests {
             validate_rd_tool_call("rd_exp_result", &json!({"tracking_store": "/tmp/mlruns"}))
                 .is_err()
         );
+        let dataset_args = json!({
+            "run_id": "r1", "group": "train", "instrument": "AAPL",
+            "page": 1, "page_size": 50, "sort": "asc", "representation": "raw"
+        });
+        assert!(validate_rd_tool_call("rd_exp_dataset", &dataset_args).is_ok());
+        let invalid_dataset_args = json!({
+            "run_id": "r1", "group": "train", "instrument": "AAPL",
+            "page": 1, "page_size": 50, "sort": "asc", "representation": "learn"
+        });
+        assert!(validate_rd_tool_call("rd_exp_dataset", &invalid_dataset_args).is_err());
         assert!(validate_rd_tool_call("delete_experiment", &json!({})).is_err());
     }
 
