@@ -39,6 +39,12 @@ describe('R&D API read-only boundary', () => {
     await api.createRun({ experimentName: 'alpha', trainStart: '2025-01-01', trainEnd: '2025-12-31', features: '$rsi_14,$macro_vix', validStart: '2026-01-01', validEnd: '2026-02-01' })
     expect(callTool).toHaveBeenLastCalledWith('rd_train', expect.objectContaining({ features: '$rsi_14,$macro_vix', valid_start: '2026-01-01', valid_end: '2026-02-01', record_analysis: true }))
   })
+  it('normalizes paginated dataset rows and preserves the named query contract', async () => {
+    const callTool = vi.fn(async () => ({ run_id: 'r1', experiment_id: 7, group: 'train', instrument: 'AAPL', instruments: ['AAPL', 'MSFT'], columns: ['date', 'instrument', '$close', 'label'], rows: [{ date: '2026-01-02T00:00:00', instrument: 'AAPL', '$close': 10, label: 0.1 }], page: 2, page_size: 1, total: 3, has_next: true, sort: 'desc', provenance: { source: 'run-config' }, warnings: [] }))
+    const api = createRdApi({ callTool })
+    await expect(api.getDataset('r1', 'train', 'AAPL', 2, 1, 'desc', '7')).resolves.toMatchObject({ runId: 'r1', group: 'train', instrument: 'AAPL', page: 2, pageSize: 1, total: 3, hasNext: true, sort: 'desc', rows: [{ '$close': 10 }] })
+    expect(callTool).toHaveBeenCalledWith('rd_exp_dataset', { run_id: 'r1', group: 'train', instrument: 'AAPL', page: 2, page_size: 1, sort: 'desc', experiment_id: '7' })
+  })
   it('validates YAML on the service and dispatches the same exact text through rd_run_workflow', async () => {
     const configYaml = 'experiment_name: alpha\ntask: {}\n'
     const callTool = vi.fn(async (name: string) => name === 'rd_validate_workflow' ? {

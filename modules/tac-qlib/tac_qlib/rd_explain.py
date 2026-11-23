@@ -1474,6 +1474,117 @@ def rd_exp_input(run_id: str, experiment_id: str = "", uri: str = "") -> dict:
     return _jsonable(out)
 
 
+def rd_exp_dataset(run_id: str, group: str = "train", instrument: str = "", page: int = 1,
+                   page_size: int = 50, sort: str = "asc", experiment_id: str = "", uri: str = "") -> dict:
+    """Return a bounded page of rows from a persisted run dataset.
+
+    The run artifact owns the configuration and lake location; callers may only
+    select a validated segment, instrument, page, and date direction.
+    """
+    if group not in {"train", "valid", "test", "backtest"}:
+        raise ValueError("group must be train, valid, test, or backtest")
+    if sort not in {"asc", "desc"}:
+        raise ValueError("sort must be asc or desc")
+    if not isinstance(page, int) or not 1 <= page <= 100000:
+        raise ValueError("page must be between 1 and 100000")
+    if not isinstance(page_size, int) or not 1 <= page_size <= 200:
+        raise ValueError("page_size must be between 1 and 200")
+    store = _open_store(uri)
+    meta = _run_meta(store, run_id)
+    if meta is None:
+        raise ValueError(f"run_id {run_id!r} not found")
+    exp_id = int(experiment_id) if experiment_id else meta["experiment_id"]
+    art_root = _artifact_root_for_run(store, exp_id, run_id)
+    store.close()
+    root = _run_artifact_root(art_root, exp_id, run_id)
+    config, err = _load_pickle(root / "config") if (root / "config").exists() else (None, "config artifact missing")
+    if not isinstance(config, dict):
+        raise ValueError(err or "persisted run configuration is unavailable")
+    task = config.get("task", {}) or {}
+    dkw = ((task.get("dataset", {}) or {}).get("kwargs", {}) or {})
+    hkw = dict(((dkw.get("handler", {}) or {}).get("kwargs", {}) or {}))
+    qlib_cfg = config.get("qlib_init", {}) or {}
+    lake_root = str(hkw.get("lake_root") or qlib_cfg.get("provider_uri") or "")
+    if not lake_root:
+        from tac_qlib.data.config import resolve_lake_root
+        lake_root = str(resolve_lake_root(None))
+    market = str(hkw.get("market") or qlib_cfg.get("region") or "US").upper()
+    if str(hkw.get("freq") or "day") != "day":
+        raise ValueError("only daily datasets are supported")
+    instruments, universe_source = _resolve_universe_from_config(hkw, qlib_cfg)
+    if not instruments:
+        raise ValueError("run dataset instrument universe is unavailable")
+    instruments = [str(value).upper() for value in instruments]
+    selected = str(instrument or instruments[0]).upper()
+    if selected not in instruments:
+        raise ValueError(f"instrument {selected!r} is not in the run dataset universe")
+    segments = dict(dkw.get("segments", {}) or {})
+    backtest = {}
+    for record in task.get("record", []) or []:
+        if isinstance(record, dict) and record.get("class") == "PortAnaRecord":
+            backtest = (((record.get("kwargs") or {}).get("config") or {}).get("backtest") or {})
+            break
+    if group == "backtest":
+        start, end = backtest.get("start_time"), backtest.get("end_time")
+        if not start or not end:
+            raise ValueError("this run has no persisted PortAnaRecord backtest window")
+        segments[group] = [start, end]
+    if group not in segments:
+        raise ValueError(f"dataset segment {group!r} is unavailable for this run")
+    from tac_qlib.qlib_init import qlib_init
+    from qlib.data.dataset import DatasetH
+    from qlib.data.dataset.handler import DataHandlerLP
+    from tac_qlib.contrib.data.handler import TACHandler
+    qlib_init(provider_uri=lake_root, market=market)
+    handler_kwargs = {key: value for key, value in hkw.items() if key not in {"instruments", "lake_root", "market"}}
+    handler_kwargs.update(instruments=instruments, lake_root=lake_root, market=market)
+    handler = TACHandler(**handler_kwargs)
+    dataset = DatasetH(handler=handler, segments={group: tuple(segments[group])})
+    data = dataset.prepare(group, col_set=["feature", "label"], data_key=DataHandlerLP.DK_I)
+    if isinstance(data.columns, pd.MultiIndex):
+        data.columns = [str(col[-1]) for col in data.columns]
+    data = data.reset_index()
+    date_column = "datetime" if "datetime" in data.columns else "date"
+    if date_column not in data.columns:
+        date_column = data.columns[0]
+    data["instrument"] = data["instrument"].astype(str).str.upper()
+    data = data[data["instrument"] == selected].copy()
+    data[date_column] = pd.to_datetime(data[date_column], errors="coerce")
+    data = data.dropna(subset=[date_column]).sort_values([date_column, "instrument"], ascending=(sort == "asc"))
+    feature_fields = [field for field in _feature_fields_from_config(hkw) if field in data.columns]
+    columns = ["date", "instrument", *feature_fields]
+    if group == "backtest":
+        close = "$close" if "$close" in data.columns else "close"
+        if close not in data.columns:
+            raise ValueError("backtest deal_price requires $close in the run dataset")
+        data["deal_price"] = data[close]
+        columns.append("deal_price")
+    else:
+        label_columns = [column for column in data.columns if str(column).upper().startswith("LABEL")]
+        if not label_columns:
+            raise ValueError(f"{group} label column is unavailable")
+        data["label"] = data[label_columns[0]]
+        columns.append("label")
+    total = len(data)
+    start = (page - 1) * page_size
+    page_data = data.iloc[start:start + page_size]
+    def clean(value):
+        if pd.isna(value): return None
+        if isinstance(value, (np.integer, np.floating)): return value.item()
+        return value
+    rows = []
+    for _, row in page_data.iterrows():
+        item = {"date": pd.Timestamp(row[date_column]).isoformat(), "instrument": selected}
+        item.update({column: clean(row[column]) for column in columns[2:]})
+        rows.append(item)
+    return _jsonable({"run_id": run_id, "experiment_id": exp_id, "group": group, "instrument": selected,
+                      "instruments": instruments, "universe_source": universe_source, "columns": columns,
+                      "rows": rows, "page": page, "page_size": page_size, "total": total,
+                      "has_next": start + len(rows) < total, "sort": sort,
+                      "provenance": {"source": "run-config", "feature_fields": feature_fields, "segments": segments},
+                      "warnings": []})
+
+
 def rd_exp_result(run_id: str, experiment_id: str = "", uri: str = "") -> dict:
     """Return the results of a run: headline metrics, per-day IC/Rank IC series, group returns, prediction stats, and the backtest report + risk analysis."""
     store = _open_store(uri)
@@ -1875,6 +1986,7 @@ def register_tools(server) -> None:
         rd_exp_get_experiment,
         rd_exp_get_run,
         rd_exp_input,
+        rd_exp_dataset,
         rd_exp_result,
         rd_exp_model,
         rd_exp_blotter,

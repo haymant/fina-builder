@@ -2,7 +2,7 @@
 // reach every dashboard and every trade repository view (tabs are for documents only).
 export type TradeView = 'blotter' | 'positions' | 'recon' | 'audit' | 'import' | 'fixings'
 export type Trading2View = 'overview' | 'account' | 'positions' | 'orders' | 'news' | 'watchlist' | 'macro' | 'calendar'
-export type RdView = 'dashboard' | 'input' | 'result' | 'model' | 'blotter' | 'models'
+export type RdView = 'dashboard' | 'input' | 'result' | 'model' | 'blotter' | 'dataset' | 'models'
 export type RiskCubeView = 'scenarios' | 'versions' | 'slice' | 'cubes'
 export type NarrativeView = 'overview' | 'claims'
 export type VideoView = 'projects' | 'workspace'
@@ -27,7 +27,7 @@ export const TRADING2_VIEWS: { id: Trading2View; label: string; accel?: string }
 ]
 export const RD_VIEWS: { id: RdView; label: string; accel?: string }[] = [
   { id: 'dashboard', label: 'Dashboard', accel: 'Alt+Shift+R' }, { id: 'input', label: 'Input' }, { id: 'result', label: 'Results' },
-  { id: 'model', label: 'Model' }, { id: 'blotter', label: 'Blotter' }, { id: 'models', label: 'Models' },
+  { id: 'model', label: 'Model' }, { id: 'blotter', label: 'Blotter' }, { id: 'dataset', label: 'Dataset' }, { id: 'models', label: 'Models' },
 ]
 export const RISKCUBE_VIEWS: { id: RiskCubeView; label: string; accel?: string }[] = [
   { id: 'scenarios', label: 'Scenarios' }, { id: 'versions', label: 'Versions' }, { id: 'slice', label: 'Slice' }, { id: 'cubes', label: 'Cubes', accel: 'Alt+Shift+C' },

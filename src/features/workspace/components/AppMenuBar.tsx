@@ -12,7 +12,7 @@ import { accelLabel, matchAccel, TRADE_VIEWS, TRADING2_VIEWS, RD_VIEWS, RISKCUBE
 
 const TRADE_ICONS: Record<TradeView, typeof Layers> = { blotter: BookOpenCheck, positions: Layers, recon: ArrowLeftRight, audit: History, import: FileUp, fixings: CalendarClock }
 const TRADING2_ICONS: Record<Trading2View, typeof BriefcaseBusiness> = { overview: BriefcaseBusiness, account: WalletCards, positions: ListChecks, orders: ClipboardList, news: Newspaper, watchlist: Star, macro: Activity, calendar: CalendarClock }
-const RD_ICONS: Record<RdView, typeof BrainCircuit> = { dashboard: BrainCircuit, input: ClipboardList, result: ClipboardList, model: BrainCircuit, blotter: Activity, models: Database }
+const RD_ICONS: Record<RdView, typeof BrainCircuit> = { dashboard: BrainCircuit, input: ClipboardList, result: ClipboardList, model: BrainCircuit, blotter: Activity, dataset: Database, models: Database }
 const RISKCUBE_ICONS: Record<RiskCubeView, typeof Layers> = { scenarios: Layers, versions: History, slice: Columns3, cubes: Database }
 
 export interface MenuCommand { id: string; group: string; label: string; icon: typeof Layers; accel?: string; run: () => void; keywords?: string }
@@ -177,7 +177,7 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
             <MenubarSub>
               <MenubarSubTrigger>Runs</MenubarSubTrigger>
               <MenubarSubContent>
-                {by('R&D').filter((c) => ['rd:input', 'rd:result', 'rd:model', 'rd:blotter'].includes(c.id)).map((c) => <Item key={c.id} cmd={{ ...c, label: c.label.replace('R&D: ', '') }} />)}
+                {by('R&D').filter((c) => ['rd:input', 'rd:result', 'rd:model', 'rd:blotter', 'rd:dataset'].includes(c.id)).map((c) => <Item key={c.id} cmd={{ ...c, label: c.label.replace('R&D: ', '') }} />)}
               </MenubarSubContent>
             </MenubarSub>
             <MenubarSeparator />

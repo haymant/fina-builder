@@ -498,6 +498,7 @@ pub fn validate_rd_tool_call(name: &str, arguments: &Value) -> Result<(), String
         "rd_exp_get_run" | "rd_exp_input" | "rd_exp_result" | "rd_exp_model" | "rd_exp_blotter" | "rd_exp_lineage" => {
             &["run_id", "experiment_id"]
         }
+        "rd_exp_dataset" => &["run_id", "experiment_id", "group", "instrument", "page", "page_size", "sort"],
         "rd_trace_start" => &["rational", "details", "experiment_name", "evolved_from"],
         "rd_trace_get" => &["experiment_id"],
         "rd_trace_list" => &["limit"],
@@ -545,6 +546,19 @@ pub fn validate_rd_tool_call(name: &str, arguments: &Value) -> Result<(), String
         .ok_or_else(|| "R&D arguments must be an object".to_string())?;
     if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
         return Err(format!("R&D argument is not allowed: {key}"));
+    }
+    if name == "rd_exp_dataset" {
+        let run_id = object.get("run_id").and_then(Value::as_str).ok_or_else(|| "R&D run_id must be a string".to_string())?;
+        if run_id.is_empty() || run_id.len() > 128 || !run_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') { return Err("R&D run_id is invalid".into()); }
+        let group = object.get("group").and_then(Value::as_str).ok_or_else(|| "R&D dataset group must be a string".to_string())?;
+        if !matches!(group, "train" | "valid" | "test" | "backtest") { return Err("R&D dataset group is invalid".into()); }
+        let instrument = object.get("instrument").and_then(Value::as_str).ok_or_else(|| "R&D dataset instrument must be a string".to_string())?;
+        if instrument.is_empty() || instrument.len() > 16 || !instrument.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-') { return Err("R&D dataset instrument is invalid".into()); }
+        let page = object.get("page").and_then(Value::as_u64).ok_or_else(|| "R&D dataset page must be an integer".to_string())?;
+        let page_size = object.get("page_size").and_then(Value::as_u64).ok_or_else(|| "R&D dataset page_size must be an integer".to_string())?;
+        if !(1..=100000).contains(&page) || !(1..=200).contains(&page_size) { return Err("R&D dataset pagination is invalid".into()); }
+        let sort = object.get("sort").and_then(Value::as_str).ok_or_else(|| "R&D dataset sort must be a string".to_string())?;
+        if !matches!(sort, "asc" | "desc") { return Err("R&D dataset sort is invalid".into()); }
     }
     if name == "rd_validate_workflow" || name == "rd_run_workflow" {
         let yaml = object

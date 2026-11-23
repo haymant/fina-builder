@@ -470,3 +470,13 @@ RIGA is optional for this workflow because the R&D Notebook provides a copyable 
 for external agents. qlib/MLflow remain the owners of run records and artifacts. Schedule writes
 remain unsupported because no canonical scheduler owner/lifecycle has been selected; no fake
 schedule success is rendered. TradeAC remains an unchanged read-only reference.
+
+The R&D traceability slice also exposes `rd_exp_dataset` through the browser and desktop named
+boundaries. It resolves the saved run `config` artifact and service-owned lake rather than accepting
+renderer paths, URIs, SQL, or tracking-store arguments. `group` is one of `train`, `valid`, `test`,
+or `backtest`; `instrument`, `page`, `page_size` (maximum 200), and `sort` are bounded and validated
+at both bridges. The response carries stable columns, rows, total, `has_next`, provenance, and
+warnings. Train/valid/test rows include `label`; backtest rows include `deal_price`. The R&D Dataset
+view defaults to the first persisted handler instrument and keeps pagination/sorting server-side.
+Fixture-backed Vitest, Python workflow, Playwright, lint, and production-build checks cover the
+transport/UI contract; real lake and MLflow services remain runtime prerequisites.

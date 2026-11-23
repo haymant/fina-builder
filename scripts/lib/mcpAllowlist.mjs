@@ -5,6 +5,7 @@ const RD_TOOL_ARGS = new Map([
   ['rd_exp_get_experiment', ['experiment_id']],
   ['rd_exp_get_run', ['run_id', 'experiment_id']],
   ['rd_exp_input', ['run_id', 'experiment_id']],
+  ['rd_exp_dataset', ['run_id', 'experiment_id', 'group', 'instrument', 'page', 'page_size', 'sort']],
   ['rd_exp_result', ['run_id', 'experiment_id']],
   ['rd_exp_model', ['run_id', 'experiment_id']],
   ['rd_exp_blotter', ['run_id', 'experiment_id']],
@@ -60,6 +61,15 @@ export function validateRdToolCall(params) {
     if (typeof args.config_yaml !== 'string' || !args.config_yaml.trim() || Buffer.byteLength(args.config_yaml, 'utf8') > 128 * 1024) throw new Error('R&D config_yaml must be a non-empty string no larger than 128 KiB')
     if (name === 'rd_run_workflow' && (typeof args.experiment_name !== 'string' || args.experiment_name.trim().length < 1 || args.experiment_name.length > 64)) throw new Error('R&D experiment_name must be a 1-64 character string')
     if (name === 'rd_validate_workflow' && args.experiment_name !== undefined) throw new Error('R&D experiment_name is not accepted for validation')
+  }
+  if (name === 'rd_exp_dataset') {
+    if (typeof args.run_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(args.run_id)) throw new Error('R&D run_id is invalid')
+    if (args.experiment_id !== undefined && (typeof args.experiment_id !== 'string' || !/^[0-9]{1,32}$/.test(args.experiment_id))) throw new Error('R&D experiment_id is invalid')
+    if (!['train', 'valid', 'test', 'backtest'].includes(args.group)) throw new Error('R&D dataset group is invalid')
+    if (typeof args.instrument !== 'string' || !/^[A-Za-z][A-Za-z0-9._-]{0,15}$/.test(args.instrument)) throw new Error('R&D dataset instrument is invalid')
+    if (!Number.isInteger(args.page) || args.page < 1 || args.page > 100000) throw new Error('R&D dataset page is invalid')
+    if (!Number.isInteger(args.page_size) || args.page_size < 1 || args.page_size > 200) throw new Error('R&D dataset page_size is invalid')
+    if (!['asc', 'desc'].includes(args.sort)) throw new Error('R&D dataset sort is invalid')
   }
 }
 
