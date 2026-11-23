@@ -115,6 +115,32 @@ def test_normalizes_qlib_zscore_to_single_index_compatible_processor():
     assert "class: ZScoreNorm" not in serialized
 
 
+def test_normalizes_qlib_cross_sectional_processors_to_date_index_compatible_processors():
+    workflow = VALID.replace(
+        "class: DropAllNaN",
+        "class: CSRankNorm",
+    )
+
+    config, _summary, _serialized = prepare(workflow)
+    processor = config["task"]["dataset"]["kwargs"]["handler"]["kwargs"]["infer_processors"][0]
+
+    assert processor == {
+        "class": "TACCSRankNorm",
+        "module_path": "tac_qlib.contrib.data.handler",
+        "kwargs": {},
+    }
+
+    workflow = VALID.replace("class: DropAllNaN", "class: CSZScoreNorm")
+    config, _summary, _serialized = prepare(workflow)
+    processor = config["task"]["dataset"]["kwargs"]["handler"]["kwargs"]["infer_processors"][0]
+
+    assert processor == {
+        "class": "TACCSZScoreNorm",
+        "module_path": "tac_qlib.contrib.data.handler",
+        "kwargs": {},
+    }
+
+
 def test_omitted_processor_lists_keep_tac_handler_defaults():
     workflow = VALID.replace(
         "          infer_processors:\n            - class: DropAllNaN\n              kwargs: {}\n",
@@ -150,6 +176,7 @@ def test_validation_preflight_uses_normalized_yaml_processors(tmp_path, monkeypa
         "          infer_processors:\n            - class: DropAllNaN\n              kwargs: {}\n",
         "          infer_processors:\n"
         "            - class: ProcessInf\n              kwargs: {}\n"
+        "            - class: CSRankNorm\n              kwargs: {}\n"
         "            - class: ZScoreNorm\n              kwargs: {}\n",
     )
 
@@ -159,6 +186,11 @@ def test_validation_preflight_uses_normalized_yaml_processors(tmp_path, monkeypa
     assert captured["infer_processors"] == [
         {
             "class": "TACProcessInf",
+            "module_path": "tac_qlib.contrib.data.handler",
+            "kwargs": {},
+        },
+        {
+            "class": "TACCSRankNorm",
             "module_path": "tac_qlib.contrib.data.handler",
             "kwargs": {},
         },

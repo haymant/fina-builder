@@ -33,6 +33,9 @@ PROCESSORS = {
     "ProcessInf",
     "TACProcessInf",
     "CSRankNorm",
+    "TACCSRankNorm",
+    "CSZScoreNorm",
+    "TACCSZScoreNorm",
     "ZScoreNorm",
     "TACZScoreNorm",
     "Fillna",
@@ -118,11 +121,20 @@ def _normalise_processors(value: Any, where: str) -> list[dict[str, Any]]:
         normalized_name = {
             "ProcessInf": "TACProcessInf",
             "TACProcessInf": "TACProcessInf",
+            "CSRankNorm": "TACCSRankNorm",
+            "TACCSRankNorm": "TACCSRankNorm",
+            "CSZScoreNorm": "TACCSZScoreNorm",
+            "TACCSZScoreNorm": "TACCSZScoreNorm",
             "ZScoreNorm": "TACZScoreNorm",
             "TACZScoreNorm": "TACZScoreNorm",
         }.get(name, name)
         processor = {"class": normalized_name, "kwargs": {}}
-        if normalized_name in {"TACProcessInf", "TACZScoreNorm"}:
+        if normalized_name in {
+            "TACProcessInf",
+            "TACCSRankNorm",
+            "TACCSZScoreNorm",
+            "TACZScoreNorm",
+        }:
             processor["module_path"] = TAC_PROCESSOR_MODULE
         result.append(processor)
     return result

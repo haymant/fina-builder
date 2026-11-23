@@ -45,7 +45,11 @@ DEFAULT_INFER_PROCESSORS = [
 ]
 DEFAULT_LEARN_PROCESSORS = [
     {"class": "DropnaLabel"},
-    {"class": "CSZScoreNorm", "kwargs": {"fields_group": "label"}},
+    {
+        "class": "TACCSZScoreNorm",
+        "module_path": "tac_qlib.contrib.data.handler",
+        "kwargs": {"fields_group": "label"},
+    },
 ]
 
 #: always include raw OHLCV; ta-lib columns are discovered from the lake and appended.
@@ -59,6 +63,13 @@ def _datetime_index_values(index):
         level = index.names.index("datetime") if "datetime" in index.names else 0
         return index.get_level_values(level)
     return index
+
+
+def _datetime_group_level(index):
+    """Return the date level without assuming it is literally named ``datetime``."""
+    if isinstance(index, pd.MultiIndex) and "datetime" in index.names:
+        return index.names.index("datetime")
+    return 0
 
 
 def _fit_window(df, start_time, end_time):
@@ -228,6 +239,34 @@ class TACProcessInf(processor_module.Processor):
         else:
             result = self._replace_inf(df)
         return result.sort_index()
+
+
+class TACCSRankNorm(processor_module.CSRankNorm):
+    """Qlib rank normalization grouped by the actual date index level."""
+
+    def __call__(self, df):
+        result = df.copy()
+        cols = processor_module.get_group_columns(result, self.fields_group)
+        ranked = result[cols].groupby(
+            level=_datetime_group_level(result.index), group_keys=False, sort=False
+        ).rank(pct=True)
+        result[cols] = (ranked - 0.5) * 3.46
+        return result
+
+
+class TACCSZScoreNorm(processor_module.CSZScoreNorm):
+    """Qlib cross-sectional z-score normalization for either date-index shape."""
+
+    def __call__(self, df):
+        result = df.copy()
+        groups = self.fields_group if isinstance(self.fields_group, list) else [self.fields_group]
+        level = _datetime_group_level(result.index)
+        for group in groups:
+            cols = processor_module.get_group_columns(result, group)
+            result[cols] = result[cols].groupby(
+                level=level, group_keys=False, sort=False
+            ).transform(self.zscore_func)
+        return result
 
 
 class BenchResidual(processor_module.Processor):
@@ -503,6 +542,8 @@ class TACHandler(DataHandlerLP):
 __all__ = [
     "TACHandler",
     "DropAllNaN",
+    "TACCSRankNorm",
+    "TACCSZScoreNorm",
     "TACZScoreNorm",
     "TACProcessInf",
     "BenchResidual",
@@ -511,9 +552,11 @@ __all__ = [
 ]
 
 
-# Make `DropAllNaN`/`BenchResidual`/`BenchBetaResidual` resolvable by bare name from processor
-# configs (e.g. the default ``infer_processors`` and workflow yamls that reference them without a
-# ``module_path``), mirroring how qlib registers its own processors in ``qlib.data.dataset.processor``.
+# Register custom TAC processors with Qlib's resolver, mirroring how Qlib registers its own
+# processors in ``qlib.data.dataset.processor``. Explicit module paths remain in service-owned
+# normalized workflow configs; registration also supports direct handler configuration.
 processor_module.DropAllNaN = DropAllNaN
+processor_module.TACCSRankNorm = TACCSRankNorm
+processor_module.TACCSZScoreNorm = TACCSZScoreNorm
 processor_module.BenchResidual = BenchResidual
 processor_module.BenchBetaResidual = BenchBetaResidual
