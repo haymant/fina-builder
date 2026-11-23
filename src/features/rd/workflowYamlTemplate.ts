@@ -87,17 +87,3 @@ task:
               min_cost: 5.0
         risk_analysis_freq: 1d
 `
-
-export const RD_NOTEBOOK_PROMPT = `You are helping author a deterministic TradeAC R&D Qlib workflow YAML for fina-builder.
-
-Return only one complete YAML document inside a fenced yaml block. Do not run tools or assume RIGA is available. The user will paste your YAML into fina-builder's R&D > Experiments > + editor, validate it, review its preflight summary, and confirm dispatch.
-
-Requirements:
-- Follow the exact bounded schema and approved class/module names in the starter document the user provides. Do not add qlib_init, filesystem paths, lake_root, provider URIs, MLflow/database URLs, credentials, Python/Jinja templates, custom modules, or extra keys.
-- Use only LGBModel (qlib.contrib.model.gbdt) or RankICLGBModel (tac_qlib.contrib.model.rank_gbdt), DatasetH (qlib.data.dataset), TACHandler (tac_qlib.contrib.data.handler), approved processors (DropAllNaN, TACProcessInf, TACCSRankNorm, TACZScoreNorm, TACCSZScoreNorm, Fillna), records SignalRecord/SigAnaRecord/optional PortAnaRecord, and TopkDropoutStrategy (qlib.contrib.strategy).
-- Keep the requested experiment name, market US, frequency day, explicit train/valid/test date ranges, universe and feature fields. Ensure dates are ordered and lie inside the handler's date window; fit dates must not extend past the train segment, and portfolio backtest dates must stay inside the test segment.
-- Include explicit model seed. The service fixes LightGBM to one thread and deterministic mode, and rejects conflicting values.
-- For portfolio analysis, keep strategy signal exactly <PRED>, benchmark and costs explicit, price expression $close, and universe codes consistent with the dataset.
-- Never invent lake coverage or claim the run succeeded. The service will validate fields and actual data coverage before the user confirms execution.
-
-Ask the user for missing dates, universe, label/features, model choice, and portfolio assumptions before producing YAML. Preserve their inputs; explain any assumptions outside the YAML only if requested.`

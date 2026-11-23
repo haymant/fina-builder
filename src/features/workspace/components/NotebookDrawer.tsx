@@ -7,9 +7,16 @@ import CodeMirror from '@uiw/react-codemirror'
 import { markdown } from '@codemirror/lang-markdown'
 import { useDashboardDocsStore, defaultUsage } from '../../../store/dashboardDocsStore'
 import { useTheme } from '../../themes/ThemeProvider'
-import { DEFAULT_RD_WORKFLOW_YAML, RD_NOTEBOOK_PROMPT } from '../../rd/workflowYamlTemplate'
+import RD_WORKFLOW_SCHEMA_TEXT from '../../../../skills/tradeac-rd/schema/workflow-yaml.schema.json?raw'
+import TRADEAC_RD_SKILL from '../../../../skills/tradeac-rd/SKILL.md?raw'
+import RD_FEATURE_CANDIDATES from '../../../../skills/tradeac-rd/references/feature-candidates.md?raw'
+import { DEFAULT_RD_WORKFLOW_YAML } from '../../rd/workflowYamlTemplate'
 
 const EMPTY_NOTES: import('../../../store/dashboardDocsStore').DashboardNote[] = []
+const RD_STARTER_YAML_HREF = `data:text/yaml;charset=utf-8,${encodeURIComponent(DEFAULT_RD_WORKFLOW_YAML.trim() + '\n')}`
+const RD_WORKFLOW_SCHEMA_HREF = `data:application/schema+json;charset=utf-8,${encodeURIComponent(RD_WORKFLOW_SCHEMA_TEXT)}`
+const RD_FEATURE_CANDIDATES_HREF = `data:text/markdown;charset=utf-8,${encodeURIComponent(RD_FEATURE_CANDIDATES)}`
+const RD_AGENT_CONTEXT = `# TradeAC R&D YAML workflow authoring and run request\n\n## R&D skill (complete)\n\n${TRADEAC_RD_SKILL.trim()}\n\n## Feature-candidate reference (complete)\n\n${RD_FEATURE_CANDIDATES.trim()}\n\n## Starter YAML (complete reference)\n\n\`\`\`yaml\n${DEFAULT_RD_WORKFLOW_YAML.trim()}\n\`\`\`\n\n## JSON Schema (complete; validates the parsed YAML structure)\n\n\`\`\`json\n${RD_WORKFLOW_SCHEMA_TEXT.trim()}\n\`\`\``
 
 export function NotebookDrawer({ dashboardId, dashboardName, open, onClose, rdMode = false }: { dashboardId: string; dashboardName: string; open: boolean; onClose: () => void; rdMode?: boolean }) {
   const { mode } = useTheme()
@@ -46,8 +53,6 @@ export function NotebookDrawer({ dashboardId, dashboardName, open, onClose, rdMo
       setCopyMessage('Clipboard access is unavailable; select and copy the text manually.')
     }
   }
-  const promptWithStarter = `${RD_NOTEBOOK_PROMPT}\n\nStarter YAML schema/example to adapt:\n\n\`\`\`yaml\n${DEFAULT_RD_WORKFLOW_YAML.trim()}\n\`\`\``
-
   return <aside className="notebook-drawer" style={{ width }}>
     <div className="notebook-resize" onMouseDown={(event) => {
       const start = event.clientX
@@ -63,9 +68,10 @@ export function NotebookDrawer({ dashboardId, dashboardName, open, onClose, rdMo
     </header>
     <div className="notebook-body">
       {rdMode ? <section className="notebook-section">
-        <div className="mb-2 flex items-center gap-2"><h3 className="text-xs font-semibold text-main">1. External-agent YAML prompt</h3><button className="ghost-button ml-auto inline-flex" title="Copy the prompt and starter YAML" onClick={() => void copy(promptWithStarter, 'Prompt and starter YAML')} type="button"><Copy size={12} /> Copy prompt + YAML</button></div>
-        <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{RD_NOTEBOOK_PROMPT}</ReactMarkdown></div>
-        <div className="mt-2 flex items-center gap-2"><button className="ghost-button inline-flex" type="button" onClick={() => void copy(DEFAULT_RD_WORKFLOW_YAML.trim(), 'Starter YAML')}><Copy size={12} /> Copy starter YAML</button><span className="text-[9px] text-muted">Paste the returned YAML into Experiments → + YAML.</span></div>
+        <div className="mb-2 flex items-center gap-2"><h3 className="text-xs font-semibold text-main">1. TradeAC R&amp;D skill / external-agent prompt</h3><button className="ghost-button ml-auto inline-flex" title="Copy the R&D skill, feature candidates, starter YAML, and JSON Schema" onClick={() => void copy(RD_AGENT_CONTEXT, 'Prompt and context')} type="button"><Copy size={12} /> Copy prompt and context</button></div>
+        <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{TRADEAC_RD_SKILL}</ReactMarkdown></div>
+        <div className="mt-2 flex flex-wrap items-center gap-2"><a className="text-[10px] text-muted underline" href={RD_STARTER_YAML_HREF} download="tradeac-rd-workflow.yaml">Download starter YAML</a><a className="text-[10px] text-muted underline" href={RD_WORKFLOW_SCHEMA_HREF} download="workflow-yaml.schema.json" title="Schema with descriptions for every accepted workflow property">Download YAML JSON Schema</a><a className="text-[10px] text-muted underline" href={RD_FEATURE_CANDIDATES_HREF} download="feature-candidates.md">Download feature candidates</a><button className="ghost-button inline-flex" type="button" onClick={() => void copy(DEFAULT_RD_WORKFLOW_YAML.trim(), 'Starter YAML')}><Copy size={12} /> Copy starter YAML</button><span className="text-[9px] text-muted">Paste the returned YAML into Experiments → + YAML.</span></div>
+        <p className="mt-1 text-[9px] text-muted">The combined copy includes the complete skill and all linked authoring dependencies.</p>
         {copyMessage ? <p className="mt-2 text-[10px] text-muted" role="status">{copyMessage}</p> : null}
       </section> : <section className="notebook-section">
         <div className="flex items-center justify-between"><h3 className="text-xs font-semibold text-main">1. Usage</h3><button className="icon-button" title="Edit usage" onClick={() => setEditing(editing === 'usage' ? null : 'usage')} type="button">{editing === 'usage' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}</button></div>
