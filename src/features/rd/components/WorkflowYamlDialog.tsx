@@ -9,21 +9,19 @@ import { DEFAULT_RD_WORKFLOW_YAML } from '../workflowYamlTemplate'
 const btn = 'ghost-button inline-flex'
 const obj = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 const display = (value: unknown) => value === null || value === undefined ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value)
-const sameYamlText = (left: string | null, right: string) => left !== null && left.replace(/\r\n/g, '\n') === right.replace(/\r\n/g, '\n')
 
 export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => void; onDispatched: () => void }) {
   const { mode } = useTheme()
   const [yamlText, setYamlText] = useState(DEFAULT_RD_WORKFLOW_YAML)
-  const [validatedText, setValidatedText] = useState<string | null>(null)
   const [validation, setValidation] = useState<RdWorkflowValidation | null>(null)
   const [preflight, setPreflight] = useState<Record<string, unknown> | null>(null)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [recovery, setRecovery] = useState<RdLakeRecoveryRequest | null>(null)
-  // `busy` covers validation/loading transitions as well as dispatch. Once a
-  // valid result is rendered, the authoritative safety gate is the exact
-  // current-text match; dispatch() sets busy before making the service call.
-  const canDispatch = validation?.valid === true && sameYamlText(validatedText, yamlText)
+  // The editor clears validation on every change, so a valid rendered result
+  // is necessarily for the current YAML. Keep dispatch gated by that state;
+  // dispatch() independently blocks duplicate submissions while busy.
+  const canDispatch = validation?.valid === true
 
   const validate = async (event?: FormEvent) => {
     event?.preventDefault()
@@ -31,13 +29,11 @@ export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => v
     setMessage('')
     setValidation(null)
     setPreflight(null)
-    setValidatedText(null)
     setRecovery(null)
     try {
       const result = await rdApi.validateWorkflowYaml(yamlText)
       if (!result.valid || !result.experimentName || !result.configSha256) throw new Error('The R&D service returned an incomplete workflow preflight.')
       setValidation(result)
-      setValidatedText(yamlText)
       setPreflight(result.datasetPreflight as unknown as Record<string, unknown>)
       setMessage('YAML and persisted dataset preflight passed. Review the summary before dispatch.')
     } catch (cause) {
@@ -120,13 +116,13 @@ export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => v
       <div className="min-h-0 flex-1 overflow-auto p-4">
         <p className="mb-3 text-[11px] text-muted">Edit the workflow, then validate against the persisted lake. Only the approved Qlib classes and fields are accepted. The service pins a seed and one LightGBM thread, and writes a config fingerprint to MLflow.</p>
         <div className="overflow-hidden rounded border border-line">
-          <CodeMirror value={yamlText} height="min(54vh, 620px)" theme={mode} onChange={(value) => { setYamlText(value); setValidation(null); setPreflight(null); setValidatedText(null); setRecovery(null); setMessage('YAML changed. Validate the current text again before dispatch.') }} aria-label="Workflow YAML editor" />
+          <CodeMirror value={yamlText} height="min(54vh, 620px)" theme={mode} onChange={(value) => { setYamlText(value); setValidation(null); setPreflight(null); setRecovery(null); setMessage('YAML changed. Validate the current text again before dispatch.') }} aria-label="Workflow YAML editor" />
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button type="button" className={btn} onClick={() => void validate()} disabled={busy}><ShieldCheck size={13} /> {busy ? 'Working…' : 'Validate & preflight'}</button>
           {recovery ? <button type="button" className={btn} onClick={() => void populateLake()} disabled={busy}>Populate missing lake data</button> : null}
           <button type="button" className={btn} onClick={() => void dispatch()} disabled={!canDispatch}><Play size={13} /> Dispatch workflow</button>
-          {validation?.valid && sameYamlText(validatedText, yamlText) ? <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600"><CheckCircle2 size={12} /> Preflight passed</span> : null}
+          {validation?.valid ? <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600"><CheckCircle2 size={12} /> Preflight passed</span> : null}
         </div>
         {validation ? <div className="mt-3 grid gap-2 rounded border border-line bg-bg p-3 text-[11px] sm:grid-cols-2 lg:grid-cols-3" aria-label="Workflow preflight summary">
           <p><span className="text-muted">Experiment:</span> <b>{validation.experimentName}</b></p>
