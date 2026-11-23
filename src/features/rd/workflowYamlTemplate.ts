@@ -26,15 +26,15 @@ task:
         class: TACHandler
         module_path: tac_qlib.contrib.data.handler
         kwargs:
-          instruments: SPY,QQQ,DIA
-          start_time: 2020-01-01
-          end_time: 2025-12-31
-          fit_start_time: 2020-01-01
-          fit_end_time: 2023-12-31
+          instruments: SPY,QQQ
+          start_time: 2026-01-02
+          end_time: 2026-08-10
+          fit_start_time: 2026-01-02
+          fit_end_time: 2026-05-29
           freq: day
           market: US
           label: "Ref($close,-6)/Ref($close,-1)-1"
-          feature_fields: "$open,$high,$low,$close,$volume,sp_ret,sp_rv5,sp_rv22"
+          feature_fields: "$open,$high,$low,$close,$volume"
           infer_processors:
             - class: DropAllNaN
               kwargs: {}
@@ -47,9 +47,9 @@ task:
             - class: Fillna
               kwargs: {}
       segments:
-        train: [2020-01-01, 2023-12-31]
-        valid: [2024-01-01, 2024-12-31]
-        test: [2025-01-01, 2025-12-31]
+        train: [2026-01-02, 2026-05-29]
+        valid: [2026-06-01, 2026-06-30]
+        test: [2026-07-01, 2026-08-10]
 
   record:
     - class: SignalRecord
@@ -74,12 +74,12 @@ task:
               only_tradable: true
               risk_degree: 0.95
           backtest:
-            start_time: 2025-01-01
-            end_time: 2025-12-31
+            start_time: 2026-07-01
+            end_time: 2026-08-10
             account: 1000000
             benchmark: SPY
             exchange_kwargs:
-              codes: [SPY, QQQ, DIA]
+              codes: [SPY, QQQ]
               deal_price: "$close"
               freq: day
               open_cost: 0.0005
