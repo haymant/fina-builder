@@ -28,7 +28,15 @@ RECORD_MODULES = {
     "SigAnaRecord": "qlib.workflow.record_temp",
     "PortAnaRecord": "qlib.workflow.record_temp",
 }
-PROCESSORS = {"DropAllNaN", "ProcessInf", "CSRankNorm", "ZScoreNorm", "Fillna"}
+PROCESSORS = {
+    "DropAllNaN",
+    "ProcessInf",
+    "TACProcessInf",
+    "CSRankNorm",
+    "ZScoreNorm",
+    "Fillna",
+}
+TAC_PROCESSOR_MODULE = "tac_qlib.contrib.data.handler"
 MODEL_KWARGS = {
     "loss", "learning_rate", "num_leaves", "n_estimators", "num_boost_round",
     "early_stopping_rounds", "min_data_in_leaf", "lambda_l1", "lambda_l2",
@@ -104,7 +112,13 @@ def _normalise_processors(value: Any, where: str) -> list[dict[str, Any]]:
         kwargs = _mapping(item.get("kwargs", {}), f"{where}[{index}].kwargs")
         if kwargs:
             raise ValueError(f"{where}[{index}].kwargs is not configurable")
-        result.append({"class": name, "kwargs": {}})
+        # Keep accepting existing workflow YAML, but avoid Qlib ProcessInf's
+        # parallel resampling path, which requires a DatetimeIndex level.
+        normalized_name = "TACProcessInf" if name in {"ProcessInf", "TACProcessInf"} else name
+        processor = {"class": normalized_name, "kwargs": {}}
+        if normalized_name == "TACProcessInf":
+            processor["module_path"] = TAC_PROCESSOR_MODULE
+        result.append(processor)
     return result
 
 

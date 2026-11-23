@@ -85,6 +85,21 @@ def test_hash_and_normalized_yaml_are_stable():
     assert first[2] == second[2]
 
 
+def test_normalizes_qlib_process_inf_to_datetime_index_compatible_processor():
+    workflow = VALID.replace("class: DropAllNaN", "class: ProcessInf")
+
+    config, _summary, serialized = prepare(workflow)
+
+    processor = config["task"]["dataset"]["kwargs"]["handler"]["kwargs"]["infer_processors"][0]
+    assert processor == {
+        "class": "TACProcessInf",
+        "module_path": "tac_qlib.contrib.data.handler",
+        "kwargs": {},
+    }
+    assert "class: TACProcessInf" in serialized
+    assert "class: ProcessInf" not in serialized
+
+
 @pytest.mark.parametrize(
     "bad, message",
     [

@@ -31,7 +31,11 @@ from ...data.config import (
 
 DEFAULT_INFER_PROCESSORS = [
     {"class": "DropAllNaN", "kwargs": {}},
-    {"class": "ProcessInf", "kwargs": {}},
+    {
+        "class": "TACProcessInf",
+        "module_path": "tac_qlib.contrib.data.handler",
+        "kwargs": {},
+    },
     {"class": "ZScoreNorm", "kwargs": {}},
     {"class": "Fillna", "kwargs": {}},
 ]
@@ -145,6 +149,36 @@ class DropAllNaN(processor_module.Processor):
         if self.cols_to_drop:
             return df.drop(columns=self.cols_to_drop, errors="ignore")
         return df
+
+
+class TACProcessInf(processor_module.Processor):
+    """Replace infinities with the finite cross-sectional mean for each date.
+
+    Qlib's built-in ``ProcessInf`` parallelizes by resampling the datetime index
+    level. Lake-backed Qlib frames can have an ordinary Index at that level
+    (for example ISO-date strings), which pandas cannot resample. Grouping by
+    the datetime level directly preserves Qlib's per-date behavior without
+    requiring a DatetimeIndex or a resampling step.
+    """
+
+    @staticmethod
+    def _replace_inf(frame):
+        result = frame.copy()
+        for column in result.columns:
+            values = result[column]
+            infinite = np.isinf(values)
+            if infinite.any():
+                result.loc[infinite, column] = values[~infinite].mean()
+        return result
+
+    def __call__(self, df):
+        if isinstance(df.index, pd.MultiIndex) and "datetime" in df.index.names:
+            result = df.groupby(level="datetime", group_keys=False, sort=False).apply(
+                self._replace_inf
+            )
+        else:
+            result = self._replace_inf(df)
+        return result.sort_index()
 
 
 class BenchResidual(processor_module.Processor):

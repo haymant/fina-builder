@@ -3,7 +3,7 @@ import type { Trading2Bar } from '../../../api/trading2Api'
 import { buildCandleChartOption } from './WatchlistMarketWorkspace'
 
 describe('watchlist symbol-detail candlesticks', () => {
-  it('keeps high/low wicks visible with a contrasting outline', () => {
+  it('draws high/low wicks independently from the candle body outline', () => {
     const bars: Trading2Bar[] = [{
       timestamp: '2026-11-22T00:00:00Z',
       open: 10,
@@ -14,7 +14,9 @@ describe('watchlist symbol-detail candlesticks', () => {
     }]
 
     const option = buildCandleChartOption(bars, [], [], [])
-    const candle = (option.series as Array<Record<string, unknown>>)[0]!
+    const chartSeries = option.series as Array<Record<string, unknown>>
+    const candle = chartSeries[0]!
+    const wicks = chartSeries.find((series) => series.name === 'Candlestick wicks')!
     const style = candle.itemStyle as Record<string, unknown>
 
     expect(candle.type).toBe('candlestick')
@@ -28,5 +30,19 @@ describe('watchlist symbol-detail candlesticks', () => {
     })
     expect(style.borderColor).not.toBe(style.color)
     expect(style.borderColor0).not.toBe(style.color0)
+
+    expect(wicks.type).toBe('custom')
+    expect(wicks.z).toBeGreaterThan(0)
+    expect(wicks.data).toEqual([['2026-11-22T00:00', 8, 10, 11, 12]])
+    const renderItem = wicks.renderItem as (_params: unknown, api: { value: (dimension: number) => unknown; coord: (point: [string | number, number]) => [number, number] }) => { children: Array<{ shape: Record<string, number>; style: Record<string, unknown> }> }
+    const rendered = renderItem({}, {
+      value: (dimension) => ['2026-11-22T00:00', 8, 10, 11, 12][dimension],
+      coord: ([, value]) => [42, 100 - value * 10],
+    })
+    expect(rendered.children).toHaveLength(4)
+    expect(rendered.children.map((child) => child.style.lineWidth)).toEqual([4, 2.5, 4, 2.5])
+    expect(rendered.children.map((child) => child.style.stroke)).toEqual(['#f8fafc', '#111827', '#f8fafc', '#111827'])
+    expect(rendered.children[0]?.shape).toEqual({ x1: 42, y1: -20, x2: 42, y2: -10 })
+    expect(rendered.children[2]?.shape).toEqual({ x1: 42, y1: 0, x2: 42, y2: 20 })
   })
 })

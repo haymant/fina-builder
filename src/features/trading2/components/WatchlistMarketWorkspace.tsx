@@ -94,6 +94,11 @@ const CANDLE_ITEM_STYLE = {
   borderWidth: 1.5,
 }
 
+type CandleWickApi = {
+  value: (dimension: number) => unknown
+  coord: (value: [string | number, number]) => [number, number]
+}
+
 export function buildCandleChartOption(bars: Trading2Bar[], features: Trading2FeatureRow[], series: IndicatorSeries[], vixBars: MacroBar[]) {
   const visible = bars.length > 300 ? bars.slice(-300) : bars
   const dates = visible.map((bar) => bar.timestamp.slice(0, 16))
@@ -109,7 +114,53 @@ export function buildCandleChartOption(bars: Trading2Bar[], features: Trading2Fe
   const grid = panes.map((_, index) => ({ left: 52, right: 18, top: 30 + index * (height + 8) + '%', height: `${height}%` }))
   const xAxis = panes.map((_, index) => ({ type: 'category', data: dates, gridIndex: index, boundaryGap: true, axisLabel: { show: index === panes.length - 1, fontSize: 10 } }))
   const yAxis = panes.map((_, index) => ({ type: 'value', scale: true, gridIndex: index, axisLabel: { fontSize: 9 } }))
-  const outSeries: Record<string, unknown>[] = [{ name: 'Candlestick', type: 'candlestick', xAxisIndex: 0, yAxisIndex: 0, data: visible.map((bar) => [bar.open ?? null, bar.close ?? null, bar.low ?? null, bar.high ?? null]), itemStyle: { ...CANDLE_ITEM_STYLE } }]
+  const wickData = visible.flatMap((bar, index) => {
+    const values = [bar.low, bar.open, bar.close, bar.high]
+    return values.every((value) => typeof value === 'number' && Number.isFinite(value))
+      ? [[dates[index]!, bar.low!, bar.open!, bar.close!, bar.high!]]
+      : []
+  })
+  const wickOverlay: Record<string, unknown> = {
+    name: 'Candlestick wicks',
+    type: 'custom',
+    coordinateSystem: 'cartesian2d',
+    xAxisIndex: 0,
+    yAxisIndex: 0,
+    encode: { x: 0, y: [1, 2, 3, 4] },
+    data: wickData,
+    silent: true,
+    tooltip: { show: false },
+    legendHoverLink: false,
+    z: 10,
+    renderItem: (_params: unknown, api: CandleWickApi) => {
+      const category = api.value(0) as string | number
+      const low = Number(api.value(1))
+      const open = Number(api.value(2))
+      const close = Number(api.value(3))
+      const high = Number(api.value(4))
+      if (![low, open, close, high].every(Number.isFinite)) return null
+
+      const x = api.coord([category, low])[0]
+      const highY = api.coord([category, high])[1]
+      const upperBodyY = api.coord([category, Math.max(open, close)])[1]
+      const lowerBodyY = api.coord([category, Math.min(open, close)])[1]
+      const lowY = api.coord([category, low])[1]
+      const segments = [[highY, upperBodyY], [lowerBodyY, lowY]]
+        .filter(([start, end]) => Math.abs(end - start) > 0.1)
+      const children = segments.flatMap(([y1, y2]) => {
+        const shape = { x1: x, y1, x2: x, y2 }
+        return [
+          { type: 'line', shape, style: { stroke: '#f8fafc', lineWidth: 4, lineCap: 'round' } },
+          { type: 'line', shape, style: { stroke: '#111827', lineWidth: 2.5, lineCap: 'round' } },
+        ]
+      })
+      return children.length ? { type: 'group', children } : null
+    },
+  }
+  const outSeries: Record<string, unknown>[] = [
+    { name: 'Candlestick', type: 'candlestick', xAxisIndex: 0, yAxisIndex: 0, data: visible.map((bar) => [bar.open ?? null, bar.close ?? null, bar.low ?? null, bar.high ?? null]), itemStyle: { ...CANDLE_ITEM_STYLE } },
+    wickOverlay,
+  ]
   for (const item of series) {
     const data = visible.map((bar) => {
       const row = keys.get(bar.timestamp) ?? dateKeys.get(bar.timestamp.slice(0, 10))
