@@ -21,7 +21,10 @@ export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => v
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [recovery, setRecovery] = useState<RdLakeRecoveryRequest | null>(null)
-  const canDispatch = validation?.valid === true && sameYamlText(validatedText, yamlText) && !busy
+  // `busy` covers validation/loading transitions as well as dispatch. Once a
+  // valid result is rendered, the authoritative safety gate is the exact
+  // current-text match; dispatch() sets busy before making the service call.
+  const canDispatch = validation?.valid === true && sameYamlText(validatedText, yamlText)
 
   const validate = async (event?: FormEvent) => {
     event?.preventDefault()
@@ -78,7 +81,7 @@ export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => v
   }
 
   const dispatch = async () => {
-    if (!canDispatch || !validation) return
+    if (!canDispatch || busy || !validation) return
     const confirmText = [
       `Dispatch Qlib workflow “${validation.experimentName}” once?`,
       `Model: ${validation.modelClass}`,
