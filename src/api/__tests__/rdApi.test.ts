@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createRdApi, RdApiError } from '../rdApi'
+import { createRdApi, lakeRecoveryRequest, RdApiError } from '../rdApi'
 describe('R&D API read-only boundary', () => {
   afterEach(() => vi.restoreAllMocks())
   it('normalizes experiment, run, and result envelopes', async () => {
@@ -56,5 +56,13 @@ describe('R&D API read-only boundary', () => {
   it('maps missing sidecar failures to unavailable', async () => {
     const api = createRdApi({ callTool: async () => { throw new Error('TAC_LAKE_DIR is not set') } })
     await expect(api.listExperiments()).rejects.toMatchObject<Partial<RdApiError>>({ kind: 'unavailable', tool: 'rd_exp_list' })
+  })
+  it('classifies only bounded lake coverage failures into a loader request', () => {
+    const yaml = 'instruments: SPY,QQQ\nstart_time: 2026-01-02\nend_time: 2026-08-10\nfreq: day\nmarket: US\n'
+    expect(lakeRecoveryRequest(yaml, new Error('empty input; check requested lake coverage'))).toEqual({
+      market: 'US', symbols: ['SPY', 'QQQ'], timeframe: '1d', start: '2026-01-02', end: '2026-08-10', reason: 'empty input; check requested lake coverage',
+    })
+    expect(lakeRecoveryRequest(yaml, new Error('invalid YAML syntax'))).toBeNull()
+    expect(lakeRecoveryRequest(yaml.replace('SPY,QQQ', 'all'), new Error('missing lake data'))).toBeNull()
   })
 })

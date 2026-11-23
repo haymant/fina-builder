@@ -83,10 +83,40 @@ export interface RdResult {
 export interface RdExperimentDraft { rational: string; details?: string; experimentName?: string; evolvedFrom?: string }
 export interface RdRunConfig { experimentName: string; trainStart: string; trainEnd: string; validStart?: string; validEnd?: string; testStart?: string; testEnd?: string; universe?: string; market?: string; freq?: string; features?: string; label?: string; recordAnalysis?: boolean; wait?: boolean }
 export interface RdWorkflowValidation { valid: boolean; experimentName: string; modelClass: string; market: string; universe: string; train: string[]; validWindow: string[]; test: string[]; seed: number; numThreads: number; featureFields: string[]; recordClasses: string[]; configSha256: string; determinismProfile: string; datasetPreflight: { universeSize: number; universe: string[]; segments: Record<string, unknown>; featureFields: string[]; allNanDropped: string[] } }
+export interface RdLakeRecoveryRequest { market: string; symbols: string[]; timeframe: string; start: string; end: string; reason: string }
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 const array = (value: unknown, key: string): unknown[] => Array.isArray(value) ? value : Array.isArray(record(value)[key]) ? record(value)[key] as unknown[] : []
 const text = (value: unknown): string | null => value === null || value === undefined ? null : String(value)
 const number = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) ? value : Number(value ?? 0) || 0
+const yamlScalar = (yaml: string, key: string): string | null => {
+  const match = yaml.match(new RegExp(`^\\s{0,16}${key}\\s*:\\s*["']?([^"'\\n#]+?)["']?\\s*(?:#.*)?$`, 'm'))
+  return match?.[1]?.trim() || null
+}
+const yamlList = (yaml: string, key: string): string[] => {
+  const value = yamlScalar(yaml, key)
+  return value ? value.split(',').map((item) => item.trim().toUpperCase()).filter(Boolean) : []
+}
+/**
+ * Convert only the bounded handler fields into a lake-load request. This is
+ * intentionally not a general YAML parser and never rewrites user-authored
+ * configuration. It returns null unless the service error clearly indicates a
+ * persisted-lake coverage/data problem.
+ */
+export function lakeRecoveryRequest(configYaml: string, error: unknown): RdLakeRecoveryRequest | null {
+  const message = error instanceof Error ? error.message : String(error)
+  const lower = message.toLowerCase()
+  const coverageFailure = /(empty input|no rows|all[- ]?nan|missing.*(?:lake|data|feature)|(?:lake|coverage).*(?:missing|empty|hollow|requested|feature)|feature.*(?:missing|coverage|not found))/i.test(lower)
+  if (!coverageFailure) return null
+  const symbols = yamlList(configYaml, 'instruments')
+  const market = (yamlScalar(configYaml, 'market') ?? 'US').toUpperCase()
+  const freq = (yamlScalar(configYaml, 'freq') ?? 'day').toLowerCase()
+  const start = yamlScalar(configYaml, 'start_time')
+  const end = yamlScalar(configYaml, 'end_time')
+  if (!symbols.length || symbols.length > 100 || symbols.includes('ALL') || symbols.some((symbol) => !/^[A-Z][A-Z0-9._-]{0,15}$/.test(symbol))) return null
+  if (!start || !end || !/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) return null
+  if (market !== 'US' || !['day', '1d'].includes(freq)) return null
+  return { market, symbols, timeframe: '1d', start, end, reason: message }
+}
 function normalizeRunSummary(value: unknown): RdRunSummary | null {
   const raw = record(value)
   if (!raw.run_id && !raw.runId) return null
