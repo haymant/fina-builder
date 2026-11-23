@@ -59,6 +59,14 @@ describe('Trading 2nd API transport boundary', () => {
     expect(callTool).toHaveBeenNthCalledWith(2, 'load_macro_symbols', {})
     expect(callTool).toHaveBeenNthCalledWith(3, 'load_lake_status', { job_id: 'job-1' })
   })
+  it('passes an explicit confirmed history start to the lake backfill job', async () => {
+    const callTool = vi.fn(async () => ({ job_id: 'load-1', status: 'started', symbols: ['SPY'] }))
+    setTacTransport({ callTool: callTool as unknown as <T>(name: string, args?: unknown) => Promise<T> })
+    await trading2Api.loadLakeSymbols({ market: 'US', symbols: ['SPY'], timeframe: '1d', start: '2019-06-03', end: '2020-01-31' })
+    expect(callTool).toHaveBeenCalledWith('load_lake_symbols', {
+      market: 'US', symbols: 'SPY', timeframe: '1d', start: '2019-06-03', end: '2020-01-31',
+    })
+  })
   it('maps a missing TAC backend to an unavailable Trading2Error', async () => {
     setTacTransport({ callTool: async () => { throw new TacUnavailableError('TAC credentials are not configured') } })
     await expect(trading2Api.getAccount()).rejects.toMatchObject<Partial<Trading2Error>>({ kind: 'unavailable', tool: 'get_account' })

@@ -159,6 +159,7 @@ def test_validation_preflight_uses_normalized_yaml_processors(tmp_path, monkeypa
     from tac_qlib.data import config
 
     monkeypatch.setattr(config, "resolve_lake_root", lambda _root: tmp_path)
+    monkeypatch.setenv("TAC_LAKE_START_DATE", "2000-01-03")
     captured = {}
 
     def inspect_preflight(**kwargs):
@@ -200,6 +201,57 @@ def test_validation_preflight_uses_normalized_yaml_processors(tmp_path, monkeypa
             "kwargs": {},
         },
     ]
+
+
+def test_validation_requires_confirmation_for_start_before_lake_floor(tmp_path, monkeypatch):
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from tac_qlib import rd_server
+    from tac_qlib.data import config
+
+    monkeypatch.setattr(config, "resolve_lake_root", lambda _root: tmp_path)
+    monkeypatch.setenv("TAC_LAKE_START_DATE", "2021-01-04")
+    monkeypatch.setattr(
+        rd_server,
+        "rd_dataset",
+        lambda **_kwargs: pytest.fail("preflight must not read the lake before confirmation"),
+    )
+
+    with pytest.raises(ToolError, match="before TAC_LAKE_START_DATE 2021-01-04"):
+        rd_server.rd_validate_workflow(VALID)
+
+
+def test_validation_rejects_invalid_lake_start_date(tmp_path, monkeypatch):
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from tac_qlib import rd_server
+    from tac_qlib.data import config
+
+    monkeypatch.setattr(config, "resolve_lake_root", lambda _root: tmp_path)
+    monkeypatch.setenv("TAC_LAKE_START_DATE", "not-a-date")
+
+    with pytest.raises(ToolError, match="TAC_LAKE_START_DATE must begin with a valid YYYY-MM-DD date"):
+        rd_server.rd_validate_workflow(VALID)
+
+
+def test_confirmed_revalidation_can_preflight_the_same_pre_floor_workflow(tmp_path, monkeypatch):
+    from tac_qlib import rd_server
+    from tac_qlib.data import config
+
+    monkeypatch.setattr(config, "resolve_lake_root", lambda _root: tmp_path)
+    monkeypatch.setenv("TAC_LAKE_START_DATE", "2021-01-04")
+    monkeypatch.setattr(
+        rd_server,
+        "rd_dataset",
+        lambda **_kwargs: {
+            "universe_size": 2, "universe": ["SPY", "QQQ"], "segments": {},
+            "feature_fields": ["$close"], "all_nan_dropped": [],
+        },
+    )
+
+    result = rd_server.rd_validate_workflow(VALID, allow_before_lake_start=True)
+
+    assert result["valid"] is True
 
 
 @pytest.mark.parametrize(

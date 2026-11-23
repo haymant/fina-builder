@@ -20,12 +20,12 @@ export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => v
   const [busy, setBusy] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [message, setMessage] = useState('')
-const [recovery, setRecovery] = useState<RdLakeRecoveryRequest | null>(null)
+  const [recovery, setRecovery] = useState<RdLakeRecoveryRequest | null>(null)
   // The editor clears validation on every change, so a valid rendered result
   // is necessarily for the current YAML. Keep dispatch gated by that state.
   const canDispatch = validation?.valid === true && !busy && !submitted
 
-  const validate = async (event?: FormEvent) => {
+  const validate = async (event?: FormEvent, allowBeforeLakeStart = false, configYaml = yamlText) => {
     event?.preventDefault()
     setBusy(true)
     setMessage('')
@@ -34,14 +34,14 @@ const [recovery, setRecovery] = useState<RdLakeRecoveryRequest | null>(null)
     setRecovery(null)
     setSubmitted(false)
     try {
-      const result = await rdApi.validateWorkflowYaml(yamlText)
+      const result = await rdApi.validateWorkflowYaml(configYaml, allowBeforeLakeStart)
       if (!result.valid || !result.experimentName || !result.configSha256) throw new Error('The R&D service returned an incomplete workflow preflight.')
       setValidation(result)
       setPreflight(result.datasetPreflight as unknown as Record<string, unknown>)
       setMessage('YAML and persisted dataset preflight passed. Review the summary before dispatch.')
     } catch (cause) {
       setMessage(cause instanceof RdApiError ? cause.message : String(cause))
-      setRecovery(lakeRecoveryRequest(yamlText, cause))
+      setRecovery(lakeRecoveryRequest(configYaml, cause))
     } finally {
       setBusy(false)
     }
@@ -49,28 +49,31 @@ const [recovery, setRecovery] = useState<RdLakeRecoveryRequest | null>(null)
 
   const populateLake = async () => {
     if (!recovery || busy) return
+    const request = recovery
+    const configYaml = yamlText
     const confirmText = [
       'Populate the missing persisted lake data now?',
-      `Market: ${recovery.market}`,
-      `Symbols: ${recovery.symbols.join(', ')}`,
-      `Daily bars and TA/SP features: ${recovery.start} through ${recovery.end}`,
+      `Reason: ${request.reason}`,
+      `Market: ${request.market}`,
+      `Symbols: ${request.symbols.join(', ')}`,
+      `Daily bars and TA/SP features: ${request.start} through ${request.end}`,
       'This starts a background MCP lake-loading job and persists downloaded/computed data locally. The authored YAML will not be changed.',
     ].join('\n')
-    if (!(await confirm({ title: 'Populate missing lake data?', message: confirmText, confirmLabel: 'Populate lake' }))) return
     setBusy(true)
-    setMessage(`Starting lake population for ${recovery.symbols.join(', ')}…`)
     try {
-      const started = await trading2Api.loadLakeSymbols(recovery)
+      if (!(await confirm({ title: 'Populate missing lake data?', message: confirmText, confirmLabel: 'Populate lake' }))) return
+      setMessage(`Starting lake population for ${request.symbols.join(', ')}…`)
+      const started = await trading2Api.loadLakeSymbols(request)
       if (!started.jobId) throw new Error('The lake loader did not return a job id.')
       let job = started
       while (job.status === 'running' || job.status === 'started' || job.status === 'queued') {
         await new Promise((resolve) => window.setTimeout(resolve, 250))
         job = await trading2Api.getLoadStatus(started.jobId)
-        setMessage(`Populating lake… ${job.processed}/${job.totalSymbols ?? recovery.symbols.length} symbols processed.`)
+        setMessage(`Populating lake… ${job.processed}/${job.totalSymbols ?? request.symbols.length} symbols processed.`)
       }
       if (job.status !== 'completed') throw new Error(job.error || `Lake population ended with status “${job.status}”.`)
       setMessage('Lake population completed. Revalidating the unchanged YAML…')
-      await validate()
+      await validate(undefined, true, configYaml)
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -120,7 +123,7 @@ const [recovery, setRecovery] = useState<RdLakeRecoveryRequest | null>(null)
       <div className="min-h-0 flex-1 overflow-auto p-4">
         <p className="mb-3 text-[11px] text-muted">Edit the workflow, then validate against the persisted lake. Only the approved Qlib classes and fields are accepted. The service pins a seed and one LightGBM thread, and writes a config fingerprint to MLflow.</p>
         <div className="overflow-hidden rounded border border-line">
-          <CodeMirror value={yamlText} height="min(54vh, 620px)" theme={mode} onChange={(value) => { setYamlText(value); setValidation(null); setPreflight(null); setRecovery(null); setMessage('YAML changed. Validate the current text again before dispatch.') }} aria-label="Workflow YAML editor" />
+          <CodeMirror value={yamlText} height="min(54vh, 620px)" theme={mode} editable={!busy} onChange={(value) => { setYamlText(value); setValidation(null); setPreflight(null); setRecovery(null); setMessage('YAML changed. Validate the current text again before dispatch.') }} aria-label="Workflow YAML editor" />
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button type="button" className={btn} onClick={() => void validate()} disabled={busy}><ShieldCheck size={13} /> {busy ? 'Working…' : 'Validate & preflight'}</button>
@@ -140,7 +143,7 @@ const [recovery, setRecovery] = useState<RdLakeRecoveryRequest | null>(null)
           {Object.keys(segments).map((key) => <p key={key}><span className="text-muted">{key} data:</span> <b>{latest(segments[key])}</b></p>)}
           {Array.isArray(dataset.allNanDropped) && dataset.allNanDropped.length ? <p className="text-amber-600 sm:col-span-2 lg:col-span-3">All-NaN fields dropped: {dataset.allNanDropped.map(String).join(', ')}</p> : null}
         </div> : null}
-        {recovery ? <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-[11px] text-amber-900" role="alert"><b>Requested lake data is not available.</b> Confirming the recovery action will persist daily bars and TA/SP features for {recovery.symbols.join(', ')} from {recovery.start} through {recovery.end}, then validate again. No data is loaded automatically.</div> : null}
+        {recovery ? <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-[11px] text-amber-900" role="alert"><b>Requested lake data is not available for validation.</b> {recovery.reason} Confirming will persist daily bars and TA/SP features for {recovery.symbols.join(', ')} from the YAML's requested start date {recovery.start} through {recovery.end}, then validate the unchanged YAML again. No data is loaded automatically.</div> : null}
         {message ? <p className={`mt-3 text-[11px] ${submitted ? 'text-emerald-700' : 'text-muted'}`} role="status">{message}</p> : null}
       </div>
       <footer className="flex items-center justify-between border-t border-line px-4 py-3 text-[10px] text-muted"><span>Lake population and run creation are separate confirmed actions; neither happens automatically.</span><button type="button" className={btn} onClick={onClose}><X size={12} /> Close</button></footer>

@@ -227,30 +227,66 @@ pub fn parse_dotenv(contents: &str) -> Vec<(String, String)> {
     out
 }
 
+fn process_env_overrides_dotenv(
+    key: &str,
+    process_value: Option<&str>,
+    profile_lake_default: Option<&str>,
+) -> bool {
+    process_value.is_some_and(|value| {
+        !(key == "TAC_LAKE_DIR" && profile_lake_default == Some(value))
+    })
+}
+
+fn engine_env_candidates(
+    workspace: &std::path::Path,
+    working_dir: &std::path::Path,
+    app_data: Option<&std::path::Path>,
+) -> Vec<std::path::PathBuf> {
+    let mut candidates = vec![working_dir.join(".env")];
+    if let Some(data) = app_data {
+        let path = data.join(".env");
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+    let workspace_env = workspace.join(".env");
+    if !candidates.contains(&workspace_env) {
+        candidates.push(workspace_env);
+    }
+    candidates.push(workspace.join("modules").join("tac-engine").join(".env"));
+    candidates.push(workspace.join("modules").join("riga-flow").join(".env"));
+    candidates
+}
+
 /// Extra environment the engine children inherit, loaded from `.env` files so
 /// the user can drop one next to the app or in the repo root rather than only
-/// exporting shell variables. Search order (first wins, then the process env
-/// always overrides): app-data `.env`, workspace `.env`,
+/// exporting shell variables. Search order (first wins, then explicit process
+/// env overrides): working-directory `.env`, app-data `.env`, workspace `.env`,
 /// `modules/tac-engine/.env`, `modules/riga-flow/.env`.
 pub fn engine_env(app: &AppHandle) -> Vec<(String, String)> {
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace = manifest.join("..");
-    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-    if let Ok(data) = app.path().app_data_dir() {
-        candidates.push(data.join(".env"));
-    }
-    candidates.push(workspace.join(".env"));
-    candidates.push(workspace.join("modules").join("tac-engine").join(".env"));
-    candidates.push(workspace.join("modules").join("riga-flow").join(".env"));
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| workspace.clone());
+    let app_data = app.path().app_data_dir().ok();
+    let candidates = engine_env_candidates(&workspace, &working_dir, app_data.as_deref());
 
     let mut collected: Vec<(String, String)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let profile_lake_default = std::env::var("FINA_PROFILE_TAC_LAKE_DIR")
+        .ok()
+        .filter(|value| !value.is_empty());
     for path in candidates {
         let Ok(contents) = std::fs::read_to_string(&path) else {
             continue;
         };
         for (key, value) in parse_dotenv(&contents) {
-            if std::env::var_os(&key).is_some() {
+            let process_value = std::env::var(&key).ok();
+            let profile_default = if key == "TAC_LAKE_DIR" {
+                profile_lake_default.as_deref()
+            } else {
+                None
+            };
+            if process_env_overrides_dotenv(&key, process_value.as_deref(), profile_default) {
                 continue;
             }
             if !seen.insert(key.clone()) {
@@ -826,6 +862,54 @@ mod tests {
                 ("TAC_LAKE_DIR".to_string(), "/data/lake".to_string()),
                 ("FRED_API_KEY".to_string(), "abc".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn dotenv_can_replace_only_the_launcher_profile_lake_default() {
+        assert!(!process_env_overrides_dotenv(
+            "TAC_LAKE_DIR",
+            Some("/workspace/.fina/data/lake"),
+            Some("/workspace/.fina/data/lake"),
+        ));
+        assert!(process_env_overrides_dotenv(
+            "TAC_LAKE_DIR",
+            Some("/Users/user/lake"),
+            Some("/workspace/.fina/data/lake"),
+        ));
+        assert!(process_env_overrides_dotenv(
+            "TAC_LAKE_START_DATE",
+            Some("2026-05-26"),
+            Some("/workspace/.fina/data/lake"),
+        ));
+    }
+
+    #[test]
+    fn engine_dotenv_search_includes_working_directory_before_checkout_defaults() {
+        let paths = engine_env_candidates(
+            std::path::Path::new("/workspace"),
+            std::path::Path::new("/working"),
+            Some(std::path::Path::new("/app-data")),
+        );
+        assert_eq!(paths[0], std::path::Path::new("/working/.env"));
+        assert_eq!(paths[1], std::path::Path::new("/app-data/.env"));
+        assert_eq!(paths[2], std::path::Path::new("/workspace/.env"));
+        assert_eq!(
+            paths[3],
+            std::path::Path::new("/workspace/modules/tac-engine/.env")
+        );
+
+        let same_dir = engine_env_candidates(
+            std::path::Path::new("/workspace"),
+            std::path::Path::new("/workspace"),
+            None,
+        );
+        assert_eq!(
+            same_dir
+                .iter()
+                .filter(|path| path.as_path() == std::path::Path::new("/workspace/.env"))
+                .count(),
+            1
         );
     }
 

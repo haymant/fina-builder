@@ -6,6 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { atLeast, buildRuntimeEnvironment, findRoot, parseToml, resolveProject, selectProfile } from "./fina.mjs";
+import { loadLocalEnv } from "./dev-http.mjs";
 
 const execFileAsync = promisify(execFile);
 const launcher = join(process.cwd(), "scripts", "fina.mjs");
@@ -87,6 +88,7 @@ test("derives profile-aware service paths without credentials", () => {
   const env = buildRuntimeEnvironment(project, {});
   assert.equal(env.FINA_DATA_ROOT, join(root, ".fina", "ci-data"));
   assert.equal(env.TAC_LAKE_DIR, join(root, ".fina", "ci-data", "lake"));
+  assert.equal(env.FINA_PROFILE_TAC_LAKE_DIR, join(root, ".fina", "ci-data", "lake"));
   assert.equal(env.NIP_DATA_DIR, join(root, ".fina", "ci-data", "nip"));
   assert.equal(env.NIP_LAKE_DIR, join(root, ".fina", "ci-data", "nip", "lake"));
   assert.equal(env.TAC_ENGINE_BIN, join(root, "modules", "target", "release", "tac-engine"));
@@ -103,8 +105,32 @@ test("preserves explicit service path and binary overrides", () => {
     TAC_ENGINE_BIN: "/tmp/custom-tac-engine",
   });
   assert.equal(env.TAC_LAKE_DIR, "/tmp/custom-lake");
+  assert.equal(env.FINA_PROFILE_TAC_LAKE_DIR, "");
   assert.equal(env.TAC_ENGINE_BIN, "/tmp/custom-tac-engine");
   assert.equal(env.NIP_DATA_DIR, join(root, ".fina", "data", "nip"));
+});
+
+test("dev-http dotenv replaces only the launcher profile lake default", async () => {
+  const root = await mkdtemp(join("/tmp", "fina-dev-http-env-"));
+  await mkdir(join(root, "modules", "tac-engine"), { recursive: true });
+  await writeFile(join(root, ".env"), "TAC_LAKE_DIR=/env/lake\nTAC_LAKE_START_DATE=2000-01-03\nSHARED=root\n");
+  await writeFile(join(root, "modules", "tac-engine", ".env"), "TAC_LAKE_DIR=/module/lake\nTAC_LAKE_START_DATE=2010-01-01\n");
+
+  const profileEnv = {
+    FINA_PROFILE_TAC_LAKE_DIR: "/profile/lake",
+    TAC_LAKE_DIR: "/profile/lake",
+    SHARED: "shell",
+  };
+  loadLocalEnv(root, profileEnv);
+  assert.equal(profileEnv.TAC_LAKE_DIR, "/env/lake");
+  assert.equal(profileEnv.TAC_LAKE_START_DATE, "2000-01-03");
+  assert.equal(profileEnv.SHARED, "shell");
+
+  const explicitEnv = { TAC_LAKE_DIR: "/explicit/lake" };
+  loadLocalEnv(root, explicitEnv);
+  assert.equal(explicitEnv.TAC_LAKE_DIR, "/explicit/lake");
+  assert.equal(explicitEnv.TAC_LAKE_START_DATE, "2000-01-03");
+  await rm(root, { recursive: true, force: true });
 });
 
 test("compares toolchain versions numerically", () => {

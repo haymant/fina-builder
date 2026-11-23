@@ -24,14 +24,13 @@ the qlib book/R&D bridges, the RiskCube bridge, and Vite.
 
 // Mirror the desktop host's engine environment: local, ignored `.env` files are
 // read so browser mode sees the same Alpaca/lake/database configuration as the
-// Tauri sidecar. The shell always wins; earlier files win over later ones. The
-// control plane injects a profile lake root, so a checkout `.env` may point at a
-// pre-populated lake without requiring a separate shell export.
-export function loadLocalEnv() {
+// Tauri sidecar. Explicit shell values win; earlier files win over later ones.
+// Only the launcher-injected profile default may be replaced by a local .env.
+export function loadLocalEnv(projectRoot = root, env = process.env) {
   const candidates = [
-    resolve(root, '.env'),
-    resolve(root, 'modules/tac-engine/.env'),
-    resolve(root, 'modules/riga-flow/.env'),
+    resolve(projectRoot, '.env'),
+    resolve(projectRoot, 'modules/tac-engine/.env'),
+    resolve(projectRoot, 'modules/riga-flow/.env'),
   ]
   const loaded = []
   const seen = new Set()
@@ -52,13 +51,15 @@ export function loadLocalEnv() {
       } else {
         value = value.replace(/\s+#.*$/, '').trim()
       }
-      const profileLake = key === 'TAC_LAKE_DIR' && process.env.FINA_DATA_ROOT
-        ? resolve(process.env.FINA_DATA_ROOT, 'lake')
+      const profileLake = key === 'TAC_LAKE_DIR'
+        ? env.FINA_PROFILE_TAC_LAKE_DIR !== undefined
+          ? env.FINA_PROFILE_TAC_LAKE_DIR || null
+          : env.FINA_DATA_ROOT ? resolve(env.FINA_DATA_ROOT, 'lake') : null
         : null
-      if (process.env[key] !== undefined && process.env[key] !== profileLake) continue
-      process.env[key] = value
+      if (env[key] !== undefined && env[key] !== profileLake) continue
+      env[key] = value
     }
-    loaded.push(file.slice(root.length + 1))
+    loaded.push(file.slice(projectRoot.length + 1))
   }
   return loaded
 }

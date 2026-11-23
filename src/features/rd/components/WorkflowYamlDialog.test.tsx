@@ -12,7 +12,7 @@ vi.mock('../../../api/rdApi', async () => {
 vi.mock('../../../api/trading2Api', () => ({ trading2Api: { loadLakeSymbols: vi.fn(), getLoadStatus: vi.fn() } }))
 vi.mock('../../themes/ThemeProvider', () => ({ useTheme: () => ({ mode: 'light' }) }))
 vi.mock('@uiw/react-codemirror', () => ({
-  default: ({ value, onChange, ...props }: { value: string; onChange: (value: string) => void; 'aria-label'?: string }) => <textarea aria-label={props['aria-label'] ?? 'yaml editor'} value={value} onChange={(event) => onChange(event.target.value)} />,
+  default: ({ value, onChange, editable = true, ...props }: { value: string; onChange: (value: string) => void; editable?: boolean; 'aria-label'?: string }) => <textarea aria-label={props['aria-label'] ?? 'yaml editor'} disabled={!editable} value={value} onChange={(event) => onChange(event.target.value)} />,
 }))
 
 const result = {
@@ -93,5 +93,23 @@ describe('WorkflowYamlDialog', () => {
     expect(trading2Api.getLoadStatus).toHaveBeenCalledWith('load-1')
     expect(await screen.findByText('Preflight passed')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /dispatch workflow/i })).toBeEnabled()
+  })
+
+  it('backfills from the YAML start when it predates TAC_LAKE_START_DATE', async () => {
+    const user = userEvent.setup()
+    const yaml = 'instruments: SPY,QQQ\nmarket: US\nfreq: day\nstart_time: 2019-06-03\nend_time: 2020-01-31\n'
+    vi.mocked(rdApi.validateWorkflowYaml)
+      .mockRejectedValueOnce(new Error('handler.start_time 2019-06-03 is before TAC_LAKE_START_DATE 2021-01-04; confirm whether to backfill'))
+      .mockResolvedValueOnce(result)
+    render(<WorkflowYamlDialog onClose={vi.fn()} onDispatched={vi.fn()} />)
+    fireEvent.change(screen.getByRole('textbox', { name: /workflow yaml editor/i }), { target: { value: yaml } })
+    await user.click(screen.getByRole('button', { name: /validate & preflight/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('YAML\'s requested start date 2019-06-03 through 2020-01-31')
+    await user.click(screen.getByRole('button', { name: /populate missing lake data/i }))
+    expect(await screen.findByTestId('confirm-dialog')).toHaveTextContent('2019-06-03 through 2020-01-31')
+    expect(screen.getByRole('textbox', { name: /workflow yaml editor/i })).toBeDisabled()
+    await user.click(screen.getByTestId('confirm-accept'))
+    await waitFor(() => expect(trading2Api.loadLakeSymbols).toHaveBeenCalledWith(expect.objectContaining({ start: '2019-06-03', end: '2020-01-31' })))
+    await waitFor(() => expect(rdApi.validateWorkflowYaml).toHaveBeenCalledTimes(2))
   })
 })

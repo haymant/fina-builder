@@ -164,11 +164,15 @@ export function resolveProject(project, profile = DEFAULT_PROFILE) {
 
 export function buildRuntimeEnvironment(project, baseEnv = process.env) {
   const releaseTarget = join(project.paths.rust_target, "release");
+  const hasExplicitLake = baseEnv.TAC_LAKE_DIR !== undefined;
   return {
     FINA_PROFILE: project.profile,
     FINA_ROOT: project.root,
     FINA_WORKSPACE_ROOT: project.root,
     FINA_DATA_ROOT: project.paths.data_root,
+    // Hosts may let a local .env replace this profile default, but never an
+    // explicit TAC_LAKE_DIR supplied by the caller.
+    FINA_PROFILE_TAC_LAKE_DIR: hasExplicitLake ? "" : project.paths.tac_lake,
     FINA_RUST_TARGET_DIR: project.paths.rust_target,
     FINA_QLIB_ROOT: project.paths.qlib,
     CARGO_TARGET_DIR: baseEnv.CARGO_TARGET_DIR ?? project.paths.rust_target,

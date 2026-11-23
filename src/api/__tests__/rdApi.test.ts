@@ -59,9 +59,11 @@ describe('R&D API read-only boundary', () => {
     const api = createRdApi({ callTool })
     const checked = await api.validateWorkflowYaml(configYaml)
     expect(checked).toMatchObject({ valid: true, experimentName: 'alpha', seed: 2026, numThreads: 1, validWindow: ['2024-01-01', '2024-12-31'], datasetPreflight: { universeSize: 2 } })
+    await api.validateWorkflowYaml(configYaml, true)
     await api.runWorkflowYaml(configYaml, checked.experimentName)
     expect(callTool).toHaveBeenNthCalledWith(1, 'rd_validate_workflow', { config_yaml: configYaml })
-    expect(callTool).toHaveBeenNthCalledWith(2, 'rd_run_workflow', { config_yaml: configYaml, experiment_name: 'alpha' })
+    expect(callTool).toHaveBeenNthCalledWith(2, 'rd_validate_workflow', { config_yaml: configYaml, allow_before_lake_start: true })
+    expect(callTool).toHaveBeenNthCalledWith(3, 'rd_run_workflow', { config_yaml: configYaml, experiment_name: 'alpha' })
   })
   it('maps missing sidecar failures to unavailable', async () => {
     const api = createRdApi({ callTool: async () => { throw new Error('TAC_LAKE_DIR is not set') } })
@@ -74,5 +76,9 @@ describe('R&D API read-only boundary', () => {
     })
     expect(lakeRecoveryRequest(yaml, new Error('invalid YAML syntax'))).toBeNull()
     expect(lakeRecoveryRequest(yaml.replace('SPY,QQQ', 'all'), new Error('missing lake data'))).toBeNull()
+    expect(lakeRecoveryRequest(yaml, new Error('handler.start_time 2026-01-02 is before TAC_LAKE_START_DATE 2026-05-26; confirm whether to backfill'))).toEqual({
+      market: 'US', symbols: ['SPY', 'QQQ'], timeframe: '1d', start: '2026-01-02', end: '2026-08-10',
+      reason: 'handler.start_time 2026-01-02 is before TAC_LAKE_START_DATE 2026-05-26; confirm whether to backfill',
+    })
   })
 })

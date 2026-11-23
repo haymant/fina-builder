@@ -1345,7 +1345,7 @@ def _cleanup_submitted_workflow(config_path: str) -> None:
 
 
 @server.tool(structured_output=False)
-def rd_validate_workflow(config_yaml: str) -> dict:
+def rd_validate_workflow(config_yaml: str, allow_before_lake_start: bool = False) -> dict:
     """Validate bounded workflow YAML and preflight its lake data without creating a run."""
     try:
         from tac_qlib.data.config import resolve_lake_root
@@ -1358,6 +1358,18 @@ def rd_validate_workflow(config_yaml: str) -> dict:
         task = runtime_cfg["task"]
         handler = task["dataset"]["kwargs"]["handler"]["kwargs"]
         segments = task["dataset"]["kwargs"]["segments"]
+        configured_start = os.environ.get("TAC_LAKE_START_DATE", "2000-01-03").strip()
+        try:
+            lake_start_date = _dt.date.fromisoformat(configured_start[:10])
+        except ValueError as exc:
+            raise ValueError("TAC_LAKE_START_DATE must begin with a valid YYYY-MM-DD date") from exc
+        requested_start = _dt.date.fromisoformat(handler["start_time"])
+        if requested_start < lake_start_date and not allow_before_lake_start:
+            raise ValueError(
+                f"handler.start_time {handler['start_time']} is before TAC_LAKE_START_DATE "
+                f"{lake_start_date.isoformat()}; confirm whether to backfill the explicitly "
+                "requested start_time before dispatch"
+            )
         data = rd_dataset(
             lake_root=lake,
             market=handler["market"],

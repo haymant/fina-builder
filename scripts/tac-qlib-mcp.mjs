@@ -57,6 +57,7 @@ function syncModuleEnvironment() {
 // into the child process merely because they happen to be present in the shell.
 const RUNTIME_ENV_KEYS = [
   'TAC_LAKE_DIR',
+  'TAC_LAKE_START_DATE',
   'TAC_RD_IN_SYSTEMD',
   'MLFLOW_ALLOW_FILE_STORE',
   'MLRUNS_URI',
