@@ -133,7 +133,7 @@ function normalizeMeta(value: unknown): RdRunMeta | null {
 }
 function normalizeRun(value: unknown): RdRunDetail {
   const raw = record(value)
-  return { meta: normalizeMeta(raw.meta), params: record(raw.params) as Record<string, string>, tags: record(raw.tags) as Record<string, string>, metrics: record(raw.metrics), metricsLatest: record(raw.metrics_latest ?? raw.metricsLatest), headline: record(raw.headline), notes: record(raw.notes), artifacts: array(raw.artifacts, '').map((item) => { const value = record(item); return { path: text(value.path) ?? String(item), size: number(value.size) } }) }
+  return { meta: normalizeMeta(raw.meta), params: record(raw.params) as Record<string, string>, tags: record(raw.tags) as Record<string, string>, metrics: record(raw.metrics), metricsLatest: record(raw.metrics_latest ?? raw.metricsLatest ?? raw.metrics), headline: record(raw.headline), notes: record(raw.notes), artifacts: array(raw.artifacts, '').map((item) => { const value = record(item); return { path: text(value.path) ?? String(item), size: number(value.size) } }) }
 }
 function errorFor(tool: string, cause: unknown): RdApiError {
   if (cause instanceof RdApiError) return cause

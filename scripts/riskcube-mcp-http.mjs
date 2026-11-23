@@ -1,5 +1,4 @@
 import { createServer } from 'node:http'
-import { spawn } from 'node:child_process'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createStdioClient } from './lib/mcpStdio.mjs'
@@ -26,7 +25,9 @@ async function handle(message) {
   safeCall({ params })
   if (setupError || !child) throw new Error(setupError ?? 'RiskCube OLAP service unavailable')
   const result = await child.call({ jsonrpc: '2.0', id, method, params })
-  return { ...result, id }
+  // Wrap the child's result in a JSON-RPC envelope: the browser transport
+  // reads `parsed.result`, so returning the bare payload yields `{}`.
+  return { jsonrpc: '2.0', id, result }
 }
 const server = createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, CORS); return res.end() }

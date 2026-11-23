@@ -4,7 +4,7 @@ import { createConnection } from 'node:net'
 import { existsSync, readFileSync } from 'node:fs'
 import { delimiter, dirname, isAbsolute, resolve } from 'node:path'
 import { homedir } from 'node:os'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)
@@ -14,11 +14,53 @@ let stopping = false
 function usage() {
   console.log(`Usage: npm run dev:http [-- --cpu|--cuda] [--public]
 
-Builds riga-mcp and tac-engine, then starts both HTTP engines, the trade-repo MCP server, and Vite.
+Builds riga-mcp and tac-engine, then starts the HTTP engines, the trade-repo MCP server,
+the qlib book/R&D bridges, the RiskCube bridge, and Vite.
   --cpu      Build the portable CPU backend (default)
   --cuda     Build riga-mcp with its CUDA GPU feature; requires CUDA 13+ and an NVIDIA GPU
   --public   Bind Vite to 0.0.0.0 for a forwarded/public preview; backends stay on loopback
   --help     Show this help`)
+}
+
+// Mirror the desktop host's engine environment: local, ignored `.env` files are
+// read so browser mode sees the same Alpaca/lake/database configuration as the
+// Tauri sidecar. The shell always wins; earlier files win over later ones. The
+// control plane injects a profile lake root, so a checkout `.env` may point at a
+// pre-populated lake without requiring a separate shell export.
+export function loadLocalEnv() {
+  const candidates = [
+    resolve(root, '.env'),
+    resolve(root, 'modules/tac-engine/.env'),
+    resolve(root, 'modules/riga-flow/.env'),
+  ]
+  const loaded = []
+  const seen = new Set()
+  for (const file of candidates) {
+    if (!existsSync(file)) continue
+    for (const raw of readFileSync(file, 'utf8').split(/\r?\n/)) {
+      const line = raw.trim()
+      if (!line || line.startsWith('#')) continue
+      const entry = line.startsWith('export ') ? line.slice('export '.length) : line
+      const equals = entry.indexOf('=')
+      if (equals <= 0) continue
+      const key = entry.slice(0, equals).trim()
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || seen.has(key)) continue
+      seen.add(key)
+      let value = entry.slice(equals + 1).trim()
+      if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+        value = value.slice(1, -1)
+      } else {
+        value = value.replace(/\s+#.*$/, '').trim()
+      }
+      const profileLake = key === 'TAC_LAKE_DIR' && process.env.FINA_DATA_ROOT
+        ? resolve(process.env.FINA_DATA_ROOT, 'lake')
+        : null
+      if (process.env[key] !== undefined && process.env[key] !== profileLake) continue
+      process.env[key] = value
+    }
+    loaded.push(file.slice(root.length + 1))
+  }
+  return loaded
 }
 
 function parseArgs(values) {
@@ -113,7 +155,7 @@ function tacConfigPreflight() {
   }
   if (missing.length > 0) {
     throw new Error(
-      `Tac-engine configuration is required before starting HTTP mode: ${missing.join(', ')}. Set these in the environment or modules/tac-engine/.env (see modules/tac-engine/.env.example). Values are not printed.`,
+      `Tac-engine configuration is required before starting HTTP mode: ${missing.join(', ')}. Set these in the environment, the checkout .env, or modules/tac-engine/.env (see modules/tac-engine/.env.example). Values are not printed.`,
     )
   }
 }
@@ -133,25 +175,40 @@ function portReachable(port) {
 }
 
 async function assertPortsFree() {
-  for (const [label, port] of [['Vite', 5173], ['riga-mcp', 8788], ['tac-engine HTTP bridge', Number(process.env.TAC_MCP_HTTP_PORT ?? 8790)], ['trade-repo MCP', Number(process.env.TRADE_REPO_HTTP_PORT ?? 8792)]]) {
+  for (const [label, port] of [
+    ['Vite', 5173],
+    ['riga-mcp', 8788],
+    ['tac-engine HTTP bridge', Number(process.env.TAC_MCP_HTTP_PORT ?? 8790)],
+    ['trade-repo MCP', Number(process.env.TRADE_REPO_HTTP_PORT ?? 8792)],
+    ['book MCP bridge', Number(process.env.BOOK_MCP_HTTP_PORT ?? 8795)],
+    ['R&D MCP bridge', Number(process.env.RD_MCP_HTTP_PORT ?? 8796)],
+    ['RiskCube MCP bridge', Number(process.env.RISKCUBE_MCP_HTTP_PORT ?? 8797)],
+  ]) {
     if (await portReachable(port)) {
       throw new Error(`${label} port ${port} is already in use. Stop the existing process or free the port before starting dev:http.`)
     }
   }
 }
 
-function startService(label, command, commandArgs) {
+function startService(label, command, commandArgs, { optional = false } = {}) {
   const child = spawn(command, commandArgs, { cwd: root, stdio: 'inherit', env: process.env, windowsHide: true })
   children.push({ label, child })
   child.once('error', (error) => {
+    if (optional) {
+      console.error(`[dev:http] ${label} unavailable: ${error.message}`)
+      return
+    }
     console.error(`[dev:http] ${label} failed to start: ${error.message}`)
     shutdown(1)
   })
   child.once('exit', (code, signal) => {
-    if (!stopping) {
-      console.error(`[dev:http] ${label} exited (${signal ?? `code ${code}`}); stopping the other services.`)
-      shutdown(code === 0 ? 1 : (code ?? 1))
+    if (stopping) return
+    if (optional) {
+      console.error(`[dev:http] ${label} unavailable (${signal ?? `code ${code}`}); continuing without it.`)
+      return
     }
+    console.error(`[dev:http] ${label} exited (${signal ?? `code ${code}`}); stopping the other services.`)
+    shutdown(code === 0 ? 1 : (code ?? 1))
   })
   return child
 }
@@ -191,12 +248,26 @@ async function waitForPort(label, port, timeoutMs = 120_000) {
   throw new Error(`${label} did not start listening on port ${port} within ${timeoutMs / 1000} seconds.`)
 }
 
+async function waitForOptionalPort(label, port, child, timeoutMs = 120_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (stopping) return false
+    if (child.exitCode !== null || child.signalCode !== null) return false
+    if (await portReachable(port)) return true
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 300))
+  }
+  console.error(`[dev:http] ${label} did not start listening on port ${port} within ${timeoutMs / 1000} seconds; continuing without it.`)
+  return false
+}
+
 async function main() {
   const options = parseArgs(args)
   if (options.help) {
     usage()
     return
   }
+  const envFiles = loadLocalEnv()
+  if (envFiles.length > 0) console.log(`[dev:http] Loaded local environment from ${envFiles.join(', ')}.`)
   const cargoBin = resolve(process.env.CARGO_HOME || resolve(homedir(), '.cargo'), 'bin')
   process.env.CARGO_TARGET_DIR ??= resolve(root, 'modules/target')
   const cargoExecutable = resolve(cargoBin, process.platform === 'win32' ? 'cargo.exe' : 'cargo')
@@ -244,6 +315,9 @@ async function main() {
   ])
   startService('tac-engine HTTP bridge', process.execPath, [resolve(root, 'scripts/tac-mcp-http.mjs')])
   startService('trade-repo MCP', process.execPath, [resolve(root, 'scripts/trade-repo-mcp-http.mjs'), '--seed'])
+  const book = startService('book MCP bridge', process.execPath, [resolve(root, 'scripts/book-mcp-http.mjs')], { optional: true })
+  const rd = startService('R&D MCP bridge', process.execPath, [resolve(root, 'scripts/rd-mcp-http.mjs')], { optional: true })
+  const riskcube = startService('RiskCube MCP bridge', process.execPath, [resolve(root, 'scripts/riskcube-mcp-http.mjs')], { optional: true })
   const viteArgs = [resolve(root, 'node_modules/vite/bin/vite.js'), '--host', options.publicHost ? '0.0.0.0' : '127.0.0.1']
   startService('Vite', process.execPath, viteArgs)
 
@@ -253,15 +327,26 @@ async function main() {
     waitForPort('trade-repo MCP', Number(process.env.TRADE_REPO_HTTP_PORT ?? 8792)),
     waitForPort('Vite', 5173),
   ])
+  const qlibTimeout = Number(process.env.QLIB_MCP_STARTUP_TIMEOUT_MS ?? 300_000)
+  const [bookReady, rdReady, riskcubeReady] = await Promise.all([
+    waitForOptionalPort('book MCP bridge', Number(process.env.BOOK_MCP_HTTP_PORT ?? 8795), book, qlibTimeout),
+    waitForOptionalPort('R&D MCP bridge', Number(process.env.RD_MCP_HTTP_PORT ?? 8796), rd, qlibTimeout),
+    waitForOptionalPort('RiskCube MCP bridge', Number(process.env.RISKCUBE_MCP_HTTP_PORT ?? 8797), riskcube),
+  ])
+  if (stopping) return
   console.log(`\n[dev:http] Ready: http://127.0.0.1:5173/${options.publicHost ? ' (Vite bound to 0.0.0.0)' : ''}`)
   console.log('[dev:http] Ready: trade-repo MCP at http://127.0.0.1:8792/mcp.')
-  console.log('[dev:http] Press Ctrl+C to stop all four services.')
+  console.log(`[dev:http] Optional bridges: book ${bookReady ? 'ready' : 'unavailable'}, R&D ${rdReady ? 'ready' : 'unavailable'}, RiskCube ${riskcubeReady ? 'ready' : 'unavailable'}.`)
+  console.log('[dev:http] Press Ctrl+C to stop all services.')
 }
 
-process.once('SIGINT', () => shutdown(130))
-process.once('SIGTERM', () => shutdown(143))
-main().catch((error) => {
-  console.error(`[dev:http] ${error.message}`)
-  if (children.length > 0) shutdown(1)
-  else process.exitCode = 1
-})
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+if (isMain) {
+  process.once('SIGINT', () => shutdown(130))
+  process.once('SIGTERM', () => shutdown(143))
+  main().catch((error) => {
+    console.error(`[dev:http] ${error.message}`)
+    if (children.length > 0) shutdown(1)
+    else process.exitCode = 1
+  })
+}

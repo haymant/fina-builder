@@ -3,10 +3,12 @@ import { createRdApi, lakeRecoveryRequest, RdApiError } from '../rdApi'
 describe('R&D API read-only boundary', () => {
   afterEach(() => vi.restoreAllMocks())
   it('normalizes experiment, run, and result envelopes', async () => {
-    const callTool = vi.fn(async (name: string) => name === 'rd_exp_list' ? { experiments: [{ experiment_id: 7, name: 'alpha', run_count: 1, latest_run: { run_id: 'r1', status: 'FINISHED' } }] } : name === 'rd_exp_get_experiment' ? { experiment: { experiment_id: 7, name: 'alpha' }, runs: [{ meta: { run_id: 'r1', status: 'FINISHED' } }] } : { run_id: 'r1', experiment_id: '7', headline: { IC: 0.12 }, ic_series: [{ value: 0.12 }], warnings: [] })
+    const callTool = vi.fn(async (name: string) => name === 'rd_exp_list' ? { experiments: [{ experiment_id: 7, name: 'alpha', run_count: 1, latest_run: { run_id: 'r1', status: 'FINISHED' }, best_headline: { IC: 0.1, ICIR: 0.5, 'Rank IC': 0.09, 'Rank ICIR': 0.45, AnnReturn: 0.2, MaxDD: -0.1 } }] } : name === 'rd_exp_get_experiment' ? { experiment: { experiment_id: 7, name: 'alpha' }, runs: [{ meta: { run_id: 'r1', status: 'FINISHED' }, metrics: { IC: 0.11, ICIR: 0.6, '1day.excess_return_with_cost.annualized_return': 0.25, '1day.excess_return_with_cost.max_drawdown': -0.08 } }] } : { run_id: 'r1', experiment_id: '7', headline: { IC: 0.12 }, ic_series: [{ value: 0.12 }], warnings: [] })
     const api = createRdApi({ callTool })
-    expect((await api.listExperiments())[0]).toEqual(expect.objectContaining({ experimentId: '7', name: 'alpha', runCount: 1, latestRun: expect.objectContaining({ runId: 'r1' }) }))
-    expect((await api.getExperiment('7')).runs[0]?.meta).toEqual(expect.objectContaining({ runId: 'r1' }))
+    expect((await api.listExperiments())[0]).toEqual(expect.objectContaining({ experimentId: '7', name: 'alpha', runCount: 1, latestRun: expect.objectContaining({ runId: 'r1' }), bestHeadline: expect.objectContaining({ IC: 0.1, 'Rank IC': 0.09, AnnReturn: 0.2, MaxDD: -0.1 }) }))
+    const run = (await api.getExperiment('7')).runs[0]
+    expect(run?.meta).toEqual(expect.objectContaining({ runId: 'r1' }))
+    expect(run?.metricsLatest).toEqual(expect.objectContaining({ IC: 0.11, ICIR: 0.6, '1day.excess_return_with_cost.annualized_return': 0.25, '1day.excess_return_with_cost.max_drawdown': -0.08 }))
     expect(await api.getResult('r1', '7')).toEqual(expect.objectContaining({ runId: 'r1', experimentId: '7', icSeries: [{ value: 0.12 }] }))
     expect(callTool).toHaveBeenNthCalledWith(1, 'rd_exp_list', {})
     expect(callTool).toHaveBeenNthCalledWith(2, 'rd_exp_get_experiment', { experiment_id: '7' })

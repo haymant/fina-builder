@@ -7,7 +7,7 @@
     "dev": "node scripts/dev-with-trade-repo.mjs",
     "dev:tauri": "node scripts/dev-with-trade-repo.mjs",
     "dev:web": "vite",
-    "dev:all": "concurrently -k -n riga,tac,tr,nip,web -c blue,magenta,yellow,cyan,green \"npm:backend:dev\" \"npm:mcp:http:tac\" \"npm:mcp:http:trade-repo\" \"npm:nip:http\" \"npm:dev:web\"",
+    "dev:all": "concurrently -k -n riga,tac,tr,nip,book,rd,risk,web -c blue,magenta,yellow,cyan,green,red,white,gray \"npm:backend:dev\" \"npm:mcp:http:tac\" \"npm:mcp:http:trade-repo\" \"npm:nip:http\" \"npm:mcp:http:book\" \"npm:mcp:http:rd\" \"npm:mcp:http:riskcube\" \"npm:dev:web\"",
     "dev:http": "node scripts/dev-http.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",

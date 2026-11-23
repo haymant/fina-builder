@@ -15,8 +15,10 @@ async function handle(message) {
   if (id === undefined) return null
   if (method === 'initialize') return { jsonrpc: '2.0', id, result: { protocolVersion: params?.protocolVersion ?? '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'fina-tac-qlib-book', version: '0.1.0' } } }
   if (method === 'notifications/initialized' || method === 'ping') return { jsonrpc: '2.0', id, result: {} }
+  // `client.call` resolves with the child's `result` payload. Wrap it in a
+  // JSON-RPC envelope because the browser transport reads `parsed.result`.
   const result = await child.call({ jsonrpc: '2.0', id, method, params })
-  return { ...result, id }
+  return { jsonrpc: '2.0', id, result }
 }
 
 const server = createServer(async (req, res) => {
@@ -27,6 +29,7 @@ const server = createServer(async (req, res) => {
   for await (const chunk of req) body += chunk
   try {
     const reply = await handle(JSON.parse(body))
+    if (reply === null) { res.writeHead(202, CORS); return res.end() }
     res.writeHead(200, { ...CORS, 'Content-Type': 'application/json', 'Mcp-Session-Id': 'book' })
     res.end(JSON.stringify(reply))
   } catch (error) {

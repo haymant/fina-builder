@@ -114,20 +114,24 @@ below and do not migrate or contact production data.
 
 ## Run it
 
-### 1. Web mode (browser + HTTP engines) — four processes
+### 1. Web mode (browser + HTTP engines) — local service stack
 
 Alpaca credentials are optional. Without them, `tac-engine` serves Yahoo Finance daily stock
 history and free Yahoo/ECB daily FX rates; account/order tools and Alpaca-only data (such as
 intraday bars, quotes, options, and streams) are unavailable. Set both `APCA_API_KEY_ID` and
-`APCA_API_SECRET_KEY` in the shell or `modules/tac-engine/.env` to enable those features (template:
-`modules/tac-engine/.env.example`). If `TAC_LAKE_DIR` is unset, `dev:http` uses the absolute
-workspace path `.lake/`; an explicit environment or `.env` value takes precedence. The lake can be
-empty and will be populated on demand with supported daily history. The launcher never supplies
-placeholder credentials or synthetic market data.
+`APCA_API_SECRET_KEY` in the shell, the checkout `.env`, or `modules/tac-engine/.env` to enable
+those features (template: `modules/tac-engine/.env.example`). Like desktop mode, `dev:http`
+loads the checkout `.env` and the two module `.env` files without overriding shell variables, so
+browser and Tauri sessions see the same credentials. If `TAC_LAKE_DIR` is unset, `dev:http` uses
+the absolute workspace path `.lake/`. When launched through `node scripts/fina.mjs dev_http`,
+the control plane supplies the profile lake root (`FINA_DATA_ROOT/lake`) unless the checkout
+`.env` sets `TAC_LAKE_DIR`; an explicit shell export always wins. The lake can be empty and will
+be populated on demand with supported daily history. The launcher never supplies placeholder
+credentials or synthetic market data.
 
 ```bash
 npm ci
-npm run dev:http          # builds both Rust backends, then starts them, trade-repo MCP, and Vite (CPU default)
+npm run dev:http          # builds both Rust backends, then starts the HTTP stack and Vite (CPU default)
 # Optional: enable CUDA for riga-mcp; requires CUDA Toolkit 13+ and a visible NVIDIA GPU.
 npm run dev:http -- --cuda
 # Optional: bind Vite to 0.0.0.0 for a forwarded/public preview; backend ports remain local.
@@ -135,13 +139,14 @@ npm run dev:http -- --public
 ```
 
 `npm run dev:all` remains available when both backend binaries have already been built. The
-`dev:http` command builds `riga-mcp` and `tac-engine` before launching all four services,
-checks that ports 5173/8788/8790/8792 are free, and stops the other processes if one exits. CPU is
-the default. The first build may take several minutes because `tac-engine` bundles DuckDB;
-subsequent runs reuse the compiled artifacts. `--cuda` adds the `riga-mcp` `gpu` Cargo feature (CUDA 13+); `tac-engine` remains
-CPU-only. The CUDA option is explicit and fails early when the toolkit or NVIDIA GPU is not
-available; omit it on Manus. This is separate from `tauri:dev:cuda`, which enables CUDA for
-RIGA's local GGUF inference in the desktop shell.
+`dev:http` command builds `riga-mcp` and `tac-engine` before launching the local services,
+checks that ports 5173/8788/8790/8792/8795/8796/8797 are free, and stops the other processes if a
+required service exits. CPU is the default. The first build may take several minutes because
+`tac-engine` bundles DuckDB; subsequent runs reuse the compiled artifacts. `--cuda` adds the
+`riga-mcp` `gpu` Cargo feature (CUDA 13+); `tac-engine` remains CPU-only. The CUDA option is
+explicit and fails early when the toolkit or NVIDIA GPU is not available; omit it on Manus. This
+is separate from `tauri:dev:cuda`, which enables CUDA for RIGA's local GGUF inference in the
+desktop shell.
 
 | | |
 | --- | --- |
@@ -149,16 +154,23 @@ RIGA's local GGUF inference in the desktop shell.
 | `riga-mcp` | MCP over HTTP on <http://127.0.0.1:8788> |
 | `tac-engine` | MCP over HTTP on <http://127.0.0.1:8790> |
 | Trade repository | MCP over HTTP on <http://127.0.0.1:8792> |
+| `tac-qlib-book` | MCP over HTTP on <http://127.0.0.1:8795> |
 | `tac-qlib-rd` | MCP over HTTP on <http://127.0.0.1:8796> |
+| RiskCube | MCP over HTTP on <http://127.0.0.1:8797> |
 
-The webview calls the same-origin paths `/riga/mcp` and `/tac/mcp`, which Vite proxies to
-the two engines (see `vite.config.ts`). To run the pieces separately:
+The webview calls the same-origin paths `/riga/mcp`, `/tac/mcp`, `/trade-repo/mcp`,
+`/book/mcp`, `/rd/mcp`, and `/riskcube/mcp`, which Vite proxies to the loopback services (see
+`vite.config.ts`). The book, R&D, and RiskCube bridges are optional: `dev:http` keeps the core
+stack running and reports them as unavailable when `uv`, the qlib environment, or
+`RISK_CUBE_MCP_BIN` is missing. To run the pieces separately:
 
 ```bash
 npm run backend:dev      # npm run mcp:http:riga   (riga-mcp --transport http)
 npm run mcp:http:tac     # the tac-engine HTTP bridge
 npm run mcp:http:trade-repo # seeded local trade repository MCP server
+npm run mcp:http:book      # qlib round-book MCP bridge
 npm run mcp:http:rd        # qlib/MLflow R&D MCP bridge
+npm run mcp:http:riskcube  # RiskCube bridge (requires RISK_CUBE_MCP_BIN)
 npm run dev:web          # frontend-only Vite process
 ```
 

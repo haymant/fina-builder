@@ -12,6 +12,7 @@ import { narrativeApi } from '../api'
 import { nipMediaBaseUrl } from '../../../api/nipTransport'
 import type { NipAsrStatus, NipCapabilities, NipClaim, NipEditorialCandidate, NipEtfMapping, NipEvent, NipExtractionStatus, NipHealth, NipMediaArtifact, NipNarrativeCluster, NipNarrativeGraph, NipNarrativeSignal, NipPodcastEpisode, NipPodcastSubscription, NipProviderStatus, NipResourceStatus, NipSource, NipTranscriptionJob } from '../types'
 import { CreateVideoEpisodeDialog } from './CreateVideoEpisodeDialog'
+import { useConfirm } from '../../workspace/components/useConfirm'
 import './narrative.css'
 
 type NarrativeView = 'overview' | 'radar' | 'timeline' | 'graph' | 'themes' | 'editorial' | 'claims'
@@ -289,6 +290,7 @@ function EtfMappingForm({ events, onSaved }: { events: NipEvent[]; onSaved: () =
 }
 
 export function NarrativeWorkspace({ view = 'overview', onOpenVideoEpisode }: { view?: NarrativeView; onOpenVideoEpisode?: (projectId: string, episodeId: string, claimId: string) => void }) {
+  const [confirm, confirmDialog] = useConfirm()
   const [health, setHealth] = useState<NipHealth | null>(null)
   const [events, setEvents] = useState<NipEvent[]>([])
   const [claims, setClaims] = useState<NipClaim[]>([])
@@ -542,7 +544,7 @@ export function NarrativeWorkspace({ view = 'overview', onOpenVideoEpisode }: { 
   }
 
   const deleteMedia = async (artifact: NipMediaArtifact) => {
-    if (!window.confirm(`Delete the cached file ${artifact.name}?`)) return
+    if (!(await confirm({ title: 'Delete cached file?', message: `Delete the cached file ${artifact.name}?`, confirmLabel: 'Delete file' }))) return
     try {
       await narrativeApi.deleteMediaArtifact(artifact.job_id, artifact.name)
       await loadMedia()
@@ -636,5 +638,6 @@ export function NarrativeWorkspace({ view = 'overview', onOpenVideoEpisode }: { 
       </main>
     </div>
     {transcriptEvent ? <TranscriptDialog event={transcriptEvent} busy={extracting} status={extracting ? `Waiting for the model — ${extractElapsed}s elapsed. Long transcripts are extracted in up to 8 windows; the run aborts after 10 minutes.` : providerMessage} statusIsError={providerMessageIsError} extractionAvailable={providerStatus?.extraction_state === 'available'} onClose={() => setTranscriptEvent(null)} onExtract={() => void extractClaims(transcriptEvent)} onOpenInList={() => { setSelectedEvent(transcriptEvent); setTranscriptEvent(null); setActiveView('overview') }} /> : null}
+    {confirmDialog}
   </div>
 }

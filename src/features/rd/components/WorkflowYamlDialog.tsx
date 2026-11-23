@@ -4,6 +4,7 @@ import CodeMirror from '@uiw/react-codemirror'
 import { lakeRecoveryRequest, rdApi, RdApiError, type RdLakeRecoveryRequest, type RdWorkflowValidation } from '../../../api/rdApi'
 import { trading2Api } from '../../../api/trading2Api'
 import { useTheme } from '../../themes/ThemeProvider'
+import { useConfirm } from '../../workspace/components/useConfirm'
 import { DEFAULT_RD_WORKFLOW_YAML } from '../workflowYamlTemplate'
 
 const btn = 'ghost-button inline-flex'
@@ -12,6 +13,7 @@ const display = (value: unknown) => value === null || value === undefined ? '—
 
 export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => void; onDispatched: () => void }) {
   const { mode } = useTheme()
+  const [confirm, confirmDialog] = useConfirm()
   const [yamlText, setYamlText] = useState(DEFAULT_RD_WORKFLOW_YAML)
   const [validation, setValidation] = useState<RdWorkflowValidation | null>(null)
   const [preflight, setPreflight] = useState<Record<string, unknown> | null>(null)
@@ -54,7 +56,7 @@ const [recovery, setRecovery] = useState<RdLakeRecoveryRequest | null>(null)
       `Daily bars and TA/SP features: ${recovery.start} through ${recovery.end}`,
       'This starts a background MCP lake-loading job and persists downloaded/computed data locally. The authored YAML will not be changed.',
     ].join('\n')
-    if (!window.confirm(confirmText)) return
+    if (!(await confirm({ title: 'Populate missing lake data?', message: confirmText, confirmLabel: 'Populate lake' }))) return
     setBusy(true)
     setMessage(`Starting lake population for ${recovery.symbols.join(', ')}…`)
     try {
@@ -87,7 +89,7 @@ const [recovery, setRecovery] = useState<RdLakeRecoveryRequest | null>(null)
       `Config SHA-256: ${validation.configSha256}`,
       'This starts compute and creates a persisted MLflow run. The worker is isolated; no automatic retry will be made.',
     ].join('\n')
-    if (!window.confirm(confirmText)) return
+    if (!(await confirm({ title: `Dispatch workflow “${validation.experimentName}”?`, message: confirmText, confirmLabel: 'Dispatch' }))) return
     setBusy(true)
     setMessage('Submitting workflow to the isolated Qlib worker…')
     try {
@@ -143,5 +145,6 @@ const [recovery, setRecovery] = useState<RdLakeRecoveryRequest | null>(null)
       </div>
       <footer className="flex items-center justify-between border-t border-line px-4 py-3 text-[10px] text-muted"><span>Lake population and run creation are separate confirmed actions; neither happens automatically.</span><button type="button" className={btn} onClick={onClose}><X size={12} /> Close</button></footer>
     </section>
+    {confirmDialog}
   </div>
 }

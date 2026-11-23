@@ -153,6 +153,13 @@ credentials in the host environment or an ignored user-owned `.env` file only.
   services, the relevant optional interpreter override is `TAC_QLIB_PYTHON_BIN`; otherwise the
   wrapper uses the locked `uv` environment at `modules/.venv`.
 
+`dev_http` is an npm script rather than the control-plane launcher. Like the desktop host it
+reads the checkout `.env` and the two module `.env` files (shell values win), so browser mode
+receives the same Alpaca credentials and database configuration as the Tauri sidecar. The
+control-plane lake root (`FINA_DATA_ROOT/lake`) is used unless the checkout `.env` sets
+`TAC_LAKE_DIR`; an explicit shell export always wins. The control-plane launcher itself still
+does not load or copy secrets.
+
 For a predictable full local stack, the following override is valid but optional:
 
 ```bash

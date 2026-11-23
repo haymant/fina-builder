@@ -5,6 +5,12 @@
 
 import { useEffect, useRef } from 'react'
 
+export interface ConfirmRequest {
+  title: string
+  message: string
+  confirmLabel?: string
+}
+
 export function ConfirmDialog({
   open,
   title,
@@ -45,7 +51,7 @@ export function ConfirmDialog({
           <h2 id="confirm-dialog-title" className="text-sm font-semibold text-main">
             {title}
           </h2>
-          <p className="mt-1 text-xs text-muted">{message}</p>
+          <p className="mt-1 whitespace-pre-line text-xs text-muted">{message}</p>
           <div className="confirm-actions">
             <button ref={cancelRef} type="button" className="ghost-button" onClick={onCancel} data-testid="confirm-cancel">
               Cancel

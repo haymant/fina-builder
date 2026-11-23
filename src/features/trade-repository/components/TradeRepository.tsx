@@ -5,6 +5,7 @@ import { tradeRepo } from '../api'
 import type { AsOf, EventDef, PricingBinding, Reference, Role, Trade } from '../types'
 import { toInstrumentDocument } from '../pricing'
 import { useInstrumentStore } from '@/store/instrumentStore'
+import { useConfirm } from '../../workspace/components/useConfirm'
 import { AuditView } from './AuditView'
 import { Blotter, type BlotterHandle } from './Blotter'
 import { ErrorState, Loading, Modal } from './common'
@@ -46,10 +47,12 @@ export function TradeRepository({ view, onViewChange, newTradeSignal = 0, onOpen
   const [formTab, setFormTab] = useState<string | null>(null)
   const goHome = () => setTabs((s) => ({ ...s, active: Tabs.HOME }))
   const openTab = (tradeId: string, version?: number) => setTabs((s) => Tabs.openTab(s, tradeId, version))
+  const [confirm, confirmDialog] = useConfirm()
   const requestClose = (id: string) => {
     const t = tabs.tabs.find((x) => x.id === id)
-    if (t?.draft && !window.confirm(`${Tabs.tabLabel(t)} has an unsaved amend draft. Close and discard it?`)) return
-    setTabs((s) => Tabs.closeTab(s, id))
+    if (!t?.draft) { setTabs((s) => Tabs.closeTab(s, id)); return }
+    void confirm({ title: 'Discard unsaved draft?', message: `${Tabs.tabLabel(t)} has an unsaved amend draft. Close and discard it?`, confirmLabel: 'Discard & close' })
+      .then((ok) => { if (ok) setTabs((s) => Tabs.closeTab(s, id)) })
   }
   const [reference, setReference] = useState<Reference | null>(null)
   const [refError, setRefError] = useState<unknown>(null)
@@ -215,6 +218,7 @@ export function TradeRepository({ view, onViewChange, newTradeSignal = 0, onOpen
           <table className="tr-table"><tbody>{SHORTCUTS.map(([k, d]) => <tr key={k}><td><kbd>{k}</kbd></td><td>{d}</td></tr>)}</tbody></table>
         </Modal>
       ) : null}
+      {confirmDialog}
     </div>
   )
 }
