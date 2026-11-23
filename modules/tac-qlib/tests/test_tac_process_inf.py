@@ -53,6 +53,19 @@ def test_zscore_fit_supports_single_level_datetime_index():
     assert processor(frame).loc["2021-01-01", "feature"] == 98.0
 
 
+def test_zscore_fit_rejects_empty_input_with_lake_coverage_guidance():
+    empty = pd.DataFrame(
+        {"feature": pd.Series(dtype=float)},
+        index=pd.Index([], name="datetime"),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="cannot fit an empty input.*symbol universe, date range, and feature coverage",
+    ):
+        TACZScoreNorm("2020-01-01", "2020-12-31").fit(empty)
+
+
 def test_process_inf_groups_single_level_datetime_index_by_date():
     frame = pd.DataFrame(
         {"feature": [1.0, np.inf, 3.0, -np.inf]},

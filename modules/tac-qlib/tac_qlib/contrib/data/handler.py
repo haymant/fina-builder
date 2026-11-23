@@ -189,7 +189,10 @@ class TACZScoreNorm(processor_module.ZScoreNorm):
 
     def fit(self, df=None):
         if df is None or len(df) == 0:
-            return self
+            raise ValueError(
+                "TACZScoreNorm cannot fit an empty input; check the requested lake "
+                "symbol universe, date range, and feature coverage"
+            )
         window = _fit_window(df, self.fit_start_time, self.fit_end_time)
         if len(window) == 0:
             raise ValueError(
