@@ -36,6 +36,7 @@ beforeEach(() => {
   })
   vi.mocked(rdApi.getModel).mockResolvedValue({})
   vi.mocked(rdApi.getBlotter).mockResolvedValue({ runId: 'run-1', experimentId: 'exp-1', summary: {}, daily: [], positions: [], positionHistory: [], trades: [], signals: [], warnings: [] })
+  vi.mocked(rdApi.getDataset).mockResolvedValue({ runId: 'run-1', experimentId: 'exp-1', group: 'train', instrument: 'SPY', instruments: ['SPY'], columns: [], rows: [], page: 1, pageSize: 50, total: 0, hasNext: false, sort: 'asc', representation: 'raw', dataKey: 'DK_R', provenance: {}, warnings: [] })
 })
 
 describe('R&D Dataset navigation', () => {
@@ -47,6 +48,18 @@ describe('R&D Dataset navigation', () => {
     fireEvent.click(dataset)
 
     expect(onNavigate).toHaveBeenCalledWith({ kind: 'rd', view: 'dataset' })
+  })
+
+  it('adds a Dashboard link to the Dataset title area', async () => {
+    const onNavigate = vi.fn()
+    render(<RdWorkspace view="dataset" onNavigate={onNavigate} />)
+
+    const dashboard = await screen.findByRole('button', { name: /Dashboard/ })
+    await screen.findByRole('heading', { name: 'Dataset rows' })
+    onNavigate.mockClear()
+    fireEvent.click(dashboard)
+
+    expect(onNavigate).toHaveBeenCalledWith({ kind: 'rd', view: 'dashboard' })
   })
 
   it('adds a Dataset link to the Input title area and retains Dashboard navigation', async () => {
