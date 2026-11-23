@@ -142,19 +142,15 @@ export function buildCandleChartOption(bars: Trading2Bar[], features: Trading2Fe
 
       const x = api.coord([category, low])[0]
       const highY = api.coord([category, high])[1]
-      const upperBodyY = api.coord([category, Math.max(open, close)])[1]
-      const lowerBodyY = api.coord([category, Math.min(open, close)])[1]
       const lowY = api.coord([category, low])[1]
-      const segments = [[highY, upperBodyY], [lowerBodyY, lowY]]
-        .filter(([start, end]) => Math.abs(end - start) > 0.1)
-      const children = segments.flatMap(([y1, y2]) => {
-        const shape = { x1: x, y1, x2: x, y2 }
-        return [
-          { type: 'line', shape, style: { stroke: '#f8fafc', lineWidth: 4, lineCap: 'round' } },
-          { type: 'line', shape, style: { stroke: '#111827', lineWidth: 2.5, lineCap: 'round' } },
-        ]
-      })
-      return children.length ? { type: 'group', children } : null
+      const shape = { x1: x, y1: highY, x2: x, y2: lowY }
+      return {
+        type: 'group',
+        children: [
+          { type: 'line', shape, style: { stroke: '#f8fafc', lineWidth: 3.5, lineCap: 'round' } },
+          { type: 'line', shape, style: { stroke: '#111827', lineWidth: 1.5, lineCap: 'round' } },
+        ],
+      }
     },
   }
   const outSeries: Record<string, unknown>[] = [
@@ -205,9 +201,9 @@ export function IntradayPriceBar({ bar, last }: { bar?: Trading2Bar; last?: numb
   const width = Math.max(2, Math.abs((close as number) - (open as number)) / range * 100)
   const rising = (close as number) > (open as number)
   return <span className="relative block h-7 w-24 shrink-0" title={`Low ${money(low)} · Open ${money(open)} · Last ${money(close)} · High ${money(high)}`} aria-label={`Low ${money(low)}, open ${money(open)}, last ${money(close)}, high ${money(high)}`}>
-    <span className="absolute left-0 right-0 top-1/2 h-0.5 -translate-y-1/2 bg-main/80" />
-    <span data-testid="intraday-low-wick" className="absolute top-1/2 z-[1] h-3 w-1 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-main bg-bg" style={{ left: position(low as number) }} />
-    <span data-testid="intraday-high-wick" className="absolute top-1/2 z-[1] h-3 w-1 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-main bg-bg" style={{ left: position(high as number) }} />
+    <span data-testid="intraday-wick-range" className="absolute left-0 right-0 top-1/2 z-[3] h-0.5 -translate-y-1/2" style={{ backgroundColor: 'var(--theme-primary)' }} />
+    <span data-testid="intraday-low-wick" className="absolute top-1/2 z-[4] h-2.5 w-0.5 -translate-x-1/2 -translate-y-1/2" style={{ left: position(low as number), backgroundColor: 'var(--theme-primary)' }} />
+    <span data-testid="intraday-high-wick" className="absolute top-1/2 z-[4] h-2.5 w-0.5 -translate-x-1/2 -translate-y-1/2" style={{ left: position(high as number), backgroundColor: 'var(--theme-primary)' }} />
     <span className={`absolute top-1/2 z-[2] h-1.5 -translate-y-1/2 rounded-full ${rising ? 'bg-success' : 'bg-danger'}`} style={{ left: position(left), width: `${width}%` }} />
     <span className="absolute top-1/2 z-[3] h-2.5 w-px -translate-y-1/2 bg-main" style={{ left: position(open as number) }} />
     <span className="absolute top-1/2 z-[3] h-2.5 w-px -translate-y-1/2 bg-main" style={{ left: position(close as number) }} />

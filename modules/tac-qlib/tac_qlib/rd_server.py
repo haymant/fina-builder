@@ -307,10 +307,17 @@ def _build_dataset(
     train: Optional[tuple],
     valid: Optional[tuple],
     test: Optional[tuple],
+    infer_processors: Optional[List[Dict[str, Any]]] = None,
+    learn_processors: Optional[List[Dict[str, Any]]] = None,
 ):
     from qlib.data.dataset import DatasetH
     from tac_qlib.contrib.data.handler import TACHandler
 
+    processor_kwargs = {}
+    if infer_processors is not None:
+        processor_kwargs["infer_processors"] = infer_processors
+    if learn_processors is not None:
+        processor_kwargs["learn_processors"] = learn_processors
     handler = TACHandler(
         instruments=universe,
         start_time=start_time,
@@ -322,6 +329,7 @@ def _build_dataset(
         label=label,
         lake_root=lake_root,
         market=market,
+        **processor_kwargs,
     )
     segments = {}
     if train is not None:
@@ -451,8 +459,14 @@ def rd_dataset(
     valid_end: str = "",
     test_start: str = "",
     test_end: str = "",
+    infer_processors: Optional[List[Dict[str, Any]]] = None,
+    learn_processors: Optional[List[Dict[str, Any]]] = None,
 ) -> dict:
-    """Build (but do not train) the dataset for the given universe / window / segments and report the preprocessing outcome: final feature columns, per-segment row counts + date ranges, and raw NaN coverage per feature over the fit window (columns that are 100% NaN get dropped by DropAllNaN)."""
+    """Build (but do not train) the dataset and report preprocessing and segment statistics.
+
+    Optional processor lists are passed to TACHandler as provided; omit a list to use
+    the TACHandler default for that stage.
+    """
     lake_root = _ensure_init(lake_root, market)
     market = (market or "US").upper()
     universe_l = _resolve_universe(universe, lake_root, market)
@@ -476,6 +490,7 @@ def rd_dataset(
     dataset, handler = _build_dataset(
         lake_root, market, universe_l, start_time, end_time, fit_start_time, fit_end_time,
         freq, features or None, label_expr, train, valid, test,
+        infer_processors=infer_processors, learn_processors=learn_processors,
     )
 
     segments = {}
@@ -1360,6 +1375,8 @@ def rd_validate_workflow(config_yaml: str) -> dict:
             valid_end=segments["valid"][1],
             test_start=segments["test"][0],
             test_end=segments["test"][1],
+            infer_processors=handler.get("infer_processors"),
+            learn_processors=handler.get("learn_processors"),
         )
         summary["dataset_preflight"] = {
             "universe_size": data["universe_size"],

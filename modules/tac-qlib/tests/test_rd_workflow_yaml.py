@@ -115,6 +115,61 @@ def test_normalizes_qlib_zscore_to_single_index_compatible_processor():
     assert "class: ZScoreNorm" not in serialized
 
 
+def test_omitted_processor_lists_keep_tac_handler_defaults():
+    workflow = VALID.replace(
+        "          infer_processors:\n            - class: DropAllNaN\n              kwargs: {}\n",
+        "",
+    )
+
+    config, _summary, _serialized = prepare(workflow)
+    handler = config["task"]["dataset"]["kwargs"]["handler"]["kwargs"]
+
+    assert "infer_processors" not in handler
+    assert "learn_processors" not in handler
+
+
+def test_validation_preflight_uses_normalized_yaml_processors(tmp_path, monkeypatch):
+    from tac_qlib import rd_server
+    from tac_qlib.data import config
+
+    monkeypatch.setattr(config, "resolve_lake_root", lambda _root: tmp_path)
+    captured = {}
+
+    def inspect_preflight(**kwargs):
+        captured.update(kwargs)
+        return {
+            "universe_size": 2,
+            "universe": ["SPY", "QQQ"],
+            "segments": {},
+            "feature_fields": ["$close"],
+            "all_nan_dropped": [],
+        }
+
+    monkeypatch.setattr(rd_server, "rd_dataset", inspect_preflight)
+    workflow = VALID.replace(
+        "          infer_processors:\n            - class: DropAllNaN\n              kwargs: {}\n",
+        "          infer_processors:\n"
+        "            - class: ProcessInf\n              kwargs: {}\n"
+        "            - class: ZScoreNorm\n              kwargs: {}\n",
+    )
+
+    result = rd_server.rd_validate_workflow(workflow)
+
+    assert result["valid"] is True
+    assert captured["infer_processors"] == [
+        {
+            "class": "TACProcessInf",
+            "module_path": "tac_qlib.contrib.data.handler",
+            "kwargs": {},
+        },
+        {
+            "class": "TACZScoreNorm",
+            "module_path": "tac_qlib.contrib.data.handler",
+            "kwargs": {},
+        },
+    ]
+
+
 @pytest.mark.parametrize(
     "bad, message",
     [

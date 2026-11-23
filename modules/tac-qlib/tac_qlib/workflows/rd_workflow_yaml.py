@@ -306,9 +306,12 @@ def prepare_rd_workflow_yaml(config_yaml: str, *, lake_root: str, expected_exper
         "fit_start_time": fit_start, "fit_end_time": fit_end, "freq": freq,
         "market": market, "label": label, "feature_fields": fields,
         "lake_root": lake_root,
-        "infer_processors": _normalise_processors(hkw.get("infer_processors"), "handler.infer_processors"),
-        "learn_processors": _normalise_processors(hkw.get("learn_processors"), "handler.learn_processors"),
     }
+    for list_name in ("infer_processors", "learn_processors"):
+        if list_name in hkw and hkw[list_name] is not None:
+            clean_handler_kwargs[list_name] = _normalise_processors(
+                hkw[list_name], f"handler.{list_name}"
+            )
     segments = _mapping(dkw.get("segments"), "task.dataset.kwargs.segments")
     _keys(segments, {"train", "valid", "test"}, "task.dataset.kwargs.segments")
     if not {"train", "valid", "test"}.issubset(segments):

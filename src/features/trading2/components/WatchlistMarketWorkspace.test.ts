@@ -42,11 +42,13 @@ describe('watchlist symbol-detail candlesticks', () => {
       value: (dimension) => ['2026-11-22T00:00', 8, 10, 11, 12][dimension],
       coord: ([, value]) => [42, 100 - value * 10],
     })
-    expect(rendered.children).toHaveLength(4)
-    expect(rendered.children.map((child) => child.style.lineWidth)).toEqual([4, 2.5, 4, 2.5])
-    expect(rendered.children.map((child) => child.style.stroke)).toEqual(['#f8fafc', '#111827', '#f8fafc', '#111827'])
-    expect(rendered.children[0]?.shape).toEqual({ x1: 42, y1: -20, x2: 42, y2: -10 })
-    expect(rendered.children[2]?.shape).toEqual({ x1: 42, y1: 0, x2: 42, y2: 20 })
+    expect(rendered.children).toHaveLength(2)
+    expect(rendered.children.map((child) => child.style.lineWidth)).toEqual([3.5, 1.5])
+    expect(rendered.children.map((child) => child.style.stroke)).toEqual(['#f8fafc', '#111827'])
+    expect(rendered.children.map((child) => child.shape)).toEqual([
+      { x1: 42, y1: -20, x2: 42, y2: 20 },
+      { x1: 42, y1: -20, x2: 42, y2: 20 },
+    ])
 
     const chart = echarts.init(null, null, { renderer: 'svg', ssr: true, width: 600, height: 400 })
     chart.setOption(option as unknown as echarts.EChartsOption)
@@ -54,6 +56,7 @@ describe('watchlist symbol-detail candlesticks', () => {
     chart.dispose()
     expect(svg).toContain('#111827')
     expect(svg).toContain('#f8fafc')
+    expect(svg).toMatch(/d="M\d+ \d+L\d+ \d+" fill="#000" stroke="#111827" stroke-width="1.5"/)
   })
 
   it('shows distinct low and high endpoint markers on the horizontal watchlist bar', () => {
@@ -66,14 +69,18 @@ describe('watchlist symbol-detail candlesticks', () => {
       volume: 100,
     } }))
     const range = getByLabelText('Low $8.00, open $10.00, last $11.00, high $12.00')
+    const wickRange = within(range).getByTestId('intraday-wick-range')
     const low = within(range).getByTestId('intraday-low-wick')
     const high = within(range).getByTestId('intraday-high-wick')
 
+    expect(wickRange.style.backgroundColor).toBe('var(--theme-primary)')
+    expect(wickRange.className).toContain('z-[3]')
+    expect(wickRange.className).toContain('h-0.5')
     expect(low.style.left).toBe('0%')
     expect(high.style.left).toBe('100%')
-    expect(low.className).toContain('h-3')
-    expect(high.className).toContain('h-3')
-    expect(low.className).toContain('border-main')
-    expect(high.className).toContain('border-main')
+    expect(low.style.backgroundColor).toBe('var(--theme-primary)')
+    expect(high.style.backgroundColor).toBe('var(--theme-primary)')
+    expect(low.className).toContain('h-2.5')
+    expect(high.className).toContain('h-2.5')
   })
 })

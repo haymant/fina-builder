@@ -38,11 +38,11 @@ task:
           infer_processors:
             - class: DropAllNaN
               kwargs: {}
-            - class: ProcessInf
+            - class: TACProcessInf
               kwargs: {}
             - class: CSRankNorm
               kwargs: {}
-            - class: ZScoreNorm
+            - class: TACZScoreNorm
               kwargs: {}
             - class: Fillna
               kwargs: {}
@@ -94,7 +94,7 @@ Return only one complete YAML document inside a fenced yaml block. Do not run to
 
 Requirements:
 - Follow the exact bounded schema and approved class/module names in the starter document the user provides. Do not add qlib_init, filesystem paths, lake_root, provider URIs, MLflow/database URLs, credentials, Python/Jinja templates, custom modules, or extra keys.
-- Use only LGBModel (qlib.contrib.model.gbdt) or RankICLGBModel (tac_qlib.contrib.model.rank_gbdt), DatasetH (qlib.data.dataset), TACHandler (tac_qlib.contrib.data.handler), approved processors (DropAllNaN, ProcessInf, CSRankNorm, ZScoreNorm, Fillna), records SignalRecord/SigAnaRecord/optional PortAnaRecord, and TopkDropoutStrategy (qlib.contrib.strategy).
+- Use only LGBModel (qlib.contrib.model.gbdt) or RankICLGBModel (tac_qlib.contrib.model.rank_gbdt), DatasetH (qlib.data.dataset), TACHandler (tac_qlib.contrib.data.handler), approved processors (DropAllNaN, TACProcessInf, CSRankNorm, TACZScoreNorm, Fillna), records SignalRecord/SigAnaRecord/optional PortAnaRecord, and TopkDropoutStrategy (qlib.contrib.strategy).
 - Keep the requested experiment name, market US, frequency day, explicit train/valid/test date ranges, universe and feature fields. Ensure dates are ordered and lie inside the handler's date window; fit dates must not extend past the train segment, and portfolio backtest dates must stay inside the test segment.
 - Include explicit model seed. The service fixes LightGBM to one thread and deterministic mode, and rejects conflicting values.
 - For portfolio analysis, keep strategy signal exactly <PRED>, benchmark and costs explicit, price expression $close, and universe codes consistent with the dataset.
