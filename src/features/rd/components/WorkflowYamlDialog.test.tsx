@@ -46,6 +46,9 @@ describe('WorkflowYamlDialog', () => {
     await user.click(dispatch)
     await waitFor(() => expect(rdApi.runWorkflowYaml).toHaveBeenCalledWith(expect.any(String), 'alpha'))
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Config SHA-256'))
+    expect(await screen.findByRole('status')).toHaveTextContent('Workflow submitted (started)')
+    expect(dispatch).toBeDisabled()
+    expect(onClose).not.toHaveBeenCalled()
     expect(onDispatched).toHaveBeenCalledTimes(1)
   })
 

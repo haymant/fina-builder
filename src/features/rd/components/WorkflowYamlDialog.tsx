@@ -16,12 +16,12 @@ export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => v
   const [validation, setValidation] = useState<RdWorkflowValidation | null>(null)
   const [preflight, setPreflight] = useState<Record<string, unknown> | null>(null)
   const [busy, setBusy] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
   const [message, setMessage] = useState('')
-  const [recovery, setRecovery] = useState<RdLakeRecoveryRequest | null>(null)
+const [recovery, setRecovery] = useState<RdLakeRecoveryRequest | null>(null)
   // The editor clears validation on every change, so a valid rendered result
-  // is necessarily for the current YAML. Keep dispatch gated by that state;
-  // dispatch() independently blocks duplicate submissions while busy.
-  const canDispatch = validation?.valid === true
+  // is necessarily for the current YAML. Keep dispatch gated by that state.
+  const canDispatch = validation?.valid === true && !busy && !submitted
 
   const validate = async (event?: FormEvent) => {
     event?.preventDefault()
@@ -30,6 +30,7 @@ export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => v
     setValidation(null)
     setPreflight(null)
     setRecovery(null)
+    setSubmitted(false)
     try {
       const result = await rdApi.validateWorkflowYaml(yamlText)
       if (!result.valid || !result.experimentName || !result.configSha256) throw new Error('The R&D service returned an incomplete workflow preflight.')
@@ -91,7 +92,8 @@ export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => v
     setMessage('Submitting workflow to the isolated Qlib worker…')
     try {
       const result = await rdApi.runWorkflowYaml(yamlText, validation.experimentName)
-      setMessage(`Workflow submitted (${display(result.status)}). Refresh Experiments or Runs to read its persisted state.`)
+      setSubmitted(true)
+      setMessage(`Workflow submitted (${display(result.status)}). The isolated worker is running asynchronously; refresh Experiments or Runs to read its persisted state.`)
       onDispatched()
     } catch (cause) {
       setMessage(cause instanceof RdApiError ? cause.message : String(cause))
@@ -137,7 +139,7 @@ export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => v
           {Array.isArray(dataset.allNanDropped) && dataset.allNanDropped.length ? <p className="text-amber-600 sm:col-span-2 lg:col-span-3">All-NaN fields dropped: {dataset.allNanDropped.map(String).join(', ')}</p> : null}
         </div> : null}
         {recovery ? <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-[11px] text-amber-900" role="alert"><b>Requested lake data is not available.</b> Confirming the recovery action will persist daily bars and TA/SP features for {recovery.symbols.join(', ')} from {recovery.start} through {recovery.end}, then validate again. No data is loaded automatically.</div> : null}
-        {message ? <p className="mt-3 text-[11px] text-muted" role="status">{message}</p> : null}
+        {message ? <p className={`mt-3 text-[11px] ${submitted ? 'text-emerald-700' : 'text-muted'}`} role="status">{message}</p> : null}
       </div>
       <footer className="flex items-center justify-between border-t border-line px-4 py-3 text-[10px] text-muted"><span>Lake population and run creation are separate confirmed actions; neither happens automatically.</span><button type="button" className={btn} onClick={onClose}><X size={12} /> Close</button></footer>
     </section>

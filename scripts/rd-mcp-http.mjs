@@ -20,7 +20,7 @@ async function handle(message) {
   if (method !== 'tools/call') throw new Error(`R&D method is not allowed: ${method}`)
   validateRdToolCall(params)
   const result = await child.call({ jsonrpc: '2.0', id, method, params })
-  return { ...result, id }
+  return { jsonrpc: '2.0', id, result }
 }
 const server = createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, CORS); return res.end() }
