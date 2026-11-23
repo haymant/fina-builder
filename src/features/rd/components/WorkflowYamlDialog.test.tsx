@@ -83,5 +83,6 @@ describe('WorkflowYamlDialog', () => {
     expect(trading2Api.loadLakeSymbols).toHaveBeenCalledWith(expect.objectContaining({ market: 'US', symbols: ['SPY', 'QQQ'], timeframe: '1d' }))
     expect(trading2Api.getLoadStatus).toHaveBeenCalledWith('load-1')
     expect(await screen.findByText('Preflight passed')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /dispatch workflow/i })).toBeEnabled()
   })
 })

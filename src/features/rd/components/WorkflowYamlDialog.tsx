@@ -10,6 +10,7 @@ const btn = 'ghost-button inline-flex'
 const primary = 'primary-button inline-flex'
 const obj = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 const display = (value: unknown) => value === null || value === undefined ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value)
+const sameYamlText = (left: string | null, right: string) => left !== null && left.replace(/\r\n/g, '\n') === right.replace(/\r\n/g, '\n')
 
 export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => void; onDispatched: () => void }) {
   const { mode } = useTheme()
@@ -20,7 +21,7 @@ export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => v
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [recovery, setRecovery] = useState<RdLakeRecoveryRequest | null>(null)
-  const canDispatch = validation?.valid === true && validatedText === yamlText && !busy
+  const canDispatch = validation?.valid === true && sameYamlText(validatedText, yamlText) && !busy
 
   const validate = async (event?: FormEvent) => {
     event?.preventDefault()
@@ -123,7 +124,7 @@ export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => v
           <button type="button" className={btn} onClick={() => void validate()} disabled={busy}><ShieldCheck size={13} /> {busy ? 'Working…' : 'Validate & preflight'}</button>
           {recovery ? <button type="button" className={btn} onClick={() => void populateLake()} disabled={busy}>Populate missing lake data</button> : null}
           <button type="button" className={primary} onClick={() => void dispatch()} disabled={!canDispatch}><Play size={13} /> Dispatch workflow</button>
-          {validation?.valid && validatedText === yamlText ? <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600"><CheckCircle2 size={12} /> Preflight passed</span> : null}
+          {validation?.valid && sameYamlText(validatedText, yamlText) ? <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600"><CheckCircle2 size={12} /> Preflight passed</span> : null}
         </div>
         {validation ? <div className="mt-3 grid gap-2 rounded border border-line bg-bg p-3 text-[11px] sm:grid-cols-2 lg:grid-cols-3" aria-label="Workflow preflight summary">
           <p><span className="text-muted">Experiment:</span> <b>{validation.experimentName}</b></p>
