@@ -36,7 +36,11 @@ DEFAULT_INFER_PROCESSORS = [
         "module_path": "tac_qlib.contrib.data.handler",
         "kwargs": {},
     },
-    {"class": "ZScoreNorm", "kwargs": {}},
+    {
+        "class": "TACZScoreNorm",
+        "module_path": "tac_qlib.contrib.data.handler",
+        "kwargs": {},
+    },
     {"class": "Fillna", "kwargs": {}},
 ]
 DEFAULT_LEARN_PROCESSORS = [
@@ -48,6 +52,26 @@ DEFAULT_LEARN_PROCESSORS = [
 RAW_FEATURE_FIELDS = ("$open", "$high", "$low", "$close", "$vwap", "$volume")
 
 DEFAULT_LABEL = "Ref($close,-2)/Ref($close,-1)-1"
+
+
+def _datetime_index_values(index):
+    if isinstance(index, pd.MultiIndex):
+        level = index.names.index("datetime") if "datetime" in index.names else 0
+        return index.get_level_values(level)
+    return index
+
+
+def _fit_window(df, start_time, end_time):
+    """Select a fit window without assuming Qlib returned a two-level index."""
+    dates = pd.to_datetime(_datetime_index_values(df.index), errors="coerce")
+    if dates.isna().any():
+        raise ValueError("Qlib data index contains values that are not valid datetimes")
+    mask = np.ones(len(df), dtype=bool)
+    if start_time is not None:
+        mask &= dates >= pd.Timestamp(start_time)
+    if end_time is not None:
+        mask &= dates <= pd.Timestamp(end_time)
+    return df.loc[mask]
 
 
 def check_transform_proc(proc_l, fit_start_time, fit_end_time):
@@ -132,14 +156,7 @@ class DropAllNaN(processor_module.Processor):
             return self
         window = df
         if self.fit_start_time is not None and self.fit_end_time is not None:
-            try:
-                from qlib.data.dataset.utils import fetch_df_by_index
-
-                window = fetch_df_by_index(
-                    df, slice(self.fit_start_time, self.fit_end_time), level="datetime"
-                )
-            except Exception:  # pragma: no cover - defensive
-                window = df
+            window = _fit_window(df, self.fit_start_time, self.fit_end_time)
         if len(window) == 0:
             return self
         self.cols_to_drop = [c for c in window.columns if window[c].isna().all()]
@@ -149,6 +166,34 @@ class DropAllNaN(processor_module.Processor):
         if self.cols_to_drop:
             return df.drop(columns=self.cols_to_drop, errors="ignore")
         return df
+
+
+class TACZScoreNorm(processor_module.ZScoreNorm):
+    """Qlib Z-score normalization with date selection for either index shape.
+
+    Qlib's helper assumes a two-level (datetime, instrument) MultiIndex. The
+    lake loader can instead return a single datetime index (notably for a
+    one-symbol universe), so select the fit rows with a parsed date mask.
+    """
+
+    def fit(self, df=None):
+        if df is None or len(df) == 0:
+            return self
+        window = _fit_window(df, self.fit_start_time, self.fit_end_time)
+        if len(window) == 0:
+            raise ValueError(
+                "TACZScoreNorm fit window contains no rows; check handler fit dates and lake coverage"
+            )
+        cols = processor_module.get_group_columns(window, self.fields_group)
+        self.mean_train = np.nanmean(window[cols].values, axis=0)
+        self.std_train = np.nanstd(window[cols].values, axis=0)
+        self.ignore = self.std_train == 0
+        for index, ignored in enumerate(self.ignore):
+            if ignored:
+                self.std_train[index] = 1
+                self.mean_train[index] = 0
+        self.cols = cols
+        return self
 
 
 class TACProcessInf(processor_module.Processor):
@@ -174,6 +219,10 @@ class TACProcessInf(processor_module.Processor):
     def __call__(self, df):
         if isinstance(df.index, pd.MultiIndex) and "datetime" in df.index.names:
             result = df.groupby(level="datetime", group_keys=False, sort=False).apply(
+                self._replace_inf
+            )
+        elif not isinstance(df.index, pd.MultiIndex):
+            result = df.groupby(level=0, group_keys=False, sort=False).apply(
                 self._replace_inf
             )
         else:
@@ -451,7 +500,15 @@ class TACHandler(DataHandlerLP):
         return get_common_feature_fields(lake_root, market, timeframe_for_freq(freq))
 
 
-__all__ = ["TACHandler", "DropAllNaN", "BenchResidual", "BenchBetaResidual", "get_common_feature_fields"]
+__all__ = [
+    "TACHandler",
+    "DropAllNaN",
+    "TACZScoreNorm",
+    "TACProcessInf",
+    "BenchResidual",
+    "BenchBetaResidual",
+    "get_common_feature_fields",
+]
 
 
 # Make `DropAllNaN`/`BenchResidual`/`BenchBetaResidual` resolvable by bare name from processor

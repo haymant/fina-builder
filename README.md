@@ -187,6 +187,13 @@ shared TAC Python environment at `modules/.venv`. If either submodule
 is missing, startup now stops with an instruction to run the recursive submodule command
 instead of allowing a later opaque “MCP connection closed” error.
 
+After pulling source changes, restart a running desktop/dev process so its MCP services reload
+the checkout. No separate frontend build or Python package reinstall is needed for development:
+`tauri:dev` serves the frontend through Vite and the R&D/book launcher runs `uv sync --locked`
+before importing the checked-out Python source. For an installed desktop bundle, a source `git
+pull` does not replace the installed app; create and install an updated bundle with
+`npm run tauri:build` (its Tauri hook runs the frontend build and runtime preparation for you).
+
 The shell resolves `riga-mcp` / `tac-engine` from `RIGA_MCP_BIN` / `TAC_ENGINE_BIN`, then the
 shared target path (`modules/target/{release,debug}`), then legacy submodule paths, and finally a
 bundled sidecar. It

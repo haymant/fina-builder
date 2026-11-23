@@ -34,6 +34,7 @@ PROCESSORS = {
     "TACProcessInf",
     "CSRankNorm",
     "ZScoreNorm",
+    "TACZScoreNorm",
     "Fillna",
 }
 TAC_PROCESSOR_MODULE = "tac_qlib.contrib.data.handler"
@@ -114,9 +115,14 @@ def _normalise_processors(value: Any, where: str) -> list[dict[str, Any]]:
             raise ValueError(f"{where}[{index}].kwargs is not configurable")
         # Keep accepting existing workflow YAML, but avoid Qlib ProcessInf's
         # parallel resampling path, which requires a DatetimeIndex level.
-        normalized_name = "TACProcessInf" if name in {"ProcessInf", "TACProcessInf"} else name
+        normalized_name = {
+            "ProcessInf": "TACProcessInf",
+            "TACProcessInf": "TACProcessInf",
+            "ZScoreNorm": "TACZScoreNorm",
+            "TACZScoreNorm": "TACZScoreNorm",
+        }.get(name, name)
         processor = {"class": normalized_name, "kwargs": {}}
-        if normalized_name == "TACProcessInf":
+        if normalized_name in {"TACProcessInf", "TACZScoreNorm"}:
             processor["module_path"] = TAC_PROCESSOR_MODULE
         result.append(processor)
     return result

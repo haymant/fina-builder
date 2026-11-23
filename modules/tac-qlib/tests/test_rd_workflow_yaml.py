@@ -100,6 +100,21 @@ def test_normalizes_qlib_process_inf_to_datetime_index_compatible_processor():
     assert "class: ProcessInf" not in serialized
 
 
+def test_normalizes_qlib_zscore_to_single_index_compatible_processor():
+    workflow = VALID.replace("class: DropAllNaN", "class: ZScoreNorm")
+
+    config, _summary, serialized = prepare(workflow)
+
+    processor = config["task"]["dataset"]["kwargs"]["handler"]["kwargs"]["infer_processors"][0]
+    assert processor == {
+        "class": "TACZScoreNorm",
+        "module_path": "tac_qlib.contrib.data.handler",
+        "kwargs": {},
+    }
+    assert "class: TACZScoreNorm" in serialized
+    assert "class: ZScoreNorm" not in serialized
+
+
 @pytest.mark.parametrize(
     "bad, message",
     [
