@@ -411,6 +411,29 @@ def _feature_fields_from_config(hkw: Dict[str, Any]) -> List[str]:
         return []
 
 
+def _workflow_yaml_from_config(config: dict) -> str:
+    """Serialize a saved config as cloneable YAML without host-owned settings."""
+    from io import StringIO
+    from ruamel.yaml import YAML
+
+    workflow_config = _jsonable(config)
+    workflow_config.pop("qlib_init", None)
+    workflow_config.pop("rd_reproducibility", None)
+    handler_kwargs = (
+        (((workflow_config.get("task") or {}).get("dataset") or {}).get("kwargs") or {})
+        .get("handler", {})
+        .get("kwargs", {})
+    )
+    if isinstance(handler_kwargs, dict):
+        handler_kwargs.pop("lake_root", None)
+
+    yaml_buffer = StringIO()
+    yaml_writer = YAML(typ="safe", pure=True)
+    yaml_writer.default_flow_style = False
+    yaml_writer.dump(workflow_config, yaml_buffer)
+    return yaml_buffer.getvalue()
+
+
 def _run_input(art_root: Path, exp_id, run_id: str) -> dict:
     root = _run_artifact_root(art_root, exp_id, run_id)
     config = None
@@ -452,6 +475,7 @@ def _run_input(art_root: Path, exp_id, run_id: str) -> dict:
     return {
         "source": "config-artifact",
         "config": _jsonable(config),
+        "config_yaml": _workflow_yaml_from_config(config),
         "qlib_init": _jsonable(qlib_init),
         "model": _jsonable(model),
         "dataset": {

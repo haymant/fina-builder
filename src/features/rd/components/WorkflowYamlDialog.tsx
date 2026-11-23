@@ -11,10 +11,10 @@ const btn = 'ghost-button inline-flex'
 const obj = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 const display = (value: unknown) => value === null || value === undefined ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value)
 
-export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => void; onDispatched: () => void }) {
+export function WorkflowYamlDialog({ onClose, onDispatched, initialYaml }: { onClose: () => void; onDispatched: () => void; initialYaml?: string }) {
   const { mode } = useTheme()
   const [confirm, confirmDialog] = useConfirm()
-  const [yamlText, setYamlText] = useState(DEFAULT_RD_WORKFLOW_YAML)
+  const [yamlText, setYamlText] = useState(initialYaml ?? DEFAULT_RD_WORKFLOW_YAML)
   const [validation, setValidation] = useState<RdWorkflowValidation | null>(null)
   const [preflight, setPreflight] = useState<Record<string, unknown> | null>(null)
   const [busy, setBusy] = useState(false)
