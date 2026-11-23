@@ -26,6 +26,18 @@ use std::sync::OnceLock;
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const INIT_TIMEOUT: Duration = Duration::from_secs(20);
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
+// Dataset construction and feature-coverage scans can take several minutes
+// for broad, multi-year R&D workflows; keep the longer budget scoped to those
+// read-only preflight operations.
+const RD_PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(300);
+
+fn tool_call_timeout(server: &str, name: &str) -> Duration {
+    if server == "rd" && matches!(name, "rd_dataset" | "rd_validate_workflow") {
+        RD_PREFLIGHT_TIMEOUT
+    } else {
+        CALL_TIMEOUT
+    }
+}
 
 /// One tool advertised by the MCP server, in the shape the UI/agent needs.
 #[derive(Debug, Clone, Serialize)]
@@ -321,7 +333,7 @@ impl McpRuntime {
             let result = process.request(
                 "tools/call",
                 json!({ "name": name, "arguments": arguments }),
-                CALL_TIMEOUT,
+                tool_call_timeout(server, name),
             )?;
             Ok(McpCallResult {
                 content: result.get("content").cloned().unwrap_or_else(|| json!([])),
@@ -393,6 +405,20 @@ impl McpRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_rd_dataset_preflight_calls_get_the_extended_timeout() {
+        assert_eq!(tool_call_timeout("rd", "rd_dataset"), RD_PREFLIGHT_TIMEOUT);
+        assert_eq!(
+            tool_call_timeout("rd", "rd_validate_workflow"),
+            RD_PREFLIGHT_TIMEOUT
+        );
+        assert_eq!(tool_call_timeout("rd", "rd_status"), CALL_TIMEOUT);
+        assert_eq!(
+            tool_call_timeout("riga", "rd_validate_workflow"),
+            CALL_TIMEOUT
+        );
+    }
 
     /// Resolve the vendored `riga-mcp` binary (submodule default relative path).
     fn riga_binary() -> Option<String> {

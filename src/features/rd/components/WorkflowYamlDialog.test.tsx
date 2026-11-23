@@ -55,6 +55,19 @@ describe('WorkflowYamlDialog', () => {
     expect(onDispatched).toHaveBeenCalledTimes(1)
   })
 
+  it('explains that broad lake preflight may take minutes while validation is pending', async () => {
+    const user = userEvent.setup()
+    let resolveValidation!: (value: typeof result) => void
+    vi.mocked(rdApi.validateWorkflowYaml).mockReturnValue(new Promise((resolve) => { resolveValidation = resolve }))
+    render(<WorkflowYamlDialog onClose={vi.fn()} onDispatched={vi.fn()} />)
+
+    await user.click(screen.getByRole('button', { name: /validate & preflight/i }))
+    expect(screen.getByRole('status')).toHaveTextContent(/broad universes and multi-year windows can take several minutes/i)
+
+    resolveValidation(result)
+    expect(await screen.findByText('Preflight passed')).toBeInTheDocument()
+  })
+
   it('invalidates preflight when YAML changes and does not dispatch on cancel', async () => {
     const user = userEvent.setup()
     render(<WorkflowYamlDialog onClose={vi.fn()} onDispatched={vi.fn()} />)

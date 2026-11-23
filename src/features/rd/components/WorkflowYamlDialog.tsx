@@ -28,7 +28,7 @@ export function WorkflowYamlDialog({ onClose, onDispatched }: { onClose: () => v
   const validate = async (event?: FormEvent, allowBeforeLakeStart = false, configYaml = yamlText) => {
     event?.preventDefault()
     setBusy(true)
-    setMessage('')
+    setMessage('Checking YAML and persisted lake coverage; broad universes and multi-year windows can take several minutes.')
     setValidation(null)
     setPreflight(null)
     setRecovery(null)
