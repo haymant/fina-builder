@@ -51,6 +51,12 @@ def main():
     assert not df.empty
     assert df.columns.tolist() == ["$close", "$volume", "$vwap"]
     assert not df["$close"].isna().all()
+    from tac_qlib.data.providers import LakeFeatureProvider
+    deduped = LakeFeatureProvider._series(
+        pd.Series([1.0, 2.0, 3.0]),
+        pd.Index([pd.Timestamp("2026-01-02").date(), pd.Timestamp("2026-01-02").date(), pd.Timestamp("2026-01-05").date()]),
+    )
+    assert deduped.index.is_unique and deduped.loc[pd.Timestamp("2026-01-02").date()] == 2.0
     # index must be the (datetime, instrument) MultiIndex, sorted
     assert isinstance(df.index, pd.MultiIndex)
     assert df.index.names == [df.index.names[0], df.index.names[1]]

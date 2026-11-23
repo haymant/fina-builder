@@ -181,6 +181,19 @@ class LakeFeatureProvider(FeatureProvider):
         ts = pd.to_datetime(df["t"])
         return ts.dt.date if _day_freq(freq) else ts
 
+    @staticmethod
+    def _series(values: pd.Series, keys: pd.Index) -> pd.Series:
+        """Build a reindexable series, keeping the last row for duplicate keys.
+
+        Daily lake files can contain duplicate sessions after an incremental
+        append or a provider merge. Qlib asks the provider to reindex these
+        values; Pandas rejects a non-unique source index, so normalize it at
+        the lake boundary. Keeping the last row matches the lake's append
+        semantics and preserves the newest persisted observation.
+        """
+        series = values.set_axis(keys)
+        return series[~series.index.duplicated(keep="last")]
+
     # ------------------------------------------------------------------ fields
     def _extract(self, instrument: str, field: str, timeframe: str, freq: str) -> Optional[pd.Series]:
         """Return the field as a Series keyed by date/timestamp (None if not present in the lake)."""
@@ -189,18 +202,18 @@ class LakeFeatureProvider(FeatureProvider):
         if field in BAR_FIELD_MAP:
             col = BAR_FIELD_MAP[field]
             if col in bar.columns:
-                return bar[col].astype(float).set_axis(self._keys(bar, freq))
+                return self._series(bar[col].astype(float), self._keys(bar, freq))
             return None
         if field == "amount":
             if "v" in bar.columns and "vw" in bar.columns:
-                return (bar["v"] * bar["vw"]).astype(float).set_axis(self._keys(bar, freq))
+                return self._series((bar["v"] * bar["vw"]).astype(float), self._keys(bar, freq))
             return None
         if field in UNKNOWN_FIELD_NAMES:
             return None
 
         feat = self._load_feature_df(instrument, timeframe)
         if field in feat.columns:
-            return feat[field].astype(float).set_axis(self._keys(feat, freq))
+            return self._series(feat[field].astype(float), self._keys(feat, freq))
         return None
 
     # ------------------------------------------------------------------ api
