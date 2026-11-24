@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fina-builder.local/skills/nip-transcription/processed-transcript-import.schema.json",
+  "title": "NIP Processed Transcript Import",
+  "description": "One external-agent analysis tied to an existing retained NIP event. Every evidence_quote must occur exactly once in that event's transcript. This is the payload for build_agent_narrative_graph; producer/model provenance is caller-declared and unattested.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "producer",
+    "model",
+    "prompt_version",
+    "narrative_title",
+    "narrative_thesis",
+    "narrative_summary",
+    "entities",
+    "claims"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Exact event_id supplied with the copied retained transcript. Import rejects any event without retained transcript text."
+    },
+    "producer": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Caller-declared producer, such as the external agent or tool. It is not verified by NIP."
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Caller-declared model or processing method; not cryptographically attested."
+    },
+    "prompt_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Prompt/skill revision used to produce the analysis."
+    },
+    "narrative_title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "description": "Short title for the transcript-level narrative."
+    },
+    "narrative_thesis": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 600,
+      "description": "Concise, evidence-grounded thesis; distinguish source statements from interpretation."
+    },
+    "narrative_summary": {
+      "type": "string",
+      "maxLength": 1600,
+      "description": "Short summary grounded only in this transcript."
+    },
+    "entities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 40,
+      "description": "Event-scoped entity candidates. NIP keeps these unresolved; do not invent canonical security/ticker mappings.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["canonical_name", "entity_type", "surface_form", "evidence_quote"],
+        "properties": {
+          "canonical_name": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "entity_type": {
+            "type": "string",
+            "enum": ["person", "organization", "company", "product", "place", "country", "government_body", "concept", "other"]
+          },
+          "surface_form": { "type": "string", "minLength": 1, "maxLength": 160, "description": "Exact name as it appears within evidence_quote." },
+          "evidence_quote": { "type": "string", "minLength": 1, "description": "Exact, unique transcript quote containing surface_form." }
+        }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 30,
+      "description": "Claims must be explicitly supported by the transcript, and each entity_names entry must match an entities.canonical_name.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim_text", "claim_type", "confidence_millis", "evidence_quote", "entity_names"],
+        "properties": {
+          "claim_text": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "claim_type": { "type": "string", "enum": ["fact", "measurement", "causal", "forecast", "guidance", "risk", "opinion", "other"] },
+          "speaker_or_author": { "type": ["string", "null"], "description": "Speaker/author only when clear from the transcript; otherwise null or omit." },
+          "confidence_millis": { "type": "integer", "minimum": 0, "maximum": 1000, "description": "Confidence on a 0–1000 scale, not a probability guarantee." },
+          "evidence_quote": { "type": "string", "minLength": 1, "description": "Exact quote that occurs exactly once in the retained transcript." },
+          "entity_names": { "type": "array", "minItems": 1, "maxItems": 12, "items": { "type": "string", "minLength": 1 }, "description": "Names matching entities.canonical_name exactly." },
+          "polarity": { "type": ["string", "null"], "enum": ["positive", "negative", "neutral", "mixed", "unknown", null] },
+          "horizon": { "type": ["string", "null"], "maxLength": 120, "description": "Time horizon only when the transcript states or clearly implies one; otherwise null or omit." }
+        }
+      }
+    }
+  }
+}

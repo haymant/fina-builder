@@ -17,6 +17,7 @@ import { useObservabilityStore, type ObservabilityLevel } from '../../../store/o
 import { NotebookDrawer } from './NotebookDrawer'
 import { TemplateGallery } from './TemplateGallery'
 import { useDashboardDocsStore } from '../../../store/dashboardDocsStore'
+import type { NipEvent, NipPodcastEpisode } from '../../narrative/types'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
 import '../panels.css'
@@ -100,6 +101,8 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
   const [expanded, setExpanded] = useState<string | null>(null)
   const [help, setHelp] = useState<'shortcuts' | 'about' | null>(null)
   const [newTradeSignal, setNewTradeSignal] = useState(0)
+  const [nipNotebookSelection, setNipNotebookSelection] = useState<{ episode: NipPodcastEpisode | null; event: NipEvent | null }>({ episode: null, event: null })
+  const [nipImportRefresh, setNipImportRefresh] = useState(0)
   const [undo, setUndo] = useState<{ item: TileLayout; label: string } | null>(null)
   const [confirmAction, setConfirmAction] = useState<null | 'delete-dashboard' | 'reset-layout'>(null)
   const undoTimer = useRef<number | null>(null)
@@ -278,7 +281,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
         <main className="workspace-canvas relative min-h-0 flex-1 overflow-auto p-5">
           <ViewLoadBoundary label="Narrative Intelligence">
             <Suspense fallback={<SlowModuleNotice label="Narrative Intelligence" />}>
-              <NarrativeWorkspace view={location.view} onOpenVideoEpisode={(projectId, episodeId, claimId) => navigate({ kind: 'video', view: 'workspace', projectId, episodeId, claimId })} />
+              <NarrativeWorkspace view={location.view} onOpenVideoEpisode={(projectId, episodeId, claimId) => navigate({ kind: 'video', view: 'workspace', projectId, episodeId, claimId })} onNipEpisodeSelection={(episode, event) => setNipNotebookSelection({ episode, event })} importRefreshSignal={nipImportRefresh} />
             </Suspense>
           </ViewLoadBoundary>
         </main>
@@ -389,11 +392,15 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
         </div>
       ) : null}
       <NotebookDrawer
-        key={location.kind === 'rd' ? 'rd-workspace' : dashboard.id}
+        key={location.kind === 'rd' ? 'rd-workspace' : location.kind === 'narrative' ? 'nip-workspace' : dashboard.id}
         dashboardId={dashboard.id}
         dashboardName={dashboard.name}
         open={notebookOpen}
         rdMode={location.kind === 'rd'}
+        nipMode={location.kind === 'narrative'}
+        nipEpisode={nipNotebookSelection.episode}
+        nipEvent={nipNotebookSelection.event}
+        onNipImportSuccess={() => setNipImportRefresh((current) => current + 1)}
         onClose={() => setNotebookOpen(false)}
       />
       <TemplateGallery

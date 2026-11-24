@@ -415,3 +415,34 @@ export interface NipComfyWorkspaceReport {
 export interface NipEpisodeEventLookup {
   event: NipEvent | null
 }
+
+export interface NipAgentEntityDraft {
+  canonical_name: string
+  entity_type: 'person' | 'organization' | 'company' | 'product' | 'place' | 'country' | 'government_body' | 'concept' | 'other'
+  surface_form: string
+  evidence_quote: string
+}
+
+export interface NipAgentClaimDraft {
+  claim_text: string
+  claim_type: 'fact' | 'measurement' | 'causal' | 'forecast' | 'guidance' | 'risk' | 'opinion' | 'other'
+  speaker_or_author?: string | null
+  confidence_millis: number
+  evidence_quote: string
+  entity_names: string[]
+  polarity?: 'positive' | 'negative' | 'neutral' | 'mixed' | 'unknown' | null
+  horizon?: string | null
+}
+
+/** JSON payload accepted by build_agent_narrative_graph; evidence validation remains server-authoritative. */
+export interface NipAgentNarrativeGraphImport {
+  event_id: string
+  producer: string
+  model: string
+  prompt_version: string
+  narrative_title: string
+  narrative_thesis: string
+  narrative_summary: string
+  entities: NipAgentEntityDraft[]
+  claims: NipAgentClaimDraft[]
+}

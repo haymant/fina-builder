@@ -7,13 +7,18 @@ import RD_WORKFLOW_SCHEMA_TEXT from '../../../../skills/tradeac-rd/schema/workfl
 import TRADEAC_RD_SKILL from '../../../../skills/tradeac-rd/SKILL.md?raw'
 import RD_FEATURE_CANDIDATES from '../../../../skills/tradeac-rd/references/feature-candidates.md?raw'
 import { DEFAULT_RD_WORKFLOW_YAML } from '../../rd/workflowYamlTemplate'
+import NIP_TRANSCRIPTION_SKILL from '../../../../skills/nip-transcription/SKILL.md?raw'
+import NIP_IMPORT_SCHEMA_TEXT from '../../../../skills/nip-transcription/schema/processed-transcript-import.schema.json?raw'
 
+const narrativeApiMock = vi.hoisted(() => ({ buildAgentNarrativeGraph: vi.fn() }))
+vi.mock('../../narrative/api', () => ({ narrativeApi: narrativeApiMock }))
 vi.mock('../../themes/ThemeProvider', () => ({ useTheme: () => ({ mode: 'light' }) }))
 vi.mock('@uiw/react-codemirror', () => ({ default: () => <textarea aria-label="notebook editor" /> }))
 
 beforeEach(() => {
   localStorage.clear()
   useDashboardDocsStore.setState({ notes: {}, usage: {}, templates: useDashboardDocsStore.getState().templates })
+  narrativeApiMock.buildAgentNarrativeGraph.mockReset().mockResolvedValue({ analysis: {}, claims: [], graph: {} })
 })
 
 describe('NotebookDrawer R&D context', () => {
@@ -46,5 +51,59 @@ describe('NotebookDrawer R&D context', () => {
     expect(copiedContext).toContain('ema_{n}')
     expect(copiedContext).toContain(DEFAULT_RD_WORKFLOW_YAML.trim())
     expect(copiedContext).toContain(RD_WORKFLOW_SCHEMA_TEXT.trim())
+  })
+})
+
+describe('NotebookDrawer NIP transcript context', () => {
+  const transcript = 'The Fed expects rates to remain restrictive through year end.'
+  const nipEpisode = { source_id: 'macro-show', source_native_id: 'episode-42', canonical_url: 'https://example.test/42', title: 'Rates outlook', enclosure_url: null, published_at: '2026-11-20T12:00:00Z', discovered_at: '2026-11-21T12:00:00Z', state: 'transcribed' }
+  const nipEvent = { schema_version: 1, event_id: 'event-42', source_id: 'macro-show', source_native_id: 'episode-42', canonical_url: nipEpisode.canonical_url, content_hash: 'hash-42', content_text: transcript, times: { published_at: nipEpisode.published_at, source_updated_at: null, captured_at: nipEpisode.discovered_at, ingested_at: nipEpisode.discovered_at }, revision_of: null }
+  const payload = { event_id: 'event-42', producer: 'External agent', model: 'test-model', prompt_version: 'nip-transcription-v1', narrative_title: 'Restrictive policy outlook', narrative_thesis: 'The speaker expects rates to remain restrictive through year end.', narrative_summary: '', entities: [{ canonical_name: 'Federal Reserve', entity_type: 'government_body', surface_form: 'Fed', evidence_quote: 'The Fed expects rates to remain restrictive through year end.' }], claims: [{ claim_text: 'Rates are expected to remain restrictive through year end.', claim_type: 'forecast', confidence_millis: 850, evidence_quote: 'The Fed expects rates to remain restrictive through year end.', entity_names: ['Federal Reserve'] }] }
+
+  it('replaces generic dashboard usage with the NIP skill and exposes the selected retained transcript', async () => {
+    const writeText = vi.fn(async (_text: string) => undefined)
+    const user = userEvent.setup()
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    useDashboardDocsStore.getState().addNote('payoff-explorer')
+    useDashboardDocsStore.getState().updateNote('payoff-explorer', useDashboardDocsStore.getState().notes['payoff-explorer']![0]!.id, { title: 'Payoff-only note' })
+
+    render(<NotebookDrawer dashboardId="payoff-explorer" dashboardName="Payoff Explorer" open onClose={vi.fn()} nipMode nipEpisode={nipEpisode} nipEvent={nipEvent} />)
+    expect(screen.getByText('NIP notebook')).toBeInTheDocument()
+    expect(screen.getByText(/NIP transcript-processing skill/)).toBeInTheDocument()
+    expect(screen.getByText(/Choose the available workflow/)).toBeInTheDocument()
+    expect(screen.queryByText('1. Usage')).not.toBeInTheDocument()
+    expect(screen.queryByText('Payoff-only note')).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open retained transcript' })).toHaveAttribute('download', 'event-42.txt')
+    expect(screen.getByRole('link', { name: /download nip-transcription skill/i })).toHaveAttribute('download', 'nip-transcription-SKILL.md')
+    expect(screen.getByRole('link', { name: /download import json schema/i })).toHaveAttribute('download', 'processed-transcript-import.schema.json')
+
+    await user.click(screen.getByRole('button', { name: /copy skill \+ transcript/i }))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/copied to clipboard/i))
+    const context = writeText.mock.calls[0]?.[0] ?? ''
+    expect(context).toContain(NIP_TRANSCRIPTION_SKILL.trim())
+    expect(context).toContain(NIP_IMPORT_SCHEMA_TEXT.trim())
+    expect(context).toContain(transcript)
+    expect(context).toContain('event-42')
+    expect(context).toContain('return exactly one JSON object')
+  })
+
+  it('imports only JSON for the selected retained event and reports success', async () => {
+    const user = userEvent.setup()
+    const onNipImportSuccess = vi.fn()
+    render(<NotebookDrawer dashboardId="unused" dashboardName="unused" open onClose={vi.fn()} nipMode nipEpisode={nipEpisode} nipEvent={nipEvent} onNipImportSuccess={onNipImportSuccess} />)
+    const file = new File([JSON.stringify(payload)], 'processed-transcript.json', { type: 'application/json' })
+    await user.upload(screen.getByLabelText('Processed transcript JSON file'), file)
+    await waitFor(() => expect(narrativeApiMock.buildAgentNarrativeGraph).toHaveBeenCalledWith(payload))
+    expect(onNipImportSuccess).toHaveBeenCalledOnce()
+    expect(await screen.findByRole('status')).toHaveTextContent(/Import succeeded/)
+  })
+
+  it('rejects a JSON result for a different transcript without calling NIP', async () => {
+    const user = userEvent.setup()
+    render(<NotebookDrawer dashboardId="unused" dashboardName="unused" open onClose={vi.fn()} nipMode nipEpisode={nipEpisode} nipEvent={nipEvent} />)
+    const file = new File([JSON.stringify({ ...payload, event_id: 'another-event' })], 'wrong-event.json', { type: 'application/json' })
+    await user.upload(screen.getByLabelText('Processed transcript JSON file'), file)
+    expect(await screen.findByRole('status')).toHaveTextContent(/targets event another-event/)
+    expect(narrativeApiMock.buildAgentNarrativeGraph).not.toHaveBeenCalled()
   })
 })

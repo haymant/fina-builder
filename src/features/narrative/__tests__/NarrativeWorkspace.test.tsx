@@ -10,6 +10,7 @@ const narrativeApiMock = vi.hoisted(() => ({
   resourceStatus: vi.fn(), extractionStatus: vi.fn(), listNarrativeGraph: vi.fn(),
   providerStatus: vi.fn(), listPodcastTranscriptionJobs: vi.fn(), asrStatus: vi.fn(),
   extractClaimsFromEvent: vi.fn(),
+  findPodcastEpisodeEvent: vi.fn(),
   listMediaArtifacts: vi.fn(), listEpisodePage: vi.fn(), rebuildNarrativeClusters: vi.fn(),
   rebuildNarrativeGraph: vi.fn(), refreshDuePodcastFeeds: vi.fn(),
 }))
@@ -274,6 +275,15 @@ describe('EpisodePanel', () => {
     expect(onOpenTranscript).toHaveBeenCalledWith({ ...episode, state: 'transcribed' })
   })
 
+  it('selects a discovered episode for the Notebook', () => {
+    const onSelectEpisode = vi.fn()
+    const selectedKey = 'fixture-show:nip-fixture-episode-1'
+    renderPanel({ selectedEpisodeKey: selectedKey, onSelectEpisode })
+    expect(screen.getByRole('button', { name: 'Selected' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(screen.getByRole('button', { name: 'Selected' }))
+    expect(onSelectEpisode).toHaveBeenCalledWith(episode)
+  })
+
   it('sends sort, source and title changes to the server-side query', () => {
     const { props } = renderPanel({ filters: { sort: 'published_desc', sourceId: 'all', title: '' } })
     fireEvent.change(screen.getByLabelText('Sort episodes'), { target: { value: 'title_asc' } })
@@ -398,6 +408,7 @@ function stubWorkspaceApi() {
   narrativeApiMock.rebuildNarrativeGraph.mockResolvedValue(null)
   narrativeApiMock.extractClaimsFromEvent.mockResolvedValue([])
   narrativeApiMock.listPodcastTranscriptionJobs.mockResolvedValue([])
+  narrativeApiMock.findPodcastEpisodeEvent.mockResolvedValue({ event: null })
 }
 
 const availableProvider = {
@@ -446,6 +457,18 @@ describe('claim extraction feedback', () => {
 })
 
 describe('NarrativeWorkspace derived projections', () => {
+  it('resolves a selected discovered episode to its retained transcript for Notebook context', async () => {
+    stubWorkspaceApi()
+    narrativeApiMock.listPodcastSubscriptions.mockResolvedValue([subscription])
+    narrativeApiMock.listEpisodePage.mockResolvedValue({ episodes: [{ ...episode, state: 'transcribed' }], total: 1, limit: 50, offset: 0, next_offset: null })
+    narrativeApiMock.findPodcastEpisodeEvent.mockResolvedValue({ event })
+    const onNipEpisodeSelection = vi.fn()
+    render(<NarrativeWorkspace onNipEpisodeSelection={onNipEpisodeSelection} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Use in Notebook' }))
+    await waitFor(() => expect(onNipEpisodeSelection).toHaveBeenLastCalledWith({ ...episode, state: 'transcribed' }, event))
+    expect(narrativeApiMock.findPodcastEpisodeEvent).toHaveBeenCalledWith({ sourceId: episode.source_id, sourceNativeId: episode.source_native_id, canonicalUrl: episode.canonical_url })
+  })
+
   it('rebuilds clusters and the graph after a background transcription commits', async () => {
     stubWorkspaceApi()
     const running = { ...completedJob, state: 'download', step: 'download', transcript_characters: null, event_id: null }
