@@ -1801,7 +1801,7 @@ impl NipService {
 
         let mut entity_by_key = BTreeMap::new();
         let mut entities = Vec::with_capacity(draft.entities.len());
-        for entity in &draft.entities {
+        for (entity_index, entity) in draft.entities.iter().enumerate() {
             let name_key = normalize_agent_entity_name(&entity.canonical_name);
             if name_key.is_empty()
                 || entity.canonical_name.chars().count() > 200
@@ -1826,7 +1826,11 @@ impl NipService {
                         .into(),
                 ));
             }
-            let (start, end) = unique_transcript_span(transcript, &entity.evidence_quote)?;
+            let (start, end) = unique_transcript_span(
+                transcript,
+                &entity.evidence_quote,
+                &format!("entities[{entity_index}].evidence_quote"),
+            )?;
             if !entity.evidence_quote.contains(&entity.surface_form) {
                 return Err(NipError::AgentAnalysisRejected(format!(
                     "entity evidence does not contain its cited surface form: {}",
@@ -1888,7 +1892,11 @@ impl NipService {
                     index + 1
                 )));
             }
-            let (start, end) = unique_transcript_span(transcript, &claim.evidence_quote)?;
+            let (start, end) = unique_transcript_span(
+                transcript,
+                &claim.evidence_quote,
+                &format!("claims[{index}].evidence_quote"),
+            )?;
             let mut linked_entity_ids = Vec::new();
             let mut seen_links = BTreeSet::new();
             for entity_name in &claim.entity_names {
@@ -2566,11 +2574,15 @@ fn normalize_agent_entity_name(name: &str) -> String {
         .to_lowercase()
 }
 
-fn unique_transcript_span(text: &str, quote: &str) -> Result<(u32, u32), NipError> {
+fn unique_transcript_span(
+    text: &str,
+    quote: &str,
+    field_path: &str,
+) -> Result<(u32, u32), NipError> {
     if quote.trim().is_empty() || quote.chars().count() > 4000 {
-        return Err(NipError::AgentAnalysisRejected(
-            "evidence quote is empty or exceeds the maximum length".into(),
-        ));
+        return Err(NipError::AgentAnalysisRejected(format!(
+            "{field_path} is empty or exceeds the maximum length"
+        )));
     }
     let text_chars: Vec<char> = text.chars().collect();
     let quote_chars: Vec<char> = quote.chars().collect();
@@ -2581,8 +2593,8 @@ fn unique_transcript_span(text: &str, quote: &str) -> Result<(u32, u32), NipErro
         .collect();
     if matches.len() != 1 {
         return Err(NipError::AgentAnalysisRejected(format!(
-            "each evidence quote must occur exactly once in the retained transcript; found {} matches",
-            matches.len()
+            "{field_path} must occur exactly once in the retained transcript; found {} matches. Copy the quote verbatim, including spelling, punctuation, spacing and capitalization",
+            matches.len(),
         )));
     }
     let start = u32::try_from(matches[0]).map_err(|_| {
@@ -3677,6 +3689,23 @@ mod tests {
         assert!(matches!(
             service.extract_claims_from_event(event.event_id.as_str()),
             Err(NipError::ProviderUnavailable)
+        ));
+    }
+
+    #[test]
+    fn external_evidence_quote_rejection_identifies_payload_field() {
+        let error = unique_transcript_span(
+            "The retained transcript contains the source wording.",
+            "A paraphrase of the source wording.",
+            "entities[0].evidence_quote",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            NipError::AgentAnalysisRejected(message)
+                if message.contains("entities[0].evidence_quote")
+                    && message.contains("found 0 matches")
+                    && message.contains("Copy the quote verbatim")
         ));
     }
 }

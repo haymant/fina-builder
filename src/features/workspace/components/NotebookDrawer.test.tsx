@@ -82,6 +82,7 @@ describe('NotebookDrawer NIP transcript context', () => {
     const context = writeText.mock.calls[0]?.[0] ?? ''
     expect(context).toContain(NIP_TRANSCRIPTION_SKILL.trim())
     expect(context).toContain(NIP_IMPORT_SCHEMA_TEXT.trim())
+    expect(context).toContain('Preserve ASR spellings, punctuation, whitespace, and capitalization exactly')
     expect(context).toContain(transcript)
     expect(context).toContain('event-42')
     expect(context).toContain('return exactly one JSON object')
