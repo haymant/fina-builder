@@ -101,7 +101,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
   const [expanded, setExpanded] = useState<string | null>(null)
   const [help, setHelp] = useState<'shortcuts' | 'about' | null>(null)
   const [newTradeSignal, setNewTradeSignal] = useState(0)
-  const [nipNotebookSelection, setNipNotebookSelection] = useState<{ episode: NipPodcastEpisode | null; event: NipEvent | null }>({ episode: null, event: null })
+  const [nipNotebookSelection, setNipNotebookSelection] = useState<{ episode: NipPodcastEpisode | null; event: NipEvent | null; loading: boolean; error: string | null }>({ episode: null, event: null, loading: false, error: null })
   const [nipImportRefresh, setNipImportRefresh] = useState(0)
   const [undo, setUndo] = useState<{ item: TileLayout; label: string } | null>(null)
   const [confirmAction, setConfirmAction] = useState<null | 'delete-dashboard' | 'reset-layout'>(null)
@@ -281,7 +281,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
         <main className="workspace-canvas relative min-h-0 flex-1 overflow-auto p-5">
           <ViewLoadBoundary label="Narrative Intelligence">
             <Suspense fallback={<SlowModuleNotice label="Narrative Intelligence" />}>
-              <NarrativeWorkspace view={location.view} onOpenVideoEpisode={(projectId, episodeId, claimId) => navigate({ kind: 'video', view: 'workspace', projectId, episodeId, claimId })} onNipEpisodeSelection={(episode, event) => setNipNotebookSelection({ episode, event })} importRefreshSignal={nipImportRefresh} />
+              <NarrativeWorkspace view={location.view} onOpenVideoEpisode={(projectId, episodeId, claimId) => navigate({ kind: 'video', view: 'workspace', projectId, episodeId, claimId })} onNipEpisodeSelection={(episode, event, status) => setNipNotebookSelection({ episode, event, loading: status?.loading ?? false, error: status?.error ?? null })} importRefreshSignal={nipImportRefresh} />
             </Suspense>
           </ViewLoadBoundary>
         </main>
@@ -400,6 +400,8 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
         nipMode={location.kind === 'narrative'}
         nipEpisode={nipNotebookSelection.episode}
         nipEvent={nipNotebookSelection.event}
+        nipEpisodeLoading={nipNotebookSelection.loading}
+        nipEpisodeError={nipNotebookSelection.error}
         onNipImportSuccess={() => setNipImportRefresh((current) => current + 1)}
         onClose={() => setNotebookOpen(false)}
       />

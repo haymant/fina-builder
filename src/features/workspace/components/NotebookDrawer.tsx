@@ -24,7 +24,7 @@ const NIP_SKILL_HREF = `data:text/markdown;charset=utf-8,${encodeURIComponent(NI
 const NIP_IMPORT_SCHEMA_HREF = `data:application/schema+json;charset=utf-8,${encodeURIComponent(NIP_IMPORT_SCHEMA_TEXT)}`
 const RD_AGENT_CONTEXT = `# TradeAC R&D YAML workflow authoring and run request\n\n## R&D skill (complete)\n\n${TRADEAC_RD_SKILL.trim()}\n\n## Feature-candidate reference (complete)\n\n${RD_FEATURE_CANDIDATES.trim()}\n\n## Starter YAML (complete reference)\n\n\`\`\`yaml\n${DEFAULT_RD_WORKFLOW_YAML.trim()}\n\`\`\`\n\n## JSON Schema (complete; validates the parsed YAML structure)\n\n\`\`\`json\n${RD_WORKFLOW_SCHEMA_TEXT.trim()}\n\`\`\``
 
-export function NotebookDrawer({ dashboardId, dashboardName, open, onClose, rdMode = false, nipMode = false, nipEpisode = null, nipEvent = null, onNipImportSuccess }: { dashboardId: string; dashboardName: string; open: boolean; onClose: () => void; rdMode?: boolean; nipMode?: boolean; nipEpisode?: NipPodcastEpisode | null; nipEvent?: NipEvent | null; onNipImportSuccess?: () => void }) {
+export function NotebookDrawer({ dashboardId, dashboardName, open, onClose, rdMode = false, nipMode = false, nipEpisode = null, nipEvent = null, nipEpisodeLoading = false, nipEpisodeError = null, onNipImportSuccess }: { dashboardId: string; dashboardName: string; open: boolean; onClose: () => void; rdMode?: boolean; nipMode?: boolean; nipEpisode?: NipPodcastEpisode | null; nipEvent?: NipEvent | null; nipEpisodeLoading?: boolean; nipEpisodeError?: string | null; onNipImportSuccess?: () => void }) {
   const { mode } = useTheme()
   const notebookId = rdMode ? 'rd-workspace' : nipMode ? 'nip-workspace' : dashboardId
   const title = rdMode ? 'TradeAC R&D' : nipMode ? 'NIP transcript processing' : dashboardName
@@ -56,12 +56,50 @@ export function NotebookDrawer({ dashboardId, dashboardName, open, onClose, rdMo
   const transcriptText = nipEvent?.content_text?.trim() ?? ''
   const selectedEpisodeTitle = nipEpisode?.title || nipEpisode?.source_native_id || nipEpisode?.canonical_url || 'Selected episode'
   const nipAgentContext = nipEvent && transcriptText ? `# Process this retained NIP transcript\n\nUse the workflow that matches your environment: direct NIP processing, an agent working in the fina-builder directory, or an external agent without fina-builder access. Use the registered NIP MCP server only when it is accessible. For this external handoff, return exactly one JSON object matching the schema below; do not wrap it in Markdown or add commentary. Keep claims and entity candidates grounded in this transcript. Every evidence_quote must be copied verbatim and occur exactly once.\n\n## Selected episode metadata\n\n- Title: ${selectedEpisodeTitle}\n- Source: ${nipEvent.source_id}\n- Source episode ID: ${nipEpisode?.source_native_id ?? nipEvent.source_native_id ?? 'not available'}\n- Published: ${nipEvent.times.published_at ?? nipEpisode?.published_at ?? 'not available'}\n- Canonical event ID: ${nipEvent.event_id}\n- Content hash: ${nipEvent.content_hash}\n\n## Complete nip-transcription skill\n\n${NIP_TRANSCRIPTION_SKILL.trim()}\n\n## Import JSON Schema\n\n\`\`\`json\n${NIP_IMPORT_SCHEMA_TEXT.trim()}\n\`\`\`\n\n## Complete retained transcript\n\n${transcriptText}` : ''
+  const copyUsingLegacyCommand = (value: string) => {
+    const textarea = document.createElement('textarea')
+    textarea.value = value
+    textarea.setAttribute('readonly', '')
+    textarea.style.position = 'fixed'
+    textarea.style.left = '-9999px'
+    document.body.appendChild(textarea)
+    textarea.select()
+    const copied = document.execCommand?.('copy') ?? false
+    textarea.remove()
+    if (!copied) throw new Error('Clipboard permission was denied. Use the separate download links to save the skill and transcript.')
+  }
   const copy = async (value: string, label: string) => {
     try {
-      await navigator.clipboard.writeText(value)
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value)
+      else copyUsingLegacyCommand(value)
       setCopyMessage(`${label} copied to clipboard.`)
     } catch {
-      setCopyMessage('Clipboard access is unavailable; select and copy the text manually.')
+      try {
+        copyUsingLegacyCommand(value)
+        setCopyMessage(`${label} copied to clipboard using compatibility mode.`)
+      } catch (reason) {
+        setCopyMessage(reason instanceof Error ? reason.message : 'Clipboard access is unavailable. Use the separate download links instead.')
+      }
+    }
+  }
+  const readFileText = async (file: File): Promise<string> => {
+    if (typeof file.text === 'function') return file.text()
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+      reader.onerror = () => reject(reader.error ?? new Error('The selected file could not be read.'))
+      reader.readAsText(file)
+    })
+  }
+  const openImportPicker = () => {
+    const input = importInput.current
+    if (!input) return
+    try {
+      const pickerInput = input as HTMLInputElement & { showPicker?: () => void }
+      if (pickerInput.showPicker) pickerInput.showPicker()
+      else input.click()
+    } catch {
+      input.click()
     }
   }
   const importProcessedTranscript = async (file: File) => {
@@ -69,7 +107,7 @@ export function NotebookDrawer({ dashboardId, dashboardName, open, onClose, rdMo
     setCopyMessage('')
     try {
       if (!nipEvent || !transcriptText) throw new Error('Select a discovered episode with a retained transcript before importing results.')
-      const parsed: unknown = JSON.parse(await file.text())
+      const parsed: unknown = JSON.parse(await readFileText(file))
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('The import file must contain one JSON object.')
       const payload = parsed as Record<string, unknown>
       if (payload.event_id !== nipEvent.event_id) throw new Error(`This JSON targets event ${String(payload.event_id ?? '(missing event_id)')}, but the selected transcript is ${nipEvent.event_id}. Select its episode or use the matching JSON.`)
@@ -114,11 +152,12 @@ export function NotebookDrawer({ dashboardId, dashboardName, open, onClose, rdMo
         <div className="mt-3 rounded border border-line bg-bg p-2">
           <p className="eyebrow">Selected discovered episode</p>
           {nipEpisode ? <><p className="mt-1 text-xs font-semibold text-main">{selectedEpisodeTitle}</p><p className="mt-1 break-all text-[10px] text-muted">{nipEpisode.source_id} · {nipEpisode.source_native_id ?? 'No source episode ID'}</p></> : <p className="mt-1 text-[10px] text-muted">Select an item in Discovered Episodes to load its retained transcript here.</p>}
-          {nipEvent && transcriptText ? <><p className="mt-1 break-all text-[9px] text-muted">Event {nipEvent.event_id}</p><a className="mt-1 inline-block text-[10px] text-primary underline" href={`data:text/plain;charset=utf-8,${encodeURIComponent(transcriptText)}`} download={`${nipEvent.event_id}.txt`} title="Open or download the complete retained transcript">Open retained transcript</a></> : nipEpisode ? <p className="mt-1 text-[10px] text-amber-700">No retained transcript is available yet. Transcribe this episode first.</p> : null}
+          {nipEpisodeLoading ? <p className="mt-1 text-[10px] text-muted" role="status">Looking up this episode’s retained transcript…</p> : null}
+          {nipEvent && transcriptText ? <><p className="mt-1 break-all text-[9px] text-muted">Event {nipEvent.event_id}</p><a className="mt-1 inline-block text-[10px] text-primary underline" href={`data:text/plain;charset=utf-8,${encodeURIComponent(transcriptText)}`} download={`${nipEvent.event_id}.txt`} title="Open or download the complete retained transcript">Open retained transcript</a></> : nipEpisode && !nipEpisodeLoading ? <p className="mt-1 text-[10px] text-amber-700">{nipEpisodeError ?? 'No retained transcript is available yet. Transcribe this episode first.'}</p> : null}
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <input ref={importInput} className="hidden" type="file" accept=".json,application/json" aria-label="Processed transcript JSON file" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void importProcessedTranscript(file) }} />
-          <button className="ghost-button inline-flex" type="button" title="Import processed transcript JSON: save evidence-linked claims and narrative, rebuild Graph, and refresh views. Radar/Timeline counts remain based on canonical events." disabled={!nipEvent || !transcriptText || importing} onClick={() => importInput.current?.click()}><Upload size={12} /> {importing ? 'Importing…' : 'Import'}</button>
+          <button className="ghost-button inline-flex" type="button" title={nipEpisodeLoading ? 'Wait for the selected transcript lookup to finish.' : !nipEvent || !transcriptText ? (nipEpisodeError ?? 'Select a discovered episode with a retained transcript before importing.') : 'Import processed transcript JSON: save evidence-linked claims and narrative, rebuild Graph, and refresh views. Radar/Timeline counts remain based on canonical events.'} disabled={!nipEvent || !transcriptText || nipEpisodeLoading || importing} onClick={openImportPicker}><Upload size={12} /> {importing ? 'Importing…' : 'Import'}</button>
           <span className="text-[9px] text-muted">Copy context for direct model processing, a working-directory agent, or an external agent; import its JSON result.</span>
         </div>
         {copyMessage ? <p className="mt-2 text-[10px] text-muted" role="status">{copyMessage}</p> : null}

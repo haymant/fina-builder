@@ -98,6 +98,37 @@ describe('NotebookDrawer NIP transcript context', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(/Import succeeded/)
   })
 
+  it('opens the native JSON file picker from the Import action', async () => {
+    const user = userEvent.setup()
+    const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => undefined)
+    render(<NotebookDrawer dashboardId="unused" dashboardName="unused" open onClose={vi.fn()} nipMode nipEpisode={nipEpisode} nipEvent={nipEvent} />)
+    await user.click(screen.getByRole('button', { name: 'Import' }))
+    expect(click).toHaveBeenCalledOnce()
+    click.mockRestore()
+  })
+
+  it('copies the context through the legacy clipboard fallback when the Clipboard API rejects', async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn().mockRejectedValue(new Error('not allowed'))
+    const previousExecCommand = Object.getOwnPropertyDescriptor(document, 'execCommand')
+    const legacyCopy = vi.fn(() => true)
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: legacyCopy })
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(<NotebookDrawer dashboardId="unused" dashboardName="unused" open onClose={vi.fn()} nipMode nipEpisode={nipEpisode} nipEvent={nipEvent} />)
+    await user.click(screen.getByRole('button', { name: /copy skill \+ transcript/i }))
+    expect(await screen.findByRole('status')).toHaveTextContent(/copied to clipboard using compatibility mode/i)
+    expect(legacyCopy).toHaveBeenCalledWith('copy')
+    if (previousExecCommand) Object.defineProperty(document, 'execCommand', previousExecCommand)
+    else Reflect.deleteProperty(document, 'execCommand')
+  })
+
+  it('explains when the selected episode lookup failed and keeps import disabled', () => {
+    render(<NotebookDrawer dashboardId="unused" dashboardName="unused" open onClose={vi.fn()} nipMode nipEpisode={nipEpisode} nipEpisodeError="Transcript lookup failed: NIP service is offline." />)
+    expect(screen.getByText('Transcript lookup failed: NIP service is offline.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Import' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /copy skill \+ transcript/i })).toBeDisabled()
+  })
+
   it('rejects a JSON result for a different transcript without calling NIP', async () => {
     const user = userEvent.setup()
     render(<NotebookDrawer dashboardId="unused" dashboardName="unused" open onClose={vi.fn()} nipMode nipEpisode={nipEpisode} nipEvent={nipEvent} />)

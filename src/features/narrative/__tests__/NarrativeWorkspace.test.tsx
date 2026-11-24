@@ -465,7 +465,7 @@ describe('NarrativeWorkspace derived projections', () => {
     const onNipEpisodeSelection = vi.fn()
     render(<NarrativeWorkspace onNipEpisodeSelection={onNipEpisodeSelection} />)
     fireEvent.click(await screen.findByRole('button', { name: 'Use in Notebook' }))
-    await waitFor(() => expect(onNipEpisodeSelection).toHaveBeenLastCalledWith({ ...episode, state: 'transcribed' }, event))
+    await waitFor(() => expect(onNipEpisodeSelection).toHaveBeenLastCalledWith({ ...episode, state: 'transcribed' }, event, { loading: false, error: null }))
     expect(narrativeApiMock.findPodcastEpisodeEvent).toHaveBeenCalledWith({ sourceId: episode.source_id, sourceNativeId: episode.source_native_id, canonicalUrl: episode.canonical_url })
   })
 

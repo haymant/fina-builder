@@ -289,7 +289,7 @@ function EtfMappingForm({ events, onSaved }: { events: NipEvent[]; onSaved: () =
   return <form className="evidence-card space-y-2" onSubmit={submit}><p className="eyebrow">Add manual mapping revision</p><div className="grid gap-2 sm:grid-cols-2"><input aria-label="Narrative ID" placeholder="Narrative ID" value={narrativeId} onChange={(event) => setNarrativeId(event.target.value)} /><input aria-label="ETF ticker" placeholder="ETF ticker" value={ticker} onChange={(event) => setTicker(event.target.value)} /></div><textarea aria-label="Mapping rationale" placeholder="Why is this association worth researching?" value={rationale} onChange={(event) => setRationale(event.target.value)} /><p className="text-[10px] text-muted">Evidence defaults to the first retained event: {events[0]?.event_id ?? 'none available'}. Ticker existence and market-data coverage remain unknown/unavailable until separately verified.</p><Button type="submit" size="sm" disabled={saving}>{saving ? 'Saving…' : 'Save mapping revision'}</Button>{message ? <p className="text-[10px] text-muted">{message}</p> : null}</form>
 }
 
-export function NarrativeWorkspace({ view = 'overview', onOpenVideoEpisode, onNipEpisodeSelection, importRefreshSignal = 0 }: { view?: NarrativeView; onOpenVideoEpisode?: (projectId: string, episodeId: string, claimId: string) => void; onNipEpisodeSelection?: (episode: NipPodcastEpisode | null, event: NipEvent | null) => void; importRefreshSignal?: number }) {
+export function NarrativeWorkspace({ view = 'overview', onOpenVideoEpisode, onNipEpisodeSelection, importRefreshSignal = 0 }: { view?: NarrativeView; onOpenVideoEpisode?: (projectId: string, episodeId: string, claimId: string) => void; onNipEpisodeSelection?: (episode: NipPodcastEpisode | null, event: NipEvent | null, status?: { loading: boolean; error: string | null }) => void; importRefreshSignal?: number }) {
   const [confirm, confirmDialog] = useConfirm()
   const [health, setHealth] = useState<NipHealth | null>(null)
   const [events, setEvents] = useState<NipEvent[]>([])
@@ -538,12 +538,12 @@ export function NarrativeWorkspace({ view = 'overview', onOpenVideoEpisode, onNi
     const key = `${episode.source_id}:${episode.source_native_id ?? episode.canonical_url ?? episode.title ?? 'episode'}`
     const request = ++episodeSelectionRequest.current
     setSelectedNotebookEpisodeKey(key)
-    onNipEpisodeSelection?.(episode, null)
+    onNipEpisodeSelection?.(episode, null, { loading: true, error: null })
     try {
       const lookup = await narrativeApi.findPodcastEpisodeEvent({ sourceId: episode.source_id, sourceNativeId: episode.source_native_id, canonicalUrl: episode.canonical_url })
-      if (request === episodeSelectionRequest.current) onNipEpisodeSelection?.(episode, lookup.event)
-    } catch {
-      if (request === episodeSelectionRequest.current) onNipEpisodeSelection?.(episode, null)
+      if (request === episodeSelectionRequest.current) onNipEpisodeSelection?.(episode, lookup.event, { loading: false, error: lookup.event ? null : 'No retained transcript was found for this episode. Transcribe it first, then select it again.' })
+    } catch (reason) {
+      if (request === episodeSelectionRequest.current) onNipEpisodeSelection?.(episode, null, { loading: false, error: reason instanceof Error ? `Transcript lookup failed: ${reason.message}` : 'Transcript lookup failed. Check that the NIP service is available, then select the episode again.' })
     }
   }
 
