@@ -1,6 +1,6 @@
-# Fina control plane
+# FinA Builder control plane
 
-`fina.toml` and `scripts/fina.mjs` are the initial control plane for Fina Builder. They provide one repository-owned entry point for development checks and lifecycle commands while keeping Cargo, npm, uv, Vite, Rust sidecars, and Git implementation details behind a stable interface.
+FinA Builder (Financial Agent Builder) is a financial research and trading platform with modular workspaces for markets, structured products, trade operations, quantitative research, evidence-linked narratives, and agent-assisted workflows. `fina.toml` and `scripts/fina.mjs` provide one repository-owned control plane for developing, checking, and launching the whole application while keeping Cargo, npm, uv, Vite, Rust sidecars, and Git implementation details behind a stable interface.
 
 The control plane is intentionally small at this stage. It does not replace ecosystem lockfiles or existing package scripts. Instead, it establishes the contract that future runtime, experiment, and release automation will consume.
 

@@ -11,6 +11,7 @@
 /* App menu bar + focused dashboards (docs/53 §16) */
 .app-menubar { display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; }
 .brand-mark-sm { width: 26px; height: 26px; }
+.app-wordmark { flex: 0 0 auto; margin-left: -5px; color: var(--theme-text); font-size: 11px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
 .app-menubar-root { border: 0; background: transparent; height: 30px; padding: 0; gap: 2px; }
 .app-menubar-root [data-slot=menubar-trigger] { font-size: 12px; font-weight: 500; color: var(--theme-muted); padding: 4px 9px; border-radius: 6px; }
 .app-menubar-root [data-slot=menubar-trigger]:hover, .app-menubar-root [data-slot=menubar-trigger][aria-expanded=true] { color: var(--theme-text); background: color-mix(in oklab, var(--theme-primary) 10%, transparent); }

@@ -1,32 +1,62 @@
-# Fina Builder — Structured Product Payoff Explorer
+# FinA Builder — Financial Agent Builder
 
-An analytical workbench for inspecting structured-product payoffs and assembling
-role-oriented dashboards. The UI is React/TypeScript; **all pricing and market data come
-from the live engines** — `riga-flow` (`riga-mcp`) for products and `tac-engine` for market
-data — vendored under `modules/`. The desktop shell (`src-tauri`) is a thin adapter that
-drives them.
+**FinA Builder is a full-fledged financial research and trading platform** that brings market
+analysis, structured-product exploration, trade operations, quantitative research, and
+agent-assisted workflows into one configurable application. It is designed for people and
+financial agents to inspect data, build and validate research workflows, manage trade records,
+and use explicitly configured trading capabilities through governed interfaces.
 
-> **Scope:** a demonstrator, not a production pricing or risk system. Read
-> [FEATURES.md](./FEATURES.md) for the feature inventory, the architecture, and the
-> documented divergences. FEATURES.md Part I also records the pre-merge demo stack
-> (`fina-kernel` + its transports), which was retired in `docs/49-merge-fina-to-riga.md`.
+Structured-note payoff exploration is one capability inside FinA Builder—not the product's
+identity. The wider application includes dashboards and market/risk views, the Trade Repository,
+Trading 2ⁿᵈ, quantitative R&D, Narrative Intelligence, and evidence-linked Video Workspace.
+Capabilities are supplied by modular services such as `riga-flow`, `tac-engine`, the trade
+repository, `tac-qlib`, and `nip-engine`; service availability depends on the local runtime,
+data coverage, provider configuration, and credentials. Embedded RIGA and documented MCP
+interfaces support agent-assisted and external-agent workflows.
+
+> **Scope and use:** FinA Builder is a research and workflow platform, not an investment
+> adviser or a source of production-approved valuation, risk sign-off, settlement, or
+> unattended automated trading. Analytics and write capabilities depend on their configured
+> services and remain subject to the safeguards and limitations documented for each module. Read
+> [FEATURES.md](./FEATURES.md) for historical architecture and migration context. Its earlier
+> feature inventory is archival; current capability descriptions live in this README, module
+> documentation, and the implementation. The pre-merge demo stack (`fina-kernel` + its transports)
+> was retired in `docs/49-merge-fina-to-riga.md`.
+
+## Platform workspaces
+
+| Capability area | What it brings together |
+| --- | --- |
+| **Markets, products & risk views** | Configurable dashboards, market data, structured-product payoff and path exploration, and explanatory analytics. |
+| **Trading & trade operations** | Trade Repository workflows plus configured Trading 2ⁿᵈ account, market, and order surfaces; available broker operations are provider- and permission-dependent. |
+| **Quantitative research** | R&D experiments, datasets, models, and controlled workflow validation/dispatch through the TAC Qlib/MLflow services. |
+| **Narrative intelligence** | Event, claim, and evidence review with provenance-aware research surfaces; source/model availability depends on configured providers. |
+| **Agent workflows** | Embedded RIGA assistance and documented MCP tools/skills for external agents, with bounded inputs and explicit host ownership. |
+| **Evidence-linked media** | Video Workspace workflows that carry selected narratives and verified transcript spans into a reviewable storyboard/render pipeline. |
+
+RiskCube and other provider-backed workspaces may report unavailable until their optional service
+is configured. A visible workspace or successful fixture test does not imply live production data,
+certified models, or production readiness.
 
 ## Documentation
 
 | Document | What it covers |
 | --- | --- |
-| **[FEATURES.md](./FEATURES.md)** | What is implemented: the engine surfaces, tiles, the chat panel and known gaps, followed by the migration specification and its completion record. |
+| **[FEATURES.md](./FEATURES.md)** | Historical payoff-engine architecture and migration record; not a current feature inventory. |
 | **[FINA.md](./FINA.md)** | The single control-plane configuration and launcher for local development, CI, future experiments, and releases. |
 | **[AGENT-LOCAL.md](./AGENT-LOCAL.md)** | The RIGA assistant chat panel (desktop shell ↔ `riga-server`). |
 | **[docs/51-portfolio-risk-architecture.md](./docs/51-portfolio-risk-architecture.md)** | Proposed canonical portfolio/position/instrument/market/sensitivity/P&L/scenario/risk-matrix documents, the complete SQLite/PostgreSQL relational schema (ER diagram + table definitions) and the extension architecture (PROPOSAL — not implemented). |
 | **[docs/54-trade-fixing-workflows.md](./docs/54-trade-fixing-workflows.md)** | Individual and bulk Phoenix fixing capture, the due-observation queue, operational best practices and remaining correction/automation gaps. |
 | **[docs/55-narrative-intelligence-aligned-brd.md](./docs/55-narrative-intelligence-aligned-brd.md)** | Narrative Intelligence requirements, including NIP-owned source/retention lifecycle and optional local ComfyUI inference behind a provider boundary. |
-| **[docs/56-narrative-intelligence-implementation-plan.md](./docs/56-narrative-intelligence-implementation-plan.md)** | Phased NIP architecture and implementation sequence; consented RSS discovery backend is implemented, but UI, host scheduling, audio download/transcription and the ComfyUI adapter remain pending. |
-| **[docs/57-narrative-intelligence-testing-plan.md](./docs/57-narrative-intelligence-testing-plan.md)** | User-journey, regression, storage/quality-gate and narrated Playwright plan; browser tests use fake ASR, with ComfyUI runtime smoke explicitly separate and opt-in. |
-| **[docs/58-narrative-intelligence-phase-0-decisions.md](./docs/58-narrative-intelligence-phase-0-decisions.md)** | Closed local-first Phase 0 baseline for approved podcast RSS, local transcription and RIGA-configured analysis, with the narrow ASR-host amendment in ADR 59; no feed, worker, model, UI or live source is configured. |
+| **[docs/56-narrative-intelligence-implementation-plan.md](./docs/56-narrative-intelligence-implementation-plan.md)** | Phased NIP architecture and implementation history; consult the current Narrative Intelligence workspace and source for shipped behavior and runtime gates. |
+| **[docs/57-narrative-intelligence-testing-plan.md](./docs/57-narrative-intelligence-testing-plan.md)** | Historical user-journey and quality-gate plan; current fixture and integration coverage is maintained alongside the workspace. |
+| **[docs/58-narrative-intelligence-phase-0-decisions.md](./docs/58-narrative-intelligence-phase-0-decisions.md)** | Phase-0 decision record; it describes the original baseline, not current feed, worker, model, or UI availability. |
 | **[docs/59-comfyui-media-processing-architecture.md](./docs/59-comfyui-media-processing-architecture.md)** | Accepted boundary decision: optional local ComfyUI ASR/media execution, NIP-owned source lifecycle and purge, loopback-only integration gates, and the companion workflow's unverified runtime status. |
-| **[docs/60-narrative-intelligence-comfyui-handoff.md](./docs/60-narrative-intelligence-comfyui-handoff.md)** | Copy-ready handoff prompt for the next agent to implement and validate the optional local ASR adapter without crossing the NIP/ComfyUI ownership boundary. |
+| **[docs/60-narrative-intelligence-comfyui-handoff.md](./docs/60-narrative-intelligence-comfyui-handoff.md)** | Historical implementation handoff for the optional local ASR adapter; current status is determined by the NIP source and runtime configuration. |
 | **[docs/63-nip-desktop-user-journey.md](./docs/63-nip-desktop-user-journey.md)** | User journey from the desktop app through first-run setup, approved feed configuration, local transcription, extraction consent, claim/evidence review, and the narrated Playwright demonstration. |
+| **[docs/68-video-workspace-handoff.md](./docs/68-video-workspace-handoff.md)** | Current Video Workspace handoff: storyboard, evidence lineage, rendering, QA, and external-agent interfaces. |
+| **[docs/69-agent-native-modes-and-full-journey-plan.md](./docs/69-agent-native-modes-and-full-journey-plan.md)** | FinA Builder’s human, embedded-agent, and external-agent operating modes and end-to-end journey plan. |
+| **[docs/70-external-agent-tool-and-skill-contract.md](./docs/70-external-agent-tool-and-skill-contract.md)** | External-agent tool and skill contract for operating FinA Builder capabilities through bounded interfaces. |
 | [README.md](./README.md) (this file) | How to run it and how to release it. |
 
 ### Single control plane

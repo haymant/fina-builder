@@ -1,8 +1,10 @@
-# Fina Builder — Features & Architecture
+# FinA Builder — Features & Architecture History
 
-> **Single source of truth for this repository.** It records what the product does today
-> (Part I) and, in Part II, the executable specification and completion record of the
-> PoC → production migration that produced the current architecture.
+> **Historical architecture and migration record.** This document preserves the earlier
+> payoff-engine migration inventory and its executable specification. Its Part I status,
+> architecture diagram, counts, and capability descriptions predate the current multi-workspace
+> product and must not be treated as a current source of truth. For current platform scope, start
+> with [README.md](./README.md), then consult the module-specific docs and implementation.
 >
 > Part II was formerly `PHASE1_MIGRATION_PROMPT.md`. It was renamed, not rewritten: the
 > section numbers (`§4`, `§6.2`, `§10`, Appendices A–F) are unchanged, so every
@@ -14,31 +16,30 @@
 
 | Part | Contents | Read it when |
 | --- | --- | --- |
-| **Part I — Feature inventory** (this part) | What the application does: the transport surfaces, the twelve commands, the kernel modules, the 51-tile UI, the parity/CI/release machinery, and the known gaps. | You want to know what exists, or what to change next. |
+| **Part I — Historical feature inventory** (this part) | A dated record of the earlier payoff-engine app, transport surfaces, kernel modules, tile UI, migration tests, and gaps. | You need context for the original engine migration; use README.md and current module docs for shipped scope. |
 | **Part II — Migration specification & record** | The normative spec that was executed Phase 0 → 6: architecture, invariants, per-phase tasks and exit criteria, testing strategy, pitfalls, and Appendices A–F recording deviations and verified golden values. | You need the reasoning, the exact formulas, or the history of a decision. |
 
-Part II is prescriptive ("must", "do not"); Part I is descriptive ("is", "does not").
-Where they disagree about **behaviour**, Part II §5 (invariants) wins and the discrepancy
-is a bug. Where they disagree about **packaging**, this note wins: the demo transport stack
-(`fina-cli` §P1, `fina-server` + `fina-mcp` §P5) is **retired** and the demo kernel
-(`crates/fina-kernel` **and its golden fixture**, §P6) is **deleted**, per
-`docs/49-merge-fina-to-riga.md`. The product surface is `riga-flow` (`riga-mcp`) + `tac-engine`.
-Part I's demo-kernel/tile sections and Part II's transport/adapter sections are kept as the
-decision record.
+Part II records prescriptive requirements ("must", "do not") from the historical payoff-engine
+migration; neither Part I nor Part II is normative for the current multi-workspace application.
+For current behavior, use the live module contracts, tests, and docs linked from README.md.
+The historical packaging decision retired the demo transport stack (`fina-cli` §P1,
+`fina-server` + `fina-mcp` §P5) and deleted the demo kernel (`crates/fina-kernel` and its golden
+fixture, §P6), as recorded in `docs/49-merge-fina-to-riga.md`. Part I's kernel/tile sections and
+Part II's transport/adapter sections are retained as decision history.
 
 ---
 
-# Part I — Feature inventory
+# Part I — Historical feature inventory
 
-## Status
+## Historical migration status — not current application status
 
-Phase 0 → Phase 6 of the migration are complete and pushed. The repository is
-production-*shaped*: one Rust domain kernel, thin adapters, and parity tests that pin the
-kernel to the original TypeScript implementation. It is **not** production-*priced*: the
-models are deterministic demo engines (see [Known gaps](#known-gaps-and-deliberate-divergences)).
-The desktop app also includes an optional local assistant: Pi agent orchestration runs in the
-webview and calls an in-process Rust `llama.cpp` backend. This desktop service does not change
-the shared kernel command contract and is not available in browser/HTTP mode.
+At the time this migration record was written, Phase 0 → Phase 6 of the payoff-engine migration
+were complete. The then-current repository was described as production-*shaped*: one Rust domain
+kernel, thin adapters, and parity tests pinning that kernel to an earlier TypeScript
+implementation. That historical engine was **not** production-*priced*; its deterministic demo
+models (see [Known gaps](#known-gaps-and-deliberate-divergences)) were not production measures.
+The assistant and runtime details in this section likewise describe the old application state,
+not the current FinA Builder workspaces.
 
 | | |
 | --- | --- |
@@ -47,18 +48,19 @@ the shared kernel command contract and is not available in browser/HTTP mode.
 | Coverage (enforced in CI) | kernel 98.4% · server 87.8% · cli 89.1% · tauri 81.5% lines |
 | Parity baseline | `crates/fina-kernel/tests/fixtures/golden.json`, 3.1 MB, md5 `8f2ad79439457e17641797d4eda0592c` |
 
-## Business rationale
+## Historical business rationale
 
-Structured-product analysis spans trade terms, path-dependent payoff events, risk,
-cashflows, and valuation explanations. This application brings those views into one
-configurable workspace so developers, quants, traders, validators, and product-control
-users can inspect linked examples and discuss model behaviour.
+The earlier product centered on structured-product analysis: trade terms, path-dependent
+payoff events, risk, cashflows, and valuation explanations. The current FinA Builder is broader:
+it is a financial research and trading platform combining market and product analysis, trade
+operations, quantitative R&D, evidence-linked narrative research, and agent-assisted workflows.
+Structured-note payoff exploration remains one capability within the larger application.
 
-It is a demonstrator for those workflows. It is not a source of executable prices, official
-valuations, or production risk measures, and the numbers it displays must not be used for
-trading, valuation sign-off, risk limits, or settlement.
+The current platform scope and module availability are documented in [README.md](./README.md).
+Research outputs and configured engine capabilities do not constitute production-approved
+valuations, risk sign-off, investment advice, settlement, or unattended automated trading.
 
-## Architecture at a glance
+## Historical architecture at a glance
 
 The layering rule, stated once:
 

@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Structured Product Payoff Explorer",
+  "productName": "FinA Builder",
   "version": "0.2.0",
   "identifier": "com.fina.payoffexplorer",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Structured Product Payoff Explorer",
+        "title": "FinA Builder — Financial Agent Builder",
         "width": 1440,
         "height": 960,
         "minWidth": 1100,

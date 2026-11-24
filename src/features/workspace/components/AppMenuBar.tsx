@@ -124,6 +124,7 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
   return (
     <div className="app-menubar" data-testid="app-menubar">
       <div className="brand-mark brand-mark-sm" aria-hidden><Activity size={14} /></div>
+      <span className="app-wordmark" aria-label="FinA Builder">FinA Builder</span>
       <Menubar className="app-menubar-root" aria-label="Application menu">
         <MenubarMenu>
           <MenubarTrigger data-testid="menu-file">File</MenubarTrigger>
@@ -204,7 +205,7 @@ export function AppMenuBar(props: AppMenuBarProps & { right?: ReactNode }) {
           <MenubarTrigger data-testid="menu-help">Help</MenubarTrigger>
           <MenubarContent>
             {by('Help').map((c) => <Item key={c.id} cmd={c} />)}
-            <MenubarItem data-testid="menuitem-help-about" onSelect={props.onAbout}><HelpCircle /> About Structured Product Explorer</MenubarItem>
+            <MenubarItem data-testid="menuitem-help-about" onSelect={props.onAbout}><HelpCircle /> About FinA Builder</MenubarItem>
           </MenubarContent>
         </MenubarMenu>
       </Menubar>

@@ -381,7 +381,11 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
             </div>
             <div className="overflow-auto p-4 text-xs text-main">
               {help === 'about' ? (
-                <p>Structured Product Explorer — quant workspace with riga-flow pricing, tac-engine market data and the trade repository (docs 51–53).</p>
+                <div className="space-y-2">
+                  <p className="font-semibold">FinA Builder — Financial Agent Builder</p>
+                  <p>A financial research and trading platform bringing together market analysis, structured-product exploration, trade operations, quantitative R&amp;D, Narrative Intelligence, and agent-assisted workflows.</p>
+                  <p>Workspace capabilities depend on configured services, data, and permissions. Analytics are for research workflows and are not production-approved valuations, risk sign-off, or investment advice.</p>
+                </div>
               ) : (
                 <table className="w-full"><tbody>
                   {[['Ctrl/⌘ K', 'Command palette — go to any dashboard, view or command'], ['Alt 1–8', 'Dashboards'], ['Alt Shift 1–5', 'Trade repository views'], ['Alt N', 'New trade'], ['Alt C / Alt B', 'Chat / Notebook'], ['Alt A', 'Show all tiles / focus'], ['Alt T', 'Toggle theme'], ['Alt W', 'Close the active document tab'], ['Alt [ / Alt ]', 'Previous / next document tab'], ['/ N A T ?', 'Trade repository: search, new, amend, time travel, help']].map(([k, d]) => <tr key={k} className="border-b border-line"><td className="py-1.5 pr-4"><kbd>{k}</kbd></td><td>{d}</td></tr>)}
