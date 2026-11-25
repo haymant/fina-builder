@@ -16,3 +16,6 @@
 [submodule "modules/rehab-video-maker"]
 	path = modules/rehab-video-maker
 	url = https://github.com/rehabvid/rehab-video-maker
+[submodule "modules/fina-scraper"]
+	path = modules/fina-scraper
+	url = https://github.com/haymant/fina-scraper
