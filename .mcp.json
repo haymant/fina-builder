@@ -2,17 +2,17 @@
   "mcpServers": {
     "riga-flow": {
       "type": "stdio",
-      "command": "modules/riga-flow/target/release/riga-mcp",
+      "command": "modules/target/release/riga-mcp",
       "args": ["--transport", "stdio"]
     },
     "tac-engine": {
       "type": "stdio",
-      "command": "modules/tac-engine/target/release/tac-engine",
+      "command": "modules/target/release/tac-engine",
       "args": []
     },
     "tac-engine-dry-run": {
       "type": "stdio",
-      "command": "modules/tac-engine/target/release/tac-engine",
+      "command": "modules/target/release/tac-engine",
       "args": [],
       "env": {
         "TAC_LAKE_DIR": "./lake",
@@ -28,6 +28,14 @@
       "type": "stdio",
       "command": "node",
       "args": ["scripts/tac-qlib-mcp.mjs", "book"]
+    },
+    "fina-scraper": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["scripts/fina-scraper-mcp.mjs"],
+      "env": {
+        "NIP_LAKE_DIR": "${NIP_LAKE_DIR}"
+      }
     }
   }
 }
