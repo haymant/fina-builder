@@ -429,6 +429,7 @@ pub fn attach_narration(
     clips: &[(Option<PathBuf>, u64)],
     media_root: &Path,
     run_id: &str,
+    tts_engine: &str,
     cancel: &AtomicBool,
 ) -> Result<LinkZagNarration, String> {
     if clips.is_empty() {
@@ -454,10 +455,7 @@ pub fn attach_narration(
         if let Some(audio) = audio {
             let source_seconds = media_duration_seconds(audio)?;
             let audio_filter = if source_seconds > target_seconds + 0.05 {
-                format!(
-                    "{},apad",
-                    atempo_chain(source_seconds / target_seconds)
-                )
+                format!("{},apad", atempo_chain(source_seconds / target_seconds))
             } else {
                 "apad".to_owned()
             };
@@ -580,8 +578,8 @@ pub fn attach_narration(
     let output = output_path
         .canonicalize()
         .map_err(|error| format!("narrated MP4 was not produced: {error}"))?;
-    let metadata = fs::metadata(&output)
-        .map_err(|error| format!("cannot inspect narrated MP4: {error}"))?;
+    let metadata =
+        fs::metadata(&output).map_err(|error| format!("cannot inspect narrated MP4: {error}"))?;
     if !metadata.is_file() || metadata.len() == 0 {
         return Err("narrated MP4 is empty or is not a regular file".into());
     }
@@ -604,8 +602,8 @@ pub fn attach_narration(
         "height": dimensions.1,
         "duration": duration,
         "audio": {
-            "provider": "qwen3_tts_local",
-            "workflow": "qwen3_tts_local",
+            "provider": tts_engine,
+            "workflow": tts_engine,
             "mode": "narrated",
             "sample_rate": 48_000,
             "slides": clip_durations
@@ -691,7 +689,10 @@ fn media_dimensions(path: &Path) -> Result<(u64, u64), String> {
     let height = parts.next().and_then(|value| value.parse::<u64>().ok());
     match (width, height) {
         (Some(width), Some(height)) => Ok((width, height)),
-        _ => Err(format!("{} has no readable video dimensions", path.display())),
+        _ => Err(format!(
+            "{} has no readable video dimensions",
+            path.display()
+        )),
     }
 }
 
@@ -1159,6 +1160,7 @@ mod tests {
             &[(Some(short_audio), 1_000), (None, 1_000)],
             &media_root,
             "job-1",
+            crate::tts::TtsEngine::ComfyQwen3.provider_id(),
             &AtomicBool::new(false),
         )
         .unwrap();

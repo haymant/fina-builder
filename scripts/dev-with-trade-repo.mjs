@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
+import { createConnection } from 'node:net'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -22,6 +23,43 @@ function spawnChild(label, command, args) {
     }
   })
   return child
+}
+
+function spawnOptional(label, command, args) {
+  // Optional sidecar (revamp F1: fina-scraper): a missing binary or unset
+  // NIP_LAKE_DIR must not kill `dev` — log it and keep going, exactly like
+  // the optional bridges in dev-http.mjs. `doctor` reports the same gap.
+  const child = spawn(command, args, { cwd: root, stdio: 'inherit', env: process.env, windowsHide: true })
+  children.push({ label, child })
+  child.once('error', (error) => {
+    console.error(`[dev] ${label} unavailable: ${error.message}`)
+  })
+  child.once('exit', (code, signal) => {
+    if (!stopping) console.error(`[dev] ${label} unavailable (${signal ?? `code ${code}`}); continuing without it.`)
+  })
+  return child
+}
+
+async function waitForOptionalPort(label, port, child, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (stopping || child.exitCode !== null) return false
+    try {
+      await new Promise((resolvePromise, reject) => {
+        const socket = createConnection({ host: '127.0.0.1', port })
+        socket.setTimeout(500)
+        socket.once('connect', () => { socket.destroy(); resolvePromise() })
+        socket.once('error', reject)
+        socket.once('timeout', () => { socket.destroy(); reject(new Error('timeout')) })
+      })
+      return true
+    } catch {
+      // The sidecar may need a moment to bind its port.
+    }
+    await new Promise((done) => setTimeout(done, 250))
+  }
+  console.error(`[dev] ${label} did not start listening on port ${port} within ${timeoutMs / 1000} seconds; continuing without it.`)
+  return false
 }
 
 function shutdown(code) {
@@ -65,6 +103,17 @@ async function main() {
   const repository = spawnChild('trade-repo MCP', node, ['scripts/trade-repo-mcp-http.mjs', '--seed'])
   await waitForRepository(repository)
   console.log(`[dev] trade-repo MCP ready at ${serverUrl.replace('/health', '/mcp')}`)
+
+  // Revamp F1: fina-scraper sidecar (Streamable HTTP on 127.0.0.1:8798),
+  // started alongside the trade-repo sidecar. Optional: the launcher
+  // exits 1 when the binary is missing or NIP_LAKE_DIR is unset, and `dev`
+  // keeps going without it — `node scripts/fina.mjs doctor` reports the gap.
+  const scraperPort = Number(process.env.FINA_SCRAPER_HTTP_PORT ?? 8798)
+  const scraper = spawnOptional('fina-scraper MCP', node, ['scripts/fina-scraper-mcp-http.mjs'])
+  const scraperReady = await waitForOptionalPort('fina-scraper MCP', scraperPort, scraper)
+  console.log(scraperReady
+    ? `[dev] fina-scraper MCP ready at http://127.0.0.1:${scraperPort}/mcp`
+    : '[dev] fina-scraper MCP unavailable; continuing without the narrative sidecar.')
 
   const viteArgs = [resolve(root, 'node_modules/vite/bin/vite.js'), '--host', '127.0.0.1', '--port', '5173', '--strictPort', ...process.argv.slice(2)]
   spawnChild('Vite', node, viteArgs)

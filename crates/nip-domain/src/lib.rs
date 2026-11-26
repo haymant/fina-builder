@@ -140,6 +140,14 @@ pub struct EventRecord {
     pub content_text: Option<String>,
     pub times: EventTimes,
     pub revision_of: Option<EventId>,
+    /// Mirrored from the producer at import time (fina-scraper lake row);
+    /// fina-builder never re-derives this. `None` for legacy imports that
+    /// predate tier labelling.
+    #[serde(default)]
+    pub extraction_tier: Option<ExtractionTier>,
+    /// Mirrored from the producer at import time; `None` for legacy imports.
+    #[serde(default)]
+    pub review_status: Option<ClaimReviewStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +162,14 @@ pub struct LocalEventImport {
     pub source_updated_at: Option<DateTime<Utc>>,
     pub rights_statement: String,
     pub user_confirmed_rights: bool,
+    /// Mirror of the producer's extraction tier for this event, when the
+    /// caller supplies one (fina-scraper `export_narrative_for_fina` /
+    /// lake item row). fina-builder stores it; it does not re-run NLP.
+    #[serde(default)]
+    pub extraction_tier: Option<ExtractionTier>,
+    /// Mirror of the producer's review status for this event, when supplied.
+    #[serde(default)]
+    pub review_status: Option<ClaimReviewStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -245,6 +261,296 @@ pub struct EditorialCandidate {
     pub created_at: DateTime<Utc>,
 }
 
+/// What evidence a thesis stands on. A `provisional_fast_glance` thesis is
+/// listed and badged but can never advance past `llm_reviewed` — the gate
+/// lives in the store (`ThesisBasis::allows_status`), not just the UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThesisBasis {
+    LlmVerifiedOnly,
+    ProvisionalFastGlance,
+}
+
+impl ThesisBasis {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LlmVerifiedOnly => "llm_verified_only",
+            Self::ProvisionalFastGlance => "provisional_fast_glance",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "llm_verified_only" => Self::LlmVerifiedOnly,
+            "provisional_fast_glance" => Self::ProvisionalFastGlance,
+            _ => return None,
+        })
+    }
+
+    /// Whether a thesis on this basis may enter `status`. Provisional
+    /// theses may be drafted, LLM-reviewed, rejected, or invalidated — and
+    /// nothing further. This is the data-level gate from revamp §c.5.
+    pub fn allows_status(self, status: ThesisStatus) -> bool {
+        match self {
+            Self::LlmVerifiedOnly => true,
+            Self::ProvisionalFastGlance => matches!(
+                status,
+                ThesisStatus::Draft
+                    | ThesisStatus::LlmReviewed
+                    | ThesisStatus::Rejected
+                    | ThesisStatus::Invalidated
+            ),
+        }
+    }
+}
+
+/// Proposed direction of a thesis. A proposal, never a trade instruction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThesisDirection {
+    Long,
+    Short,
+    Neutral,
+}
+
+impl ThesisDirection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Long => "long",
+            Self::Short => "short",
+            Self::Neutral => "neutral",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "long" => Self::Long,
+            "short" => Self::Short,
+            "neutral" => Self::Neutral,
+            _ => return None,
+        })
+    }
+}
+
+/// Thesis pipeline (revamp §c.5). Terminal states are `published`,
+/// `rejected`, and `invalidated`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThesisStatus {
+    Draft,
+    LlmReviewed,
+    Backtested,
+    TranscriptReady,
+    VideoReady,
+    Published,
+    Rejected,
+    Invalidated,
+}
+
+impl ThesisStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::LlmReviewed => "llm_reviewed",
+            Self::Backtested => "backtested",
+            Self::TranscriptReady => "transcript_ready",
+            Self::VideoReady => "video_ready",
+            Self::Published => "published",
+            Self::Rejected => "rejected",
+            Self::Invalidated => "invalidated",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "draft" => Self::Draft,
+            "llm_reviewed" => Self::LlmReviewed,
+            "backtested" => Self::Backtested,
+            "transcript_ready" => Self::TranscriptReady,
+            "video_ready" => Self::VideoReady,
+            "published" => Self::Published,
+            "rejected" => Self::Rejected,
+            "invalidated" => Self::Invalidated,
+            _ => return None,
+        })
+    }
+
+    /// Stages at or beyond the backtest gate. A provisional thesis may
+    /// never enter one of these.
+    pub fn is_beyond_backtest_gate(self) -> bool {
+        matches!(
+            self,
+            Self::Backtested | Self::TranscriptReady | Self::VideoReady | Self::Published
+        )
+    }
+}
+
+/// A claim the analyst considered and rejected, kept as an audit trail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RejectedClaimRef {
+    pub claim_id: String,
+    pub reason: String,
+}
+
+/// An evidence- and backtest-based investment thesis (revamp §c.5).
+/// The falsifiable statement, its direction/horizon/invalidation, the
+/// claims it cites, and where it sits in the pipeline.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThesisRecord {
+    pub thesis_id: String,
+    pub title: String,
+    /// Entity canonical id or ticker the thesis is about, when known.
+    pub entity_symbol: Option<String>,
+    pub direction: ThesisDirection,
+    /// e.g. "1-3 days".
+    pub horizon: Option<String>,
+    /// The decision time; every feature/backtest read is point-in-time
+    /// at this `as_of`.
+    pub as_of: DateTime<Utc>,
+    pub thesis_basis: ThesisBasis,
+    pub confidence_millis: Option<u16>,
+    pub reason: Option<String>,
+    pub status: ThesisStatus,
+    pub invalidation_condition: Option<String>,
+    pub what_would_change_mind: Option<String>,
+    /// Cited claims (thesis-grade only when basis is `llm_verified_only`).
+    #[serde(default)]
+    pub claim_ids: Vec<String>,
+    /// Considered and rejected claims, with reasons — never hidden.
+    #[serde(default)]
+    pub rejected_claims: Vec<RejectedClaimRef>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One evidence footnote inside a transcript beat.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptEvidenceRef {
+    /// `claim` | `item` | `backtest` | `event`.
+    pub kind: String,
+    #[serde(default)]
+    pub claim_id: Option<String>,
+    #[serde(default)]
+    pub item_id: Option<String>,
+    #[serde(default)]
+    pub backtest_id: Option<String>,
+    #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub evidence_span: Option<String>,
+}
+
+/// One spoken beat of a commentary transcript, with its evidence refs.
+/// Narration is the transcript's spoken text, not regenerated from claims.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptBeat {
+    pub ordinal: u32,
+    pub title: String,
+    pub script: String,
+    #[serde(default)]
+    pub evidence_refs: Vec<TranscriptEvidenceRef>,
+}
+
+/// The `write_commentary_transcript` output, mirrored into fina-builder
+/// (revamp §c.5/§d.2). A transcript for a provisional thesis does not
+/// exist — the store refuses to record one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptRecord {
+    pub transcript_id: String,
+    pub thesis_id: String,
+    pub transcript_hash: String,
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub beats: Vec<TranscriptBeat>,
+    /// Path of the fina-scraper fina-import JSON this mirrors, when known.
+    pub fina_import_path: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Ablation metrics for one backtest run. Every field is optional: missing
+/// is null and shown as "—", never 0.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BacktestMetrics {
+    #[serde(default)]
+    pub ic: Option<f64>,
+    #[serde(default)]
+    pub icir: Option<f64>,
+    #[serde(default)]
+    pub sharpe: Option<f64>,
+    #[serde(default)]
+    pub total_return: Option<f64>,
+    #[serde(default)]
+    pub max_drawdown: Option<f64>,
+    #[serde(default)]
+    pub feature_importances: BTreeMap<String, f64>,
+}
+
+/// Out-of-sample delta Run A → Run B. This delta is the evidence.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BacktestDelta {
+    #[serde(default)]
+    pub ic: Option<f64>,
+    #[serde(default)]
+    pub icir: Option<f64>,
+    #[serde(default)]
+    pub sharpe: Option<f64>,
+    #[serde(default)]
+    pub total_return: Option<f64>,
+    #[serde(default)]
+    pub max_drawdown: Option<f64>,
+}
+
+/// Plain-language verdict on the ablation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BacktestVerdict {
+    Supported,
+    NotSupported,
+    CouldNotRun,
+}
+
+impl BacktestVerdict {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Supported => "supported",
+            Self::NotSupported => "not_supported",
+            Self::CouldNotRun => "could_not_run",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "supported" => Self::Supported,
+            "not_supported" => Self::NotSupported,
+            "could_not_run" => Self::CouldNotRun,
+            _ => return None,
+        })
+    }
+}
+
+/// A recorded ablation result: Run A (TA+macro) vs Run B (TA+macro+`$narr_*`
+/// tier2_llm), same seed/universe/dates (revamp §c.5/§d.2). This is the
+/// mirror of fina-scraper's `record_backtest_evidence` row — fina-builder
+/// stores its own copy at record time, so the video UI never has to trust
+/// an unattested claim.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BacktestEvidenceRecord {
+    pub backtest_id: String,
+    pub thesis_id: String,
+    pub run_id_a: String,
+    pub run_id_b: String,
+    pub config_fingerprint: Option<String>,
+    pub metrics_a: BacktestMetrics,
+    pub metrics_b: BacktestMetrics,
+    pub delta: BacktestDelta,
+    pub verdict: BacktestVerdict,
+    /// Why the ablation could not run, when `verdict` is `could_not_run`.
+    pub could_not_run_reason: Option<String>,
+    pub recorded_at: DateTime<Utc>,
+    /// e.g. `fina-builder:tac-qlib-rd`.
+    pub source: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimEvidence {
     pub event_id: EventId,
@@ -274,7 +580,87 @@ pub struct ClaimRecord {
     #[serde(default)]
     pub reasoning_effort: Option<String>,
     pub extracted_at: DateTime<Utc>,
+    /// Mirrored from the producer at record time (fina-scraper claim row);
+    /// fina-builder never re-derives this. `None` for legacy claims that
+    /// predate tier labelling — the UI must render those as unlabelled,
+    /// never as verified.
+    #[serde(default)]
+    pub extraction_tier: Option<ExtractionTier>,
+    /// Mirrored from the producer at record time; `None` for legacy claims.
+    #[serde(default)]
+    pub review_status: Option<ClaimReviewStatus>,
     pub evidence: Vec<ClaimEvidence>,
+}
+
+/// Extraction tier labels (fina-scraper `docs/EXTRACTION_TIERS.md` v1.6,
+/// normative). fina-builder mirrors these strings verbatim at import/record
+/// time; it never assigns a tier itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtractionTier {
+    Tier0Lexicon,
+    Tier1Onnx,
+    Tier2Llm,
+}
+
+impl ExtractionTier {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tier0Lexicon => "tier0_lexicon",
+            Self::Tier1Onnx => "tier1_onnx",
+            Self::Tier2Llm => "tier2_llm",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "tier0_lexicon" => Self::Tier0Lexicon,
+            "tier1_onnx" => Self::Tier1Onnx,
+            "tier2_llm" => Self::Tier2Llm,
+            _ => return None,
+        })
+    }
+}
+
+/// Claim review status (fina-scraper `docs/EXTRACTION_TIERS.md` §2).
+/// Mirrored, never re-derived. Only `llm_verified` / `llm_corrected`
+/// `tier2_llm` rows are thesis-grade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimReviewStatus {
+    FastGlance,
+    LlmVerified,
+    LlmCorrected,
+    LlmRejected,
+    LlmDisputed,
+}
+
+impl ClaimReviewStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FastGlance => "fast_glance",
+            Self::LlmVerified => "llm_verified",
+            Self::LlmCorrected => "llm_corrected",
+            Self::LlmRejected => "llm_rejected",
+            Self::LlmDisputed => "llm_disputed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "fast_glance" => Self::FastGlance,
+            "llm_verified" => Self::LlmVerified,
+            "llm_corrected" => Self::LlmCorrected,
+            "llm_rejected" => Self::LlmRejected,
+            "llm_disputed" => Self::LlmDisputed,
+            _ => return None,
+        })
+    }
+
+    /// Thesis-grade statuses: the only review states a thesis may cite.
+    pub fn is_thesis_grade(self) -> bool {
+        matches!(self, Self::LlmVerified | Self::LlmCorrected)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,6 +691,9 @@ pub enum VideoAnalysisMode {
     DeterministicCandidate,
     ModelAssisted,
     Mixed,
+    /// Thesis-led narrative whose evidence is a recorded ablation
+    /// (revamp §d.2).
+    ThesisBacktest,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -341,6 +730,33 @@ pub struct VideoProject {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoEpisodeOrigin {
+    /// Started from a retained event; an explainer, never a thesis video.
+    #[default]
+    Event,
+    /// Started from a thesis + transcript (revamp §d.1 step 0).
+    Thesis,
+}
+
+impl VideoEpisodeOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Event => "event",
+            Self::Thesis => "thesis",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "event" => Self::Event,
+            "thesis" => Self::Thesis,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VideoEpisode {
     pub episode_id: String,
@@ -350,8 +766,27 @@ pub struct VideoEpisode {
     pub as_of: Option<DateTime<Utc>>,
     pub disclosure: Option<String>,
     pub status: VideoEpisodeStatus,
+    /// Thesis this episode was started from, when `origin` is `thesis`.
+    #[serde(default)]
+    pub thesis_id: Option<String>,
+    /// Transcript this episode was started from, when `origin` is `thesis`.
+    #[serde(default)]
+    pub transcript_id: Option<String>,
+    #[serde(default)]
+    pub transcript_hash: Option<String>,
+    /// What the episode is: a thesis video or an event explainer. The UI
+    /// gates publish by this origin (revamp §d.1 step 7).
+    #[serde(default)]
+    pub origin: VideoEpisodeOrigin,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// Evidence kinds a `VideoEvidenceRef` may carry. `backtest` refs must
+/// resolve to a recorded backtest; `thesis` refs to a recorded thesis.
+/// Anything else is rejected at the store boundary.
+pub fn valid_video_evidence_kind(kind: &str) -> bool {
+    matches!(kind, "event" | "claim" | "backtest" | "thesis")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -369,10 +804,25 @@ pub struct VideoNarrative {
     pub episode_id: String,
     pub revision: u32,
     pub summary: Option<String>,
+    /// The real thesis text (from the transcript), not a disclaimer.
     pub thesis: Option<String>,
     pub analysis_mode: VideoAnalysisMode,
     pub review_status: VideoReviewStatus,
     pub derivation_run_id: Option<String>,
+    /// Thesis this narrative states, when thesis-led.
+    #[serde(default)]
+    pub thesis_id: Option<String>,
+    /// `llm_verified_only` for thesis videos; provisional is never valid here.
+    #[serde(default)]
+    pub thesis_basis: Option<ThesisBasis>,
+    /// Decision time the narrative is point-in-time at.
+    #[serde(default)]
+    pub as_of: Option<DateTime<Utc>>,
+    /// Recorded backtests cited by this narrative.
+    #[serde(default)]
+    pub backtest_ids: Vec<String>,
+    #[serde(default)]
+    pub transcript_hash: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -384,6 +834,14 @@ pub struct VideoStoryboard {
     pub revision: u32,
     pub schema_version: String,
     pub review_status: VideoReviewStatus,
+    /// Thesis the storyboard was built from, when thesis-led.
+    #[serde(default)]
+    pub thesis_id: Option<String>,
+    /// Recorded backtests cited by backtest slides.
+    #[serde(default)]
+    pub backtest_refs: Vec<String>,
+    #[serde(default)]
+    pub source_transcript_hash: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -607,6 +1065,10 @@ pub enum VideoVisualSourceKind {
     Claim,
     TranscriptSpan,
     SignalSnapshot,
+    /// A recorded backtest (revamp §d.2): the source is a backtest id.
+    Backtest,
+    /// The thesis itself (revamp §d.2): the source is a thesis id.
+    Thesis,
 }
 
 impl VideoVisualSourceKind {
@@ -616,6 +1078,8 @@ impl VideoVisualSourceKind {
             Self::Claim => "claim",
             Self::TranscriptSpan => "transcript_span",
             Self::SignalSnapshot => "signal_snapshot",
+            Self::Backtest => "backtest",
+            Self::Thesis => "thesis",
         }
     }
 
@@ -625,6 +1089,8 @@ impl VideoVisualSourceKind {
             "claim" => Self::Claim,
             "transcript_span" => Self::TranscriptSpan,
             "signal_snapshot" => Self::SignalSnapshot,
+            "backtest" => Self::Backtest,
+            "thesis" => Self::Thesis,
             _ => return None,
         })
     }
@@ -1200,6 +1666,14 @@ pub struct AgentClaimDraft {
     pub entity_names: Vec<String>,
     pub polarity: Option<String>,
     pub horizon: Option<String>,
+    /// Mirror of the producer's extraction tier for this claim, when the
+    /// agent passes the fina-scraper export through (`tier` in the
+    /// fina-import JSON). Stored, never re-derived.
+    #[serde(default)]
+    pub extraction_tier: Option<ExtractionTier>,
+    /// Mirror of the producer's review status for this claim, when passed.
+    #[serde(default)]
+    pub review_status: Option<ClaimReviewStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1308,6 +1782,82 @@ mod tests {
         let event_id = EventId::new("evt-1").unwrap();
         assert_eq!(serde_json::to_string(&event_id).unwrap(), "\"evt-1\"");
         assert_eq!(event_id.as_str(), "evt-1");
+    }
+
+    #[test]
+    fn extraction_tiers_and_review_statuses_round_trip_as_exact_strings() {
+        assert_eq!(
+            ExtractionTier::parse("tier2_llm"),
+            Some(ExtractionTier::Tier2Llm)
+        );
+        assert_eq!(ExtractionTier::Tier0Lexicon.as_str(), "tier0_lexicon");
+        assert_eq!(ExtractionTier::Tier1Onnx.as_str(), "tier1_onnx");
+        assert_eq!(ExtractionTier::parse("tier3"), None);
+        assert_eq!(
+            serde_json::to_string(&ExtractionTier::Tier2Llm).unwrap(),
+            "\"tier2_llm\""
+        );
+        assert_eq!(
+            ClaimReviewStatus::parse("llm_disputed"),
+            Some(ClaimReviewStatus::LlmDisputed)
+        );
+        assert_eq!(ClaimReviewStatus::parse("verified"), None,);
+        assert!(ClaimReviewStatus::LlmVerified.is_thesis_grade());
+        assert!(ClaimReviewStatus::LlmCorrected.is_thesis_grade());
+        assert!(!ClaimReviewStatus::FastGlance.is_thesis_grade());
+        assert!(!ClaimReviewStatus::LlmRejected.is_thesis_grade());
+        assert_eq!(
+            serde_json::to_string(&ClaimReviewStatus::LlmRejected).unwrap(),
+            "\"llm_rejected\""
+        );
+    }
+
+    #[test]
+    fn provisional_theses_can_never_enter_backtested_or_beyond() {
+        let provisional = ThesisBasis::ProvisionalFastGlance;
+        assert!(provisional.allows_status(ThesisStatus::Draft));
+        assert!(provisional.allows_status(ThesisStatus::LlmReviewed));
+        assert!(provisional.allows_status(ThesisStatus::Rejected));
+        assert!(provisional.allows_status(ThesisStatus::Invalidated));
+        assert!(!provisional.allows_status(ThesisStatus::Backtested));
+        assert!(!provisional.allows_status(ThesisStatus::TranscriptReady));
+        assert!(!provisional.allows_status(ThesisStatus::VideoReady));
+        assert!(!provisional.allows_status(ThesisStatus::Published));
+        assert!(ThesisBasis::LlmVerifiedOnly.allows_status(ThesisStatus::Published));
+        assert!(ThesisStatus::Backtested.is_beyond_backtest_gate());
+        assert!(ThesisStatus::Published.is_beyond_backtest_gate());
+        assert!(!ThesisStatus::LlmReviewed.is_beyond_backtest_gate());
+        assert!(!ThesisStatus::Rejected.is_beyond_backtest_gate());
+    }
+
+    #[test]
+    fn video_evidence_kinds_accept_backtest_and_thesis_only_beyond_event_claim() {
+        assert!(valid_video_evidence_kind("event"));
+        assert!(valid_video_evidence_kind("claim"));
+        assert!(valid_video_evidence_kind("backtest"));
+        assert!(valid_video_evidence_kind("thesis"));
+        assert!(!valid_video_evidence_kind("signal"));
+        assert!(!valid_video_evidence_kind(""));
+        assert_eq!(
+            VideoVisualSourceKind::parse("backtest"),
+            Some(VideoVisualSourceKind::Backtest)
+        );
+        assert_eq!(
+            VideoVisualSourceKind::parse("thesis"),
+            Some(VideoVisualSourceKind::Thesis)
+        );
+        assert_eq!(VideoVisualSourceKind::Thesis.as_str(), "thesis");
+        assert_eq!(VideoVisualSourceKind::parse("chart"), None);
+    }
+
+    #[test]
+    fn thesis_backtest_verdicts_round_trip() {
+        assert_eq!(
+            BacktestVerdict::parse("could_not_run"),
+            Some(BacktestVerdict::CouldNotRun)
+        );
+        assert_eq!(BacktestVerdict::NotSupported.as_str(), "not_supported");
+        assert_eq!(BacktestVerdict::parse("pass"), None);
     }
 }
 

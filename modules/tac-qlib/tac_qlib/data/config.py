@@ -63,8 +63,10 @@ NON_FEATURE_COLUMNS = ("t", "date", "market", "timeframe", "symbol")
 
 #: Feature-family partitions merged by ``LakeConfig.load_features`` and scanned
 #: by the handler's field discovery. ``macro`` holds broadcast market-state
-#: columns (see skills/tac-qlib-custom/examples/persist_macro_broadcast.py).
-FEATURE_FAMILIES = ("ta", "sp", "macro")
+#: columns (see skills/tac-qlib-custom/examples/persist_macro_broadcast.py);
+#: ``narr`` holds narrative features ingested by tac-engine
+#: ``ingest_narrative_features`` (NARRATIVE_FEATURES.md §4, schema narr-v1).
+FEATURE_FAMILIES = ("ta", "sp", "macro", "narr")
 
 
 def timeframe_for_freq(freq: str) -> str:
@@ -114,11 +116,11 @@ class LakeConfig:
 
     def features_path(self, timeframe: str, symbol: str) -> Path:
         # Legacy flat path (no family tier). Prefer `load_features` which
-        # resolves the family=ta|sp partition layout.
+        # resolves the family=ta|sp|macro|narr partition layout.
         return self.features_dir(timeframe) / f"symbol={str(symbol).upper()}.parquet"
 
     def load_features(self, timeframe: str, symbol: str) -> pd.DataFrame:
-        """All feature columns for a symbol, merging the `family=ta|sp|macro`
+        """All feature columns for a symbol, merging the `family=ta|sp|macro|narr`
         partitions by timestamp. Returns an empty frame when no
         feature files exist (legacy flat layout falls back transparently)."""
         sym = str(symbol).upper()
@@ -126,7 +128,15 @@ class LakeConfig:
         for family in FEATURE_FAMILIES:
             p = self.features_dir(timeframe) / f"family={family}" / f"symbol={sym}.parquet"
             if p.exists():
-                frames.append(pd.read_parquet(p))
+                df = pd.read_parquet(p)
+                # The lake convention is timestamp[us] for `t`, but a
+                # partition written before the ingest cast (or by another
+                # writer) may carry `t` as text. Coerce here so the merge
+                # below never fails on datetime64-vs-str (final e2e
+                # 2026-11-26: the narr partition arrived as VARCHAR).
+                if "t" in df.columns:
+                    df["t"] = pd.to_datetime(df["t"])
+                frames.append(df)
         if not frames:
             flat = self.features_dir(timeframe) / f"symbol={sym}.parquet"
             if flat.exists():
@@ -170,6 +180,12 @@ class LakeConfig:
             except Exception:  # pragma: no cover - defensive
                 df = pd.DataFrame()
             if len(df):
+                # Coverage is one row per (market, timeframe, symbol, family);
+                # listing spans come from the bar rows only (a narr row must
+                # not clip the span to the narrative window).
+                fam = df.get("family")
+                if fam is not None:
+                    df = df[fam.isna() | (fam == "bars")]
                 df = df[
                     (df.get("market") == self.market)
                     & (df.get("timeframe") == timeframe)

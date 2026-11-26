@@ -180,6 +180,11 @@ export function buildRuntimeEnvironment(project, baseEnv = process.env) {
     NIP_DATA_DIR: baseEnv.NIP_DATA_DIR ?? project.paths.nip_data,
     NIP_LAKE_DIR: baseEnv.NIP_LAKE_DIR ?? project.paths.nip_lake,
     TAC_ENGINE_BIN: baseEnv.TAC_ENGINE_BIN ?? join(releaseTarget, process.platform === "win32" ? "tac-engine.exe" : "tac-engine"),
+    // fina-scraper sidecar (revamp F1): explicit host override wins, else the
+    // shared workspace target dir — the same rule as TAC_ENGINE_BIN. The
+    // submodule build lands here when built with CARGO_TARGET_DIR set to the
+    // shared target dir; a sibling checkout can be used via FINA_SCRAPER_BIN.
+    FINA_SCRAPER_BIN: baseEnv.FINA_SCRAPER_BIN ?? join(releaseTarget, process.platform === "win32" ? "fina-scraper.exe" : "fina-scraper"),
     TAC_QLIB_PYTHON_BIN: baseEnv.TAC_QLIB_PYTHON_BIN ?? join(project.paths.modules, ".venv", process.platform === "win32" ? "Scripts" : "bin", "python"),
   };
 }
@@ -286,6 +291,28 @@ export async function doctor(project, json) {
   add("uv", Boolean(uv), uv ?? "not found", false);
   const npm = await capture(commandName(), ["--version"], project.root);
   add("npm", Boolean(npm), npm ?? "not found");
+
+  // Revamp F1 — fina-scraper sidecar: the binary must resolve and the lake
+  // dir must be set (host env wins, else the profile default). The binary
+  // check is required: without it `tools/list` cannot show the scraper
+  // tools. Remediation is in the detail when the binary is missing.
+  const runtimeEnv = buildRuntimeEnvironment(project);
+  const scraperBin = runtimeEnv.FINA_SCRAPER_BIN;
+  add(
+    "fina-scraper binary",
+    existsSync(scraperBin),
+    existsSync(scraperBin)
+      ? scraperBin
+      : `${scraperBin} (not found; build modules/fina-scraper with cargo build --release, or set FINA_SCRAPER_BIN)`,
+  );
+  const nipLake = runtimeEnv.NIP_LAKE_DIR;
+  add(
+    "NIP_LAKE_DIR",
+    Boolean(nipLake),
+    nipLake
+      ? `${nipLake}${process.env.NIP_LAKE_DIR ? " (host env)" : " (profile default)"}`
+      : "not set (set NIP_LAKE_DIR in the host env, or rely on the profile default)",
+  );
 
   const failed = checks.filter((check) => check.required && !check.ok);
   if (json) console.log(JSON.stringify({ root: project.root, config: project.configPath, profile: project.profile, paths: project.paths, checks, ok: failed.length === 0 }, null, 2));

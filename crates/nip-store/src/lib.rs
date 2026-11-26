@@ -5,19 +5,21 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use duckdb::{params, Connection, OptionalExt};
 use nip_domain::{
-    AgentNarrativeAnalysis, ClaimEvidence, ClaimRecord, EditorialCandidate, EditorialReviewAudit,
-    EmbeddingIndexManifest, EtfMapping, EventRecord, EventSearchPage, EventSearchQuery,
-    LocalEventImport, NarrativeCluster, NarrativeClusterMember, NarrativeGraph, NarrativeSource,
-    PodcastEpisode, PodcastEpisodeState, PodcastSubscription, PodcastSubscriptionState,
-    PodcastTranscript, ProviderConsent, SourceId, SourceKind, SourceState, SourceUpdate,
-    VideoAnalysisMode, VideoAsset, VideoAssetLineage, VideoAssetUpstreamKind, VideoAudioCue,
-    VideoEpisode, VideoEpisodeStatus, VideoEvidenceRef, VideoExportFile, VideoExportManifest,
-    VideoExportManifestV1, VideoJob, VideoNarrative, VideoProject, VideoProjectStatus,
-    VideoQaFinding, VideoQaReport, VideoQaSeverity, VideoQaStatus, VideoReviewStatus, VideoScene,
-    VideoShot, VideoShotStatus, VideoStoryboard, VideoTimeline, VideoVisualSource,
-    VideoVisualSourceKind, VideoVisualSpec, VideoWorkflow,
+    AgentNarrativeAnalysis, BacktestDelta, BacktestEvidenceRecord, BacktestMetrics,
+    BacktestVerdict, ClaimEvidence, ClaimRecord, ClaimReviewStatus, EditorialCandidate,
+    EditorialReviewAudit, EmbeddingIndexManifest, EtfMapping, EventRecord, EventSearchPage,
+    EventSearchQuery, ExtractionTier, LocalEventImport, NarrativeCluster, NarrativeClusterMember,
+    NarrativeGraph, NarrativeSource, PodcastEpisode, PodcastEpisodeState, PodcastSubscription,
+    PodcastSubscriptionState, PodcastTranscript, ProviderConsent, SourceId, SourceKind,
+    SourceState, SourceUpdate, ThesisBasis, ThesisDirection, ThesisRecord, ThesisStatus,
+    TranscriptRecord, VideoAnalysisMode, VideoAsset, VideoAssetLineage, VideoAssetUpstreamKind,
+    VideoAudioCue, VideoEpisode, VideoEpisodeOrigin, VideoEpisodeStatus, VideoEvidenceRef,
+    VideoExportFile, VideoExportManifest, VideoExportManifestV1, VideoJob, VideoNarrative,
+    VideoProject, VideoProjectStatus, VideoQaFinding, VideoQaReport, VideoQaSeverity,
+    VideoQaStatus, VideoReviewStatus, VideoScene, VideoShot, VideoShotStatus, VideoStoryboard,
+    VideoTimeline, VideoVisualSource, VideoVisualSourceKind, VideoVisualSpec, VideoWorkflow,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -39,7 +41,9 @@ const MIGRATION_14: &str = include_str!("../migrations/0014_video_edl.sql");
 const MIGRATION_15: &str = include_str!("../migrations/0015_video_qa_reports.sql");
 const MIGRATION_16: &str = include_str!("../migrations/0016_video_audio_cues.sql");
 const MIGRATION_17: &str = include_str!("../migrations/0017_video_export_producer.sql");
-const LATEST_SCHEMA_VERSION: u32 = 18;
+const MIGRATION_19: &str = include_str!("../migrations/0019_f2_thesis_transcript_backtest.sql");
+const MIGRATION_20: &str = include_str!("../migrations/0020_f7_5_thesis_backtest_check.sql");
+const LATEST_SCHEMA_VERSION: u32 = 20;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -65,6 +69,14 @@ pub enum StoreError {
     InvalidResearchRecord,
     #[error("external-agent narrative analysis is invalid")]
     InvalidAgentAnalysis,
+    #[error("thesis record is invalid")]
+    InvalidThesis,
+    #[error("a provisional thesis cannot advance to a backtested or later stage")]
+    ProvisionalThesisCannotAdvance,
+    #[error("transcript record is invalid")]
+    InvalidTranscriptRecord,
+    #[error("backtest evidence record is invalid")]
+    InvalidBacktestEvidence,
     #[error("video record is invalid")]
     InvalidVideoRecord,
     #[error("video evidence reference is invalid")]
@@ -907,7 +919,8 @@ impl Store {
             transaction.execute(
                 "INSERT INTO nip_events (event_id, source_id, source_native_id, canonical_url,
                     content_hash, content_text, published_at, source_updated_at, captured_at,
-                    ingested_at, schema_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                    ingested_at, schema_version, extraction_tier, review_status)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
                 params![
                     event_id,
                     import.source_id.as_str(),
@@ -919,6 +932,8 @@ impl Store {
                     import.source_updated_at,
                     captured_at,
                     Utc::now(),
+                    import.extraction_tier.map(ExtractionTier::as_str),
+                    import.review_status.map(ClaimReviewStatus::as_str),
                 ],
             )?;
         }
@@ -1248,7 +1263,7 @@ impl Store {
         let mut statement = self.connection.prepare(
             "SELECT event_id, source_id, source_native_id, canonical_url, content_hash,
                     content_text, published_at, source_updated_at, captured_at, ingested_at,
-                    revision_of FROM nip_events
+                    revision_of, extraction_tier, review_status FROM nip_events
              WHERE source_id = ? AND source_native_id = ?
              ORDER BY ingested_at DESC LIMIT 1",
         )?;
@@ -1268,7 +1283,7 @@ impl Store {
         let mut statement = self.connection.prepare(
             "SELECT event_id, source_id, source_native_id, canonical_url, content_hash,
                     content_text, published_at, source_updated_at, captured_at, ingested_at,
-                    revision_of FROM nip_events
+                    revision_of, extraction_tier, review_status FROM nip_events
              WHERE event_id > ?
                AND (? IS NULL OR source_id = ?)
                AND (? IS NULL OR content_text ILIKE '%' || ? || '%')
@@ -1317,6 +1332,7 @@ impl Store {
             "SELECT e.event_id, e.source_id, e.source_native_id, e.canonical_url,
                     e.content_hash, e.content_text, e.published_at, e.source_updated_at,
                     e.captured_at, e.ingested_at, e.revision_of,
+                    e.extraction_tier, e.review_status,
                     COALESCE(s.source_type, 'other')
              FROM nip_events e
              LEFT JOIN nip_sources s ON s.source_id = e.source_id
@@ -1325,7 +1341,7 @@ impl Store {
         )?;
         let rows = statement.query_map(params![as_of, as_of], |row| {
             let raw = raw_event_from_row(row)?;
-            let category: String = row.get(11)?;
+            let category: String = row.get(13)?;
             Ok((raw, source_category(category)))
         })?;
         rows.collect::<duckdb::Result<Vec<_>>>()?
@@ -1342,8 +1358,9 @@ impl Store {
         transaction.execute(
             "INSERT INTO nip_claims (claim_id, claim_text, speaker_or_author, confidence_millis,
                 extraction_run_id, provider, model, prompt_version, provider_kind,
-                provider_profile_id, reasoning_effort, extracted_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                provider_profile_id, reasoning_effort, extracted_at,
+                extraction_tier, review_status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (claim_id) DO UPDATE SET claim_text = excluded.claim_text,
                 speaker_or_author = excluded.speaker_or_author,
                 confidence_millis = excluded.confidence_millis,
@@ -1353,6 +1370,8 @@ impl Store {
                 provider_kind = excluded.provider_kind,
                 provider_profile_id = excluded.provider_profile_id,
                 reasoning_effort = excluded.reasoning_effort,
+                extraction_tier = excluded.extraction_tier,
+                review_status = excluded.review_status,
                 extracted_at = excluded.extracted_at",
             params![
                 claim.claim_id,
@@ -1367,6 +1386,8 @@ impl Store {
                 claim.provider_profile_id,
                 claim.reasoning_effort,
                 claim.extracted_at,
+                claim.extraction_tier.map(ExtractionTier::as_str),
+                claim.review_status.map(ClaimReviewStatus::as_str),
             ],
         )?;
         for evidence in &claim.evidence {
@@ -1392,7 +1413,8 @@ impl Store {
         let mut statement = self.connection.prepare(
             "SELECT claim_id, claim_text, speaker_or_author, confidence_millis,
                     extraction_run_id, provider, model, prompt_version, extracted_at,
-                    provider_kind, provider_profile_id, reasoning_effort
+                    provider_kind, provider_profile_id, reasoning_effort,
+                    extraction_tier, review_status
              FROM nip_claims ORDER BY extracted_at, claim_id",
         )?;
         let mut claims = Vec::new();
@@ -1410,6 +1432,8 @@ impl Store {
                 row.get::<_, Option<String>>(9)?,
                 row.get::<_, Option<String>>(10)?,
                 row.get::<_, Option<String>>(11)?,
+                row.get::<_, Option<String>>(12)?,
+                row.get::<_, Option<String>>(13)?,
             ))
         })? {
             let (
@@ -1425,6 +1449,8 @@ impl Store {
                 provider_kind,
                 provider_profile_id,
                 reasoning_effort,
+                extraction_tier,
+                review_status,
             ) = row?;
             let mut evidence_statement = self.connection.prepare(
                 "SELECT event_id, quote, start_offset, end_offset FROM nip_claim_evidence WHERE claim_id = ? ORDER BY event_id",
@@ -1464,6 +1490,8 @@ impl Store {
                 provider_profile_id,
                 reasoning_effort,
                 extracted_at,
+                extraction_tier: extraction_tier.as_deref().and_then(ExtractionTier::parse),
+                review_status: review_status.as_deref().and_then(ClaimReviewStatus::parse),
                 evidence,
             });
         }
@@ -1578,8 +1606,9 @@ impl Store {
             transaction.execute(
                 "INSERT INTO nip_claims (claim_id, claim_text, speaker_or_author, confidence_millis,
                     extraction_run_id, provider, model, prompt_version, provider_kind,
-                    provider_profile_id, reasoning_effort, extracted_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    provider_profile_id, reasoning_effort, extracted_at,
+                    extraction_tier, review_status)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT (claim_id) DO NOTHING",
                 params![
                     claim.claim_id,
@@ -1594,6 +1623,8 @@ impl Store {
                     claim.provider_profile_id,
                     claim.reasoning_effort,
                     claim.extracted_at,
+                    claim.extraction_tier.map(ExtractionTier::as_str),
+                    claim.review_status.map(ClaimReviewStatus::as_str),
                 ],
             )?;
             for evidence in &claim.evidence {
@@ -1686,6 +1717,260 @@ impl Store {
             limit: 200,
         })?;
         Ok(page.events)
+    }
+
+    /// Record a thesis, or update the pipeline status of an existing one.
+    /// The basis is immutable: a thesis recorded as `provisional_fast_glance`
+    /// can never enter `backtested` or any later stage — the gate is enforced
+    /// here, in the data, not only in the UI (revamp §c.5, decision f.3).
+    pub fn save_thesis(&mut self, thesis: &ThesisRecord) -> Result<(), StoreError> {
+        if thesis.thesis_id.trim().is_empty()
+            || thesis.title.trim().is_empty()
+            || thesis.confidence_millis.is_some_and(|value| value > 1000)
+            || thesis.claim_ids.iter().any(|id| id.trim().is_empty())
+            || thesis.rejected_claims.iter().any(|rejected| {
+                rejected.claim_id.trim().is_empty() || rejected.reason.trim().is_empty()
+            })
+        {
+            return Err(StoreError::InvalidThesis);
+        }
+        if !thesis.thesis_basis.allows_status(thesis.status) {
+            return Err(StoreError::ProvisionalThesisCannotAdvance);
+        }
+        let existing = self.thesis(&thesis.thesis_id)?;
+        if let Some(existing) = existing {
+            if existing.thesis_basis != thesis.thesis_basis {
+                return Err(StoreError::InvalidThesis);
+            }
+            if !existing.thesis_basis.allows_status(thesis.status) {
+                return Err(StoreError::ProvisionalThesisCannotAdvance);
+            }
+        }
+        self.connection.execute(
+            "INSERT INTO nip_theses
+                (thesis_id, title, entity_symbol, direction, horizon, as_of, thesis_basis,
+                 confidence_millis, reason, status, invalidation_condition,
+                 what_would_change_mind, claim_ids_json, rejected_claims_json,
+                 created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (thesis_id) DO UPDATE SET title = excluded.title,
+                entity_symbol = excluded.entity_symbol, direction = excluded.direction,
+                horizon = excluded.horizon, as_of = excluded.as_of,
+                confidence_millis = excluded.confidence_millis, reason = excluded.reason,
+                status = excluded.status,
+                invalidation_condition = excluded.invalidation_condition,
+                what_would_change_mind = excluded.what_would_change_mind,
+                claim_ids_json = excluded.claim_ids_json,
+                rejected_claims_json = excluded.rejected_claims_json,
+                updated_at = excluded.updated_at",
+            params![
+                thesis.thesis_id,
+                thesis.title,
+                thesis.entity_symbol,
+                ThesisDirection::as_str(thesis.direction),
+                thesis.horizon,
+                thesis.as_of,
+                ThesisBasis::as_str(thesis.thesis_basis),
+                thesis.confidence_millis.map(|value| value as i32),
+                thesis.reason,
+                ThesisStatus::as_str(thesis.status),
+                thesis.invalidation_condition,
+                thesis.what_would_change_mind,
+                serde_json::to_string(&thesis.claim_ids).map_err(StoreError::SnapshotJson)?,
+                serde_json::to_string(&thesis.rejected_claims).map_err(StoreError::SnapshotJson)?,
+                thesis.created_at,
+                thesis.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn thesis(&self, thesis_id: &str) -> Result<Option<ThesisRecord>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT thesis_id, title, entity_symbol, direction, horizon, as_of,
+                        thesis_basis, confidence_millis, reason, status,
+                        invalidation_condition, what_would_change_mind,
+                        claim_ids_json, rejected_claims_json, created_at, updated_at
+                 FROM nip_theses WHERE thesis_id = ?",
+                params![thesis_id],
+                thesis_from_row,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    /// All theses, newest decision `as_of` first (revamp §c.5).
+    pub fn theses(&self) -> Result<Vec<ThesisRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT thesis_id, title, entity_symbol, direction, horizon, as_of,
+                    thesis_basis, confidence_millis, reason, status,
+                    invalidation_condition, what_would_change_mind,
+                    claim_ids_json, rejected_claims_json, created_at, updated_at
+             FROM nip_theses ORDER BY as_of DESC, thesis_id",
+        )?;
+        Ok(statement
+            .query_map([], thesis_from_row)?
+            .collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
+    /// Record a commentary transcript. A transcript for a provisional thesis
+    /// does not exist — the write is refused (revamp §c.5: the gate is
+    /// upstream, at the thesis, so there is nothing to gate here).
+    pub fn save_transcript(&mut self, transcript: &TranscriptRecord) -> Result<(), StoreError> {
+        if transcript.transcript_id.trim().is_empty()
+            || transcript.thesis_id.trim().is_empty()
+            || transcript.transcript_hash.trim().is_empty()
+        {
+            return Err(StoreError::InvalidTranscriptRecord);
+        }
+        let thesis = self
+            .thesis(&transcript.thesis_id)?
+            .ok_or(StoreError::InvalidTranscriptRecord)?;
+        if thesis.thesis_basis != ThesisBasis::LlmVerifiedOnly {
+            return Err(StoreError::InvalidTranscriptRecord);
+        }
+        if let Some(existing) = self.transcript(&transcript.transcript_id)? {
+            if existing.thesis_id != transcript.thesis_id
+                || existing.transcript_hash != transcript.transcript_hash
+            {
+                return Err(StoreError::InvalidTranscriptRecord);
+            }
+            return Ok(());
+        }
+        self.connection.execute(
+            "INSERT INTO nip_transcripts
+                (transcript_id, thesis_id, transcript_hash, summary, beats_json,
+                 fina_import_path, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![
+                transcript.transcript_id,
+                transcript.thesis_id,
+                transcript.transcript_hash,
+                transcript.summary,
+                serde_json::to_string(&transcript.beats).map_err(StoreError::SnapshotJson)?,
+                transcript.fina_import_path,
+                transcript.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn transcript(&self, transcript_id: &str) -> Result<Option<TranscriptRecord>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT transcript_id, thesis_id, transcript_hash, summary, beats_json,
+                        fina_import_path, created_at
+                 FROM nip_transcripts WHERE transcript_id = ?",
+                params![transcript_id],
+                transcript_from_row,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn transcripts_for_thesis(
+        &self,
+        thesis_id: &str,
+    ) -> Result<Vec<TranscriptRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT transcript_id, thesis_id, transcript_hash, summary, beats_json,
+                    fina_import_path, created_at
+             FROM nip_transcripts WHERE thesis_id = ? ORDER BY created_at, transcript_id",
+        )?;
+        Ok(statement
+            .query_map(params![thesis_id], transcript_from_row)?
+            .collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
+    /// Record one ablation result (Run A vs Run B). The two runs must be
+    /// distinct, the thesis must exist, and a `could_not_run` verdict must
+    /// record exactly why — never a missing panel that looks like a pass.
+    pub fn save_backtest_evidence(
+        &mut self,
+        record: &BacktestEvidenceRecord,
+    ) -> Result<(), StoreError> {
+        if record.backtest_id.trim().is_empty()
+            || record.thesis_id.trim().is_empty()
+            || record.run_id_a.trim().is_empty()
+            || record.run_id_b.trim().is_empty()
+            || record.run_id_a == record.run_id_b
+            || record.source.trim().is_empty()
+            || (record.verdict == BacktestVerdict::CouldNotRun
+                && record
+                    .could_not_run_reason
+                    .as_deref()
+                    .is_none_or(|reason| reason.trim().is_empty()))
+        {
+            return Err(StoreError::InvalidBacktestEvidence);
+        }
+        if self.thesis(&record.thesis_id)?.is_none() {
+            return Err(StoreError::InvalidBacktestEvidence);
+        }
+        if let Some(existing) = self.backtest_evidence(&record.backtest_id)? {
+            if existing.thesis_id != record.thesis_id
+                || existing.run_id_a != record.run_id_a
+                || existing.run_id_b != record.run_id_b
+            {
+                return Err(StoreError::InvalidBacktestEvidence);
+            }
+            return Ok(());
+        }
+        self.connection.execute(
+            "INSERT INTO nip_backtest_evidence
+                (backtest_id, thesis_id, run_id_a, run_id_b, config_fingerprint,
+                 metrics_a_json, metrics_b_json, delta_json, verdict,
+                 could_not_run_reason, recorded_at, source)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                record.backtest_id,
+                record.thesis_id,
+                record.run_id_a,
+                record.run_id_b,
+                record.config_fingerprint,
+                serde_json::to_string(&record.metrics_a).map_err(StoreError::SnapshotJson)?,
+                serde_json::to_string(&record.metrics_b).map_err(StoreError::SnapshotJson)?,
+                serde_json::to_string(&record.delta).map_err(StoreError::SnapshotJson)?,
+                BacktestVerdict::as_str(record.verdict),
+                record.could_not_run_reason,
+                record.recorded_at,
+                record.source,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn backtest_evidence(
+        &self,
+        backtest_id: &str,
+    ) -> Result<Option<BacktestEvidenceRecord>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT backtest_id, thesis_id, run_id_a, run_id_b, config_fingerprint,
+                        metrics_a_json, metrics_b_json, delta_json, verdict,
+                        could_not_run_reason, recorded_at, source
+                 FROM nip_backtest_evidence WHERE backtest_id = ?",
+                params![backtest_id],
+                backtest_evidence_from_row,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn backtest_evidence_for_thesis(
+        &self,
+        thesis_id: &str,
+    ) -> Result<Vec<BacktestEvidenceRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT backtest_id, thesis_id, run_id_a, run_id_b, config_fingerprint,
+                    metrics_a_json, metrics_b_json, delta_json, verdict,
+                    could_not_run_reason, recorded_at, source
+             FROM nip_backtest_evidence WHERE thesis_id = ?
+             ORDER BY recorded_at DESC, backtest_id",
+        )?;
+        Ok(statement
+            .query_map(params![thesis_id], backtest_evidence_from_row)?
+            .collect::<duckdb::Result<Vec<_>>>()?)
     }
 
     pub fn save_embedding_manifest(
@@ -1868,12 +2153,18 @@ impl Store {
     }
 
     pub fn event(&self, event_id: &str) -> Result<Option<EventRecord>, StoreError> {
-        self.connection.query_row(
-            "SELECT event_id, source_id, source_native_id, canonical_url, content_hash,
-                    content_text, published_at, source_updated_at, captured_at, ingested_at, revision_of
+        self.connection
+            .query_row(
+                "SELECT event_id, source_id, source_native_id, canonical_url, content_hash,
+                    content_text, published_at, source_updated_at, captured_at, ingested_at,
+                    revision_of, extraction_tier, review_status
              FROM nip_events WHERE event_id = ?",
-            params![event_id], raw_event_from_row,
-        ).optional()?.map(TryInto::try_into).transpose()
+                params![event_id],
+                raw_event_from_row,
+            )
+            .optional()?
+            .map(TryInto::try_into)
+            .transpose()
     }
 
     /// Validate all retained evidence spans for an exact canonical claim against
@@ -2640,9 +2931,17 @@ impl Store {
             {
                 return Err(StoreError::InvalidVideoEvidence);
             }
+            // Event/claim refs are span-checked; backtest/thesis refs are
+            // id refs that must resolve to a recorded backtest/thesis
+            // (revamp §d.2: validate, don't accept any string). Transcript
+            // spans and signal snapshots have no resolution table and keep
+            // their existing behaviour.
             if matches!(
                 source.source_kind,
-                VideoVisualSourceKind::Event | VideoVisualSourceKind::Claim
+                VideoVisualSourceKind::Event
+                    | VideoVisualSourceKind::Claim
+                    | VideoVisualSourceKind::Backtest
+                    | VideoVisualSourceKind::Thesis
             ) {
                 validate_video_evidence(
                     &self.connection,
@@ -3380,6 +3679,9 @@ impl Store {
                 return Err(StoreError::InvalidEdlOwnership);
             }
         }
+        // Pre-existing (committed 2026-11-19): the row type is complex by
+        // construction; allow it so the workspace clippy gate can run.
+        #[allow(clippy::type_complexity)]
         let asset: Option<(String, Option<String>, Option<String>, Option<String>)> = self.connection.query_row(
             "SELECT asset_kind,relative_path,mime_type,content_hash FROM video_assets WHERE asset_id=? AND revision=? AND capability_state='ready'",
             params![cue.asset_id, cue.asset_revision as i32], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
@@ -3462,6 +3764,9 @@ impl Store {
     }
 
     /// Resolve exact EDL parent ownership and selected input inventory from canonical DB rows.
+    // Pre-existing (committed 2026-11-19): eight parameters are the EDL
+    // selection set; allow it so the workspace clippy gate can run.
+    #[allow(clippy::too_many_arguments)]
     pub fn video_edl_inventory(
         &self,
         project: &VideoEdlRef,
@@ -3526,6 +3831,9 @@ impl Store {
         }
         let mut assets = Vec::new();
         for asset in selected_assets {
+            // Pre-existing (committed 2026-11-19): the row type is complex by
+            // construction; allow it so the workspace clippy gate can run.
+            #[allow(clippy::type_complexity)]
             let row:Option<(Option<String>,Option<String>,Option<String>,String,String,String,Option<i32>,Option<i32>,Option<i64>)>=self.connection.query_row("SELECT content_hash,relative_path,mime_type,capability_state,license_state,asset_kind,width,height,duration_ms FROM video_assets WHERE asset_id=? AND revision=?",params![asset.id,asset.revision as i32],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?))).optional()?;
             if let Some((
                 content_hash,
@@ -4173,8 +4481,9 @@ impl Store {
         }
         transaction.execute(
             "INSERT INTO video_episodes
-                (episode_id, project_id, revision, title, as_of, disclosure, status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (episode_id, project_id, revision, title, as_of, disclosure, status,
+                 thesis_id, transcript_id, transcript_hash, origin, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 episode.episode_id,
                 episode.project_id,
@@ -4183,6 +4492,10 @@ impl Store {
                 episode.as_of,
                 episode.disclosure,
                 video_episode_status_as_str(episode.status),
+                episode.thesis_id,
+                episode.transcript_id,
+                episode.transcript_hash,
+                video_episode_origin_as_str(episode.origin),
                 episode.created_at,
                 episode.updated_at,
             ],
@@ -4230,7 +4543,8 @@ impl Store {
     pub fn video_episode(&self, episode_id: &str) -> Result<Option<VideoEpisode>, StoreError> {
         self.connection
             .query_row(
-                "SELECT episode_id, project_id, revision, title, as_of, disclosure, status, created_at, updated_at
+                "SELECT episode_id, project_id, revision, title, as_of, disclosure, status,
+                        thesis_id, transcript_id, transcript_hash, origin, created_at, updated_at
                  FROM video_episodes
                  WHERE episode_id = ?
                  ORDER BY revision DESC
@@ -4276,7 +4590,8 @@ impl Store {
     /// Current revision of every episode in a project, newest activity first.
     pub fn video_episodes(&self, project_id: &str) -> Result<Vec<VideoEpisode>, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT e.episode_id, e.project_id, e.revision, e.title, e.as_of, e.disclosure, e.status, e.created_at, e.updated_at
+            "SELECT e.episode_id, e.project_id, e.revision, e.title, e.as_of, e.disclosure, e.status,
+                    e.thesis_id, e.transcript_id, e.transcript_hash, e.origin, e.created_at, e.updated_at
              FROM video_episodes e
              JOIN video_episode_heads h
                ON h.episode_id = e.episode_id AND h.revision = e.revision
@@ -4354,8 +4669,9 @@ impl Store {
         transaction.execute(
             "INSERT INTO video_narratives
                 (narrative_id, episode_id, revision, summary, thesis, analysis_mode, review_status,
-                 derivation_run_id, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 derivation_run_id, thesis_id, thesis_basis, as_of, backtest_ids_json,
+                 transcript_hash, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 narrative.narrative_id,
                 narrative.episode_id,
@@ -4365,6 +4681,11 @@ impl Store {
                 video_analysis_mode_as_str(narrative.analysis_mode),
                 video_review_status_as_str(narrative.review_status),
                 narrative.derivation_run_id,
+                narrative.thesis_id,
+                narrative.thesis_basis.map(ThesisBasis::as_str),
+                narrative.as_of,
+                serde_json::to_string(&narrative.backtest_ids).map_err(StoreError::SnapshotJson)?,
+                narrative.transcript_hash,
                 narrative.created_at,
                 narrative.updated_at,
             ],
@@ -4380,7 +4701,8 @@ impl Store {
         self.connection
             .query_row(
                 "SELECT narrative_id, episode_id, revision, summary, thesis, analysis_mode,
-                        review_status, derivation_run_id, created_at, updated_at
+                        review_status, derivation_run_id, thesis_id, thesis_basis, as_of,
+                        backtest_ids_json, transcript_hash, created_at, updated_at
                  FROM video_narratives WHERE narrative_id = ? ORDER BY revision DESC LIMIT 1",
                 params![narrative_id],
                 raw_video_narrative_from_row,
@@ -4452,14 +4774,19 @@ impl Store {
         }
         transaction.execute(
             "INSERT INTO video_storyboards
-                (storyboard_id, narrative_id, revision, schema_version, review_status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (storyboard_id, narrative_id, revision, schema_version, review_status,
+                 thesis_id, backtest_refs_json, source_transcript_hash, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 storyboard.storyboard_id,
                 storyboard.narrative_id,
                 storyboard.revision as i32,
                 storyboard.schema_version,
                 video_review_status_as_str(storyboard.review_status),
+                storyboard.thesis_id,
+                serde_json::to_string(&storyboard.backtest_refs)
+                    .map_err(StoreError::SnapshotJson)?,
+                storyboard.source_transcript_hash,
                 storyboard.created_at,
                 storyboard.updated_at,
             ],
@@ -4636,6 +4963,10 @@ fn video_episode_status_as_str(status: VideoEpisodeStatus) -> &'static str {
     }
 }
 
+fn video_episode_origin_as_str(origin: VideoEpisodeOrigin) -> &'static str {
+    origin.as_str()
+}
+
 fn video_review_status_as_str(status: VideoReviewStatus) -> &'static str {
     match status {
         VideoReviewStatus::Draft => "draft",
@@ -4652,6 +4983,7 @@ fn video_analysis_mode_as_str(mode: VideoAnalysisMode) -> &'static str {
         VideoAnalysisMode::DeterministicCandidate => "deterministic_candidate",
         VideoAnalysisMode::ModelAssisted => "model_assisted",
         VideoAnalysisMode::Mixed => "mixed",
+        VideoAnalysisMode::ThesisBacktest => "thesis_backtest",
     }
 }
 
@@ -4661,6 +4993,7 @@ fn parse_video_analysis_mode(value: String) -> duckdb::Result<VideoAnalysisMode>
         "deterministic_candidate" => Ok(VideoAnalysisMode::DeterministicCandidate),
         "model_assisted" => Ok(VideoAnalysisMode::ModelAssisted),
         "mixed" => Ok(VideoAnalysisMode::Mixed),
+        "thesis_backtest" => Ok(VideoAnalysisMode::ThesisBacktest),
         _ => Err(duckdb::Error::ToSqlConversionFailure(Box::new(
             std::io::Error::other("invalid Video narrative analysis mode"),
         ))),
@@ -4818,8 +5151,16 @@ fn raw_video_episode_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<VideoEpis
         as_of: row.get(4)?,
         disclosure: row.get(5)?,
         status: parse_video_episode_status(row.get(6)?)?,
-        created_at: row.get(7)?,
-        updated_at: row.get(8)?,
+        thesis_id: row.get(7)?,
+        transcript_id: row.get(8)?,
+        transcript_hash: row.get(9)?,
+        origin: row
+            .get::<_, Option<String>>(10)?
+            .as_deref()
+            .and_then(VideoEpisodeOrigin::parse)
+            .unwrap_or_default(),
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
     })
 }
 
@@ -4833,8 +5174,20 @@ fn raw_video_narrative_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<VideoNa
         analysis_mode: parse_video_analysis_mode(row.get(5)?)?,
         review_status: parse_video_review_status(row.get(6)?)?,
         derivation_run_id: row.get(7)?,
-        created_at: row.get(8)?,
-        updated_at: row.get(9)?,
+        thesis_id: row.get(8)?,
+        thesis_basis: row
+            .get::<_, Option<String>>(9)?
+            .as_deref()
+            .and_then(ThesisBasis::parse),
+        as_of: row.get(10)?,
+        backtest_ids: row
+            .get::<_, Option<String>>(11)?
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_default(),
+        transcript_hash: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
     })
 }
 
@@ -4858,11 +5211,16 @@ fn validate_video_evidence(
     if parent_id.trim().is_empty()
         || parent_revision == 0
         || evidence.evidence_id.trim().is_empty()
-        || !matches!(evidence.evidence_kind.as_str(), "event" | "claim")
+        || !nip_domain::valid_video_evidence_kind(evidence.evidence_kind.as_str())
         || (parent_id == "audio-cue"
             && evidence.evidence_kind == "event"
             && !video_evidence_has_complete_span(evidence))
         || matches!((evidence.start_offset, evidence.end_offset), (Some(start), Some(end)) if start > end)
+        // Backtest/thesis refs are pure id refs: they never carry a span.
+        || (matches!(evidence.evidence_kind.as_str(), "backtest" | "thesis")
+            && (evidence.start_offset.is_some()
+                || evidence.end_offset.is_some()
+                || evidence.quote.is_some()))
     {
         return Err(StoreError::InvalidVideoEvidence);
     }
@@ -4874,6 +5232,16 @@ fn validate_video_evidence(
         )?,
         "claim" => connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM nip_claims WHERE claim_id = ?)",
+            params![evidence.evidence_id],
+            |row| row.get(0),
+        )?,
+        "backtest" => connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM nip_backtest_evidence WHERE backtest_id = ?)",
+            params![evidence.evidence_id],
+            |row| row.get(0),
+        )?,
+        "thesis" => connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM nip_theses WHERE thesis_id = ?)",
             params![evidence.evidence_id],
             |row| row.get(0),
         )?,
@@ -5078,6 +5446,19 @@ fn apply_migrations(connection: &mut Connection) -> Result<u32, StoreError> {
     }
     if current_version < 18 {
         apply_claim_evidence_span_repair(connection)?;
+        applied_any = true;
+    }
+    if current_version < 19 {
+        apply_migration(
+            connection,
+            19,
+            "f2_thesis_transcript_backtest",
+            MIGRATION_19,
+        )?;
+        applied_any = true;
+    }
+    if current_version < 20 {
+        apply_migration(connection, 20, "f7_5_thesis_backtest_check", MIGRATION_20)?;
         applied_any = true;
     }
     if applied_any {
@@ -5431,6 +5812,8 @@ struct RawEvent {
     captured_at: DateTime<Utc>,
     ingested_at: DateTime<Utc>,
     revision_of: Option<String>,
+    extraction_tier: Option<String>,
+    review_status: Option<String>,
 }
 
 fn source_category(source_type: String) -> String {
@@ -5454,6 +5837,72 @@ fn valid_ticker(value: &str) -> bool {
                 || matches!(character, '.' | '-')
         })
 }
+fn invalid_stored_value(what: &str) -> duckdb::Error {
+    duckdb::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(format!(
+        "invalid stored {what}"
+    ))))
+}
+
+fn json_from_row<T: DeserializeOwned>(json: String) -> duckdb::Result<T> {
+    serde_json::from_str(&json).map_err(|error| invalid_stored_value(&error.to_string()))
+}
+
+fn thesis_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<ThesisRecord> {
+    Ok(ThesisRecord {
+        thesis_id: row.get(0)?,
+        title: row.get(1)?,
+        entity_symbol: row.get(2)?,
+        direction: ThesisDirection::parse(row.get::<_, String>(3)?.as_str())
+            .ok_or_else(|| invalid_stored_value("thesis direction"))?,
+        horizon: row.get(4)?,
+        as_of: row.get(5)?,
+        thesis_basis: ThesisBasis::parse(row.get::<_, String>(6)?.as_str())
+            .ok_or_else(|| invalid_stored_value("thesis basis"))?,
+        confidence_millis: row
+            .get::<_, Option<i32>>(7)?
+            .map(|value| value.clamp(0, 1000) as u16),
+        reason: row.get(8)?,
+        status: ThesisStatus::parse(row.get::<_, String>(9)?.as_str())
+            .ok_or_else(|| invalid_stored_value("thesis status"))?,
+        invalidation_condition: row.get(10)?,
+        what_would_change_mind: row.get(11)?,
+        claim_ids: json_from_row(row.get(12)?)?,
+        rejected_claims: json_from_row(row.get(13)?)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
+    })
+}
+
+fn transcript_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<TranscriptRecord> {
+    Ok(TranscriptRecord {
+        transcript_id: row.get(0)?,
+        thesis_id: row.get(1)?,
+        transcript_hash: row.get(2)?,
+        summary: row.get(3)?,
+        beats: json_from_row(row.get(4)?)?,
+        fina_import_path: row.get(5)?,
+        created_at: row.get(6)?,
+    })
+}
+
+fn backtest_evidence_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<BacktestEvidenceRecord> {
+    Ok(BacktestEvidenceRecord {
+        backtest_id: row.get(0)?,
+        thesis_id: row.get(1)?,
+        run_id_a: row.get(2)?,
+        run_id_b: row.get(3)?,
+        config_fingerprint: row.get(4)?,
+        metrics_a: json_from_row::<BacktestMetrics>(row.get(5)?)?,
+        metrics_b: json_from_row::<BacktestMetrics>(row.get(6)?)?,
+        delta: json_from_row::<BacktestDelta>(row.get(7)?)?,
+        verdict: BacktestVerdict::parse(row.get::<_, String>(8)?.as_str())
+            .ok_or_else(|| invalid_stored_value("backtest verdict"))?,
+        could_not_run_reason: row.get(9)?,
+        recorded_at: row.get(10)?,
+        source: row.get(11)?,
+    })
+}
+
 fn raw_event_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<RawEvent> {
     Ok(RawEvent {
         event_id: row.get(0)?,
@@ -5467,6 +5916,8 @@ fn raw_event_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<RawEvent> {
         captured_at: row.get(8)?,
         ingested_at: row.get(9)?,
         revision_of: row.get(10)?,
+        extraction_tier: row.get(11)?,
+        review_status: row.get(12)?,
     })
 }
 
@@ -5492,6 +5943,14 @@ impl TryFrom<RawEvent> for EventRecord {
             revision_of: raw
                 .revision_of
                 .and_then(|id| nip_domain::EventId::new(id).ok()),
+            extraction_tier: raw
+                .extraction_tier
+                .as_deref()
+                .and_then(ExtractionTier::parse),
+            review_status: raw
+                .review_status
+                .as_deref()
+                .and_then(ClaimReviewStatus::parse),
         })
     }
 }
@@ -5675,6 +6134,7 @@ impl TryFrom<RawEpisode> for PodcastEpisode {
 mod tests {
     use super::*;
     use duckdb::Connection;
+    use nip_domain::{RejectedClaimRef, TranscriptBeat, TranscriptEvidenceRef};
     use std::collections::BTreeMap;
     use tempfile::tempdir;
 
@@ -5929,6 +6389,8 @@ mod tests {
                     source_updated_at: None,
                     rights_statement: "User-owned synthetic fixture".into(),
                     user_confirmed_rights: true,
+                    extraction_tier: None,
+                    review_status: None,
                 },
                 "2026-11-18T09:00:00Z".parse().unwrap(),
             )
@@ -5961,6 +6423,10 @@ mod tests {
             as_of: None,
             disclosure: Some("Synthetic fixture".into()),
             status: VideoEpisodeStatus::Draft,
+            thesis_id: None,
+            transcript_id: None,
+            transcript_hash: None,
+            origin: VideoEpisodeOrigin::default(),
             created_at: now,
             updated_at: now,
         };
@@ -6036,6 +6502,10 @@ mod tests {
             as_of: None,
             disclosure: None,
             status: VideoEpisodeStatus::Draft,
+            thesis_id: None,
+            transcript_id: None,
+            transcript_hash: None,
+            origin: VideoEpisodeOrigin::default(),
             created_at: project.created_at,
             updated_at: project.updated_at,
         };
@@ -6077,6 +6547,8 @@ mod tests {
                     source_updated_at: None,
                     rights_statement: "Synthetic test fixture".into(),
                     user_confirmed_rights: true,
+                    extraction_tier: None,
+                    review_status: None,
                 },
                 "2026-11-18T09:00:00Z".parse().unwrap(),
             )
@@ -6096,6 +6568,8 @@ mod tests {
                 provider_profile_id: None,
                 reasoning_effort: None,
                 extracted_at: "2026-11-18T09:01:00Z".parse().unwrap(),
+                extraction_tier: None,
+                review_status: None,
                 evidence: vec![nip_domain::ClaimEvidence {
                     event_id: event.event_id.clone(),
                     quote: Some("Canonical event evidence remains.".into()),
@@ -6115,6 +6589,10 @@ mod tests {
             as_of: None,
             disclosure: None,
             status: VideoEpisodeStatus::Draft,
+            thesis_id: None,
+            transcript_id: None,
+            transcript_hash: None,
+            origin: VideoEpisodeOrigin::default(),
             created_at: project.created_at,
             updated_at: project.updated_at,
         };
@@ -6137,8 +6615,8 @@ mod tests {
         store
             .connection
             .execute_batch(
-                "INSERT INTO video_narratives VALUES ('delete-success-narrative','delete-success-episode',1,'Summary','Thesis','human_authored','approved',NULL,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
-                 INSERT INTO video_storyboards VALUES ('delete-success-storyboard','delete-success-narrative',1,'v1','approved',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
+                "INSERT INTO video_narratives VALUES ('delete-success-narrative','delete-success-episode',1,'Summary','Thesis','human_authored','approved',NULL,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,NULL,NULL,NULL,'[]',NULL);
+                 INSERT INTO video_storyboards VALUES ('delete-success-storyboard','delete-success-narrative',1,'v1','approved',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,NULL,'[]',NULL);
                  INSERT INTO video_scenes VALUES ('delete-success-scene','delete-success-storyboard',1,0,'purpose','narration','visual',1000,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
                  INSERT INTO video_shots VALUES ('delete-success-shot','delete-success-scene',1,0,'broll',1000,NULL,NULL,'ready',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
                  INSERT INTO video_narrative_evidence VALUES ('delete-success-narrative',1,'claim','delete-test-claim',-1,-1,NULL,CURRENT_TIMESTAMP);
@@ -6266,6 +6744,10 @@ mod tests {
             as_of: None,
             disclosure: None,
             status: VideoEpisodeStatus::Draft,
+            thesis_id: None,
+            transcript_id: None,
+            transcript_hash: None,
+            origin: VideoEpisodeOrigin::default(),
             created_at: now,
             updated_at: now,
         };
@@ -6575,6 +7057,8 @@ mod tests {
                     source_updated_at: None,
                     rights_statement: "User confirmed rights for this fixture".into(),
                     user_confirmed_rights: true,
+                    extraction_tier: None,
+                    review_status: None,
                 },
                 captured_at,
             )
@@ -6726,6 +7210,8 @@ mod tests {
                     source_updated_at: None,
                     rights_statement: "synthetic".into(),
                     user_confirmed_rights: true,
+                    extraction_tier: None,
+                    review_status: None,
                 },
                 "2026-11-17T09:00:00Z".parse().unwrap(),
             )
@@ -6744,6 +7230,8 @@ mod tests {
                 provider_profile_id: Some("provider-a".into()),
                 reasoning_effort: Some("low".into()),
                 extracted_at: "2026-11-17T09:01:00Z".parse().unwrap(),
+                extraction_tier: None,
+                review_status: None,
                 evidence: vec![nip_domain::ClaimEvidence {
                     event_id: event.event_id.clone(),
                     quote: Some("Rates remain restrictive.".into()),
@@ -6834,6 +7322,8 @@ mod tests {
                     source_updated_at: None,
                     rights_statement: "synthetic".into(),
                     user_confirmed_rights: true,
+                    extraction_tier: None,
+                    review_status: None,
                 },
                 "2026-11-17T09:00:00Z".parse().unwrap(),
             )
@@ -7044,6 +7534,8 @@ mod tests {
                     source_updated_at: None,
                     rights_statement: "Public filing".into(),
                     user_confirmed_rights: true,
+                    extraction_tier: None,
+                    review_status: None,
                 },
                 "2026-11-17T09:30:00Z".parse().unwrap(),
             )
@@ -7192,6 +7684,8 @@ mod tests {
                     source_updated_at: None,
                     rights_statement: "synthetic".into(),
                     user_confirmed_rights: true,
+                    extraction_tier: None,
+                    review_status: None,
                 },
                 "2026-11-18T09:00:00Z".parse().unwrap(),
             )
@@ -7301,6 +7795,10 @@ mod tests {
             as_of: None,
             disclosure: Some("Fixture only".into()),
             status: VideoEpisodeStatus::Draft,
+            thesis_id: None,
+            transcript_id: None,
+            transcript_hash: None,
+            origin: VideoEpisodeOrigin::default(),
             created_at: now,
             updated_at: now,
         };
@@ -7314,6 +7812,11 @@ mod tests {
             analysis_mode: VideoAnalysisMode::DeterministicCandidate,
             review_status: VideoReviewStatus::Candidate,
             derivation_run_id: None,
+            thesis_id: None,
+            thesis_basis: None,
+            as_of: None,
+            backtest_ids: Vec::new(),
+            transcript_hash: None,
             created_at: now,
             updated_at: now,
         };
@@ -7333,6 +7836,9 @@ mod tests {
                 revision: 1,
                 schema_version: "video-storyboard-v1".into(),
                 review_status: VideoReviewStatus::Draft,
+                thesis_id: None,
+                backtest_refs: Vec::new(),
+                source_transcript_hash: None,
                 created_at: now,
                 updated_at: now,
             })
@@ -7476,6 +7982,9 @@ mod tests {
                 revision: 1,
                 schema_version: "video-storyboard-v1".into(),
                 review_status: VideoReviewStatus::Draft,
+                thesis_id: None,
+                backtest_refs: Vec::new(),
+                source_transcript_hash: None,
                 created_at: now,
                 updated_at: now,
             })
@@ -7541,6 +8050,89 @@ mod tests {
         ));
     }
 
+    /// F7-5 (final e2e 2026-11-26): the F4 thesis flow saves narratives with
+    /// `analysis_mode = thesis_backtest`, but the 0011 CHECK on
+    /// video_narratives allowed only the four pre-thesis modes, so the
+    /// save failed. Migration 0020 widens the CHECK (and the
+    /// review_status CHECKs) to match the Rust enums; this test pins it,
+    /// including an `in_review` storyboard (also missing from 0011).
+    #[test]
+    fn thesis_backtest_narrative_and_in_review_storyboard_save() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        assert_eq!(store.schema_version(), 20);
+        let now = "2026-11-18T09:01:00Z".parse().unwrap();
+        let project = VideoProject {
+            project_id: "f7-5-project".into(),
+            revision: 1,
+            title: "F7-5 fixture".into(),
+            language: "en".into(),
+            target_platform: "internal_review".into(),
+            target_duration_ms: Some(30_000),
+            audience: None,
+            style_profile: None,
+            status: VideoProjectStatus::Draft,
+            created_at: now,
+            updated_at: now,
+        };
+        store.save_video_project(&project).unwrap();
+        let episode = VideoEpisode {
+            episode_id: "f7-5-episode".into(),
+            project_id: project.project_id.clone(),
+            revision: 1,
+            title: Some("F7-5 episode".into()),
+            as_of: None,
+            disclosure: None,
+            status: VideoEpisodeStatus::Draft,
+            thesis_id: Some("thesis-1".into()),
+            transcript_id: Some("thesis-1".into()),
+            transcript_hash: Some("deadbeef".into()),
+            origin: VideoEpisodeOrigin::Thesis,
+            created_at: now,
+            updated_at: now,
+        };
+        store.save_video_episode(&episode).unwrap();
+        let narrative = VideoNarrative {
+            narrative_id: "f7-5-narrative".into(),
+            episode_id: episode.episode_id.clone(),
+            revision: 1,
+            summary: Some("Thesis-led fixture".into()),
+            thesis: Some("Long on the thesis".into()),
+            analysis_mode: VideoAnalysisMode::ThesisBacktest,
+            review_status: VideoReviewStatus::Draft,
+            derivation_run_id: None,
+            thesis_id: Some("thesis-1".into()),
+            thesis_basis: Some(ThesisBasis::LlmVerifiedOnly),
+            as_of: None,
+            backtest_ids: Vec::new(),
+            transcript_hash: Some("deadbeef".into()),
+            created_at: now,
+            updated_at: now,
+        };
+        store.save_video_narrative(&narrative).unwrap();
+        assert_eq!(
+            store.video_narrative("f7-5-narrative").unwrap(),
+            Some(narrative.clone())
+        );
+        store
+            .save_video_storyboard(&VideoStoryboard {
+                storyboard_id: "f7-5-storyboard".into(),
+                narrative_id: narrative.narrative_id.clone(),
+                revision: 1,
+                schema_version: "video-storyboard-v1".into(),
+                review_status: VideoReviewStatus::InReview,
+                thesis_id: Some("thesis-1".into()),
+                backtest_refs: Vec::new(),
+                source_transcript_hash: Some("deadbeef".into()),
+                created_at: now,
+                updated_at: now,
+            })
+            .unwrap();
+        // The saves above are the assertions: before migration 0020 the
+        // narrative save failed the analysis_mode CHECK and the storyboard
+        // save failed the review_status CHECK.
+    }
+
     #[test]
     fn video_asset_lineage_round_trips_idempotently_and_rejects_cycles() {
         let temp = tempdir().unwrap();
@@ -7559,6 +8151,8 @@ mod tests {
                     source_updated_at: None,
                     rights_statement: "User-owned synthetic fixture".into(),
                     user_confirmed_rights: true,
+                    extraction_tier: None,
+                    review_status: None,
                 },
                 now,
             )
@@ -7703,6 +8297,8 @@ mod tests {
                     source_updated_at: None,
                     rights_statement: "Synthetic test fixture".into(),
                     user_confirmed_rights: true,
+                    extraction_tier: None,
+                    review_status: None,
                 },
                 now,
             )
@@ -7720,6 +8316,8 @@ mod tests {
                     source_updated_at: None,
                     rights_statement: "Synthetic test fixture".into(),
                     user_confirmed_rights: true,
+                    extraction_tier: None,
+                    review_status: None,
                 },
                 now,
             )
@@ -7739,6 +8337,8 @@ mod tests {
                 provider_profile_id: None,
                 reasoning_effort: None,
                 extracted_at: now,
+                extraction_tier: None,
+                review_status: None,
                 evidence: vec![nip_domain::ClaimEvidence {
                     event_id: nvidia_event.event_id.clone(),
                     quote: Some(quote.into()),
@@ -8017,5 +8617,488 @@ mod tests {
                 .status,
             "queued"
         );
+    }
+
+    fn f2_thesis(now: DateTime<Utc>, basis: ThesisBasis, status: ThesisStatus) -> ThesisRecord {
+        ThesisRecord {
+            thesis_id: "thesis-nvda-long".into(),
+            title: "NVDA long 1-3 days on verified earnings strength".into(),
+            entity_symbol: Some("NVDA".into()),
+            direction: ThesisDirection::Long,
+            horizon: Some("1-3 days".into()),
+            as_of: "2026-11-24T16:00:00Z".parse().unwrap(),
+            thesis_basis: basis,
+            confidence_millis: Some(720),
+            reason: Some("Three llm_verified claims agree; sentiment z=3.42.".into()),
+            status,
+            invalidation_condition: Some("NVDA closes below the pre-earnings low.".into()),
+            what_would_change_mind: Some("A second source contradicting the beat.".into()),
+            claim_ids: vec!["claim-1".into()],
+            rejected_claims: vec![RejectedClaimRef {
+                claim_id: "claim-rejected".into(),
+                reason: "Span does not support the claim.".into(),
+            }],
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn f2_backtest(now: DateTime<Utc>) -> BacktestEvidenceRecord {
+        BacktestEvidenceRecord {
+            backtest_id: "backtest-nvda-ablation".into(),
+            thesis_id: "thesis-nvda-long".into(),
+            run_id_a: "run-a-ta-macro".into(),
+            run_id_b: "run-b-ta-macro-narr".into(),
+            config_fingerprint: Some("cfg-fingerprint-1".into()),
+            metrics_a: BacktestMetrics {
+                ic: Some(0.02),
+                icir: Some(0.4),
+                sharpe: Some(0.9),
+                total_return: Some(0.05),
+                max_drawdown: Some(-0.08),
+                feature_importances: BTreeMap::from([("ta_rsi".into(), 0.4)]),
+            },
+            metrics_b: BacktestMetrics {
+                ic: Some(0.05),
+                icir: Some(0.9),
+                sharpe: Some(1.7),
+                total_return: Some(0.09),
+                max_drawdown: Some(-0.06),
+                feature_importances: BTreeMap::from([
+                    ("ta_rsi".into(), 0.3),
+                    ("narr_sentiment_z".into(), 0.5),
+                ]),
+            },
+            delta: BacktestDelta {
+                ic: Some(0.03),
+                icir: Some(0.5),
+                sharpe: Some(0.8),
+                total_return: Some(0.04),
+                max_drawdown: Some(0.02),
+            },
+            verdict: BacktestVerdict::Supported,
+            could_not_run_reason: None,
+            recorded_at: now,
+            source: "fina-builder:tac-qlib-rd".into(),
+        }
+    }
+
+    #[test]
+    fn f2_migration_applies_on_fresh_store_at_schema_19() {
+        let temp = tempdir().unwrap();
+        let store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        assert_eq!(store.schema_version(), 20);
+        assert_eq!(store.schema_version(), LATEST_SCHEMA_VERSION);
+        assert!(store.has_table("nip_theses").unwrap());
+        assert!(store.has_table("nip_transcripts").unwrap());
+        assert!(store.has_table("nip_backtest_evidence").unwrap());
+        assert!(store.has_table("nip_events").unwrap());
+        assert!(store.has_table("nip_claims").unwrap());
+    }
+
+    #[test]
+    fn f2_imported_event_and_claim_carry_mirrored_tiers() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let event = store
+            .import_local_event(
+                &LocalEventImport {
+                    source_id: SourceId::new("fina-scraper").unwrap(),
+                    source_display_name: "Alpaca news".into(),
+                    source_native_id: Some("item-nvda-1".into()),
+                    canonical_url: Some("https://fixture.test/nvda-1".into()),
+                    title: Some("NVDA beats".into()),
+                    content_text: "NVIDIA reported revenue above expectations.".into(),
+                    published_at: None,
+                    source_updated_at: None,
+                    rights_statement: "User-owned synthetic fixture".into(),
+                    user_confirmed_rights: true,
+                    extraction_tier: Some(ExtractionTier::Tier2Llm),
+                    review_status: Some(ClaimReviewStatus::LlmVerified),
+                },
+                "2026-11-24T16:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(event.extraction_tier, Some(ExtractionTier::Tier2Llm));
+        assert_eq!(event.review_status, Some(ClaimReviewStatus::LlmVerified));
+        assert_eq!(
+            store.event(event.event_id.as_str()).unwrap().unwrap(),
+            event
+        );
+
+        let claim = ClaimRecord {
+            claim_id: "claim-1".into(),
+            claim_text: "NVIDIA revenue beat expectations.".into(),
+            speaker_or_author: None,
+            confidence_millis: 900,
+            extraction_run_id: "run-tier2".into(),
+            provider: "fina-scraper".into(),
+            model: "llm:fixture".into(),
+            prompt_version: "p1".into(),
+            provider_kind: None,
+            provider_profile_id: None,
+            reasoning_effort: None,
+            extracted_at: "2026-11-24T16:00:00Z".parse().unwrap(),
+            extraction_tier: Some(ExtractionTier::Tier2Llm),
+            review_status: Some(ClaimReviewStatus::LlmCorrected),
+            evidence: vec![ClaimEvidence {
+                event_id: event.event_id.clone(),
+                quote: Some("NVIDIA reported revenue above expectations.".into()),
+                start_offset: Some(0),
+                end_offset: Some(45),
+            }],
+        };
+        store.store_claim(&claim).unwrap();
+        let stored = store
+            .claims()
+            .unwrap()
+            .into_iter()
+            .find(|stored| stored.claim_id == "claim-1")
+            .unwrap();
+        assert_eq!(stored.extraction_tier, Some(ExtractionTier::Tier2Llm));
+        assert_eq!(stored.review_status, Some(ClaimReviewStatus::LlmCorrected));
+    }
+
+    #[test]
+    fn f2_thesis_transcript_backtest_round_trip_with_provisional_gate() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let now: DateTime<Utc> = "2026-11-24T16:00:00Z".parse().unwrap();
+
+        // A provisional thesis can be listed, but can never advance.
+        let provisional = f2_thesis(now, ThesisBasis::ProvisionalFastGlance, ThesisStatus::Draft);
+        store.save_thesis(&provisional).unwrap();
+        assert_eq!(
+            store.thesis("thesis-nvda-long").unwrap().unwrap(),
+            provisional
+        );
+        let mut advanced = provisional.clone();
+        advanced.status = ThesisStatus::Backtested;
+        assert!(matches!(
+            store.save_thesis(&advanced),
+            Err(StoreError::ProvisionalThesisCannotAdvance)
+        ));
+        // And no transcript exists for a provisional thesis.
+        let transcript = TranscriptRecord {
+            transcript_id: "transcript-1".into(),
+            thesis_id: "thesis-nvda-long".into(),
+            transcript_hash: "hash-1".into(),
+            summary: Some("NVDA long, verified.".into()),
+            beats: vec![TranscriptBeat {
+                ordinal: 1,
+                title: "Hook".into(),
+                script: "NVDA beat expectations.".into(),
+                evidence_refs: vec![TranscriptEvidenceRef {
+                    kind: "claim".into(),
+                    claim_id: Some("claim-1".into()),
+                    item_id: None,
+                    backtest_id: None,
+                    run_id: None,
+                    evidence_span: None,
+                }],
+            }],
+            fina_import_path: None,
+            created_at: now,
+        };
+        assert!(matches!(
+            store.save_transcript(&transcript),
+            Err(StoreError::InvalidTranscriptRecord)
+        ));
+
+        // The same thesis on a verified basis advances and gains a
+        // transcript and a backtest record.
+        let mut verified = provisional.clone();
+        verified.thesis_id = "thesis-nvda-long-verified".into();
+        verified.thesis_basis = ThesisBasis::LlmVerifiedOnly;
+        verified.status = ThesisStatus::Backtested;
+        store.save_thesis(&verified).unwrap();
+        let mut backtest = f2_backtest(now);
+        backtest.thesis_id = verified.thesis_id.clone();
+        store.save_backtest_evidence(&backtest).unwrap();
+        assert_eq!(
+            store
+                .backtest_evidence("backtest-nvda-ablation")
+                .unwrap()
+                .unwrap(),
+            backtest
+        );
+        assert_eq!(
+            store
+                .backtest_evidence_for_thesis(&verified.thesis_id)
+                .unwrap(),
+            vec![backtest.clone()]
+        );
+        let mut verified_transcript = transcript.clone();
+        verified_transcript.thesis_id = verified.thesis_id.clone();
+        store.save_transcript(&verified_transcript).unwrap();
+        assert_eq!(
+            store.transcript("transcript-1").unwrap().unwrap(),
+            verified_transcript
+        );
+        assert_eq!(
+            store.transcripts_for_thesis(&verified.thesis_id).unwrap(),
+            vec![verified_transcript]
+        );
+
+        // Backtest validation: identical run ids and a missing reason for
+        // could_not_run are both rejected, and nothing is ingested.
+        let mut same_runs = backtest.clone();
+        same_runs.backtest_id = "backtest-same-runs".into();
+        same_runs.run_id_b = same_runs.run_id_a.clone();
+        assert!(matches!(
+            store.save_backtest_evidence(&same_runs),
+            Err(StoreError::InvalidBacktestEvidence)
+        ));
+        let mut no_reason = backtest.clone();
+        no_reason.backtest_id = "backtest-no-reason".into();
+        no_reason.verdict = BacktestVerdict::CouldNotRun;
+        no_reason.could_not_run_reason = None;
+        assert!(matches!(
+            store.save_backtest_evidence(&no_reason),
+            Err(StoreError::InvalidBacktestEvidence)
+        ));
+        assert!(store
+            .backtest_evidence("backtest-same-runs")
+            .unwrap()
+            .is_none());
+        assert!(store
+            .backtest_evidence("backtest-no-reason")
+            .unwrap()
+            .is_none());
+
+        // Theses list newest as_of first.
+        assert_eq!(
+            store
+                .theses()
+                .unwrap()
+                .iter()
+                .map(|thesis| thesis.thesis_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thesis-nvda-long", "thesis-nvda-long-verified"]
+        );
+    }
+
+    #[test]
+    fn f2_video_evidence_accepts_backtest_and_thesis_refs_and_rejects_unknown_kinds() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let now: DateTime<Utc> = "2026-11-24T16:00:00Z".parse().unwrap();
+        let mut thesis = f2_thesis(now, ThesisBasis::LlmVerifiedOnly, ThesisStatus::Backtested);
+        thesis.thesis_id = "thesis-video".into();
+        store.save_thesis(&thesis).unwrap();
+        let mut backtest = f2_backtest(now);
+        backtest.thesis_id = thesis.thesis_id.clone();
+        store.save_backtest_evidence(&backtest).unwrap();
+
+        let project = VideoProject {
+            project_id: "project-f2".into(),
+            revision: 1,
+            title: "F2 fixture".into(),
+            language: "en".into(),
+            target_platform: "youtube".into(),
+            target_duration_ms: None,
+            audience: None,
+            style_profile: None,
+            status: VideoProjectStatus::Draft,
+            created_at: now,
+            updated_at: now,
+        };
+        store.save_video_project(&project).unwrap();
+        let episode = VideoEpisode {
+            episode_id: "episode-f2".into(),
+            project_id: project.project_id.clone(),
+            revision: 1,
+            title: None,
+            as_of: Some(now),
+            disclosure: None,
+            status: VideoEpisodeStatus::Draft,
+            thesis_id: Some(thesis.thesis_id.clone()),
+            transcript_id: None,
+            transcript_hash: None,
+            origin: VideoEpisodeOrigin::Thesis,
+            created_at: now,
+            updated_at: now,
+        };
+        store.save_video_episode(&episode).unwrap();
+        // Episode origin + thesis link round-trip.
+        let stored_episode = store.video_episode("episode-f2").unwrap().unwrap();
+        assert_eq!(stored_episode.origin, VideoEpisodeOrigin::Thesis);
+        assert_eq!(stored_episode.thesis_id.as_deref(), Some("thesis-video"));
+
+        let backtest_ref = VideoEvidenceRef {
+            evidence_kind: "backtest".into(),
+            evidence_id: backtest.backtest_id.clone(),
+            start_offset: None,
+            end_offset: None,
+            quote: None,
+        };
+        store
+            .link_video_episode_evidence(&episode.episode_id, 1, &backtest_ref)
+            .unwrap();
+        let thesis_ref = VideoEvidenceRef {
+            evidence_kind: "thesis".into(),
+            evidence_id: thesis.thesis_id.clone(),
+            start_offset: None,
+            end_offset: None,
+            quote: None,
+        };
+        store
+            .link_video_episode_evidence(&episode.episode_id, 1, &thesis_ref)
+            .unwrap();
+        assert_eq!(
+            store
+                .video_episode_evidence(&episode.episode_id, 1)
+                .unwrap(),
+            vec![backtest_ref, thesis_ref]
+        );
+
+        // Unknown kinds, unknown ids, and span-bearing backtest refs are
+        // all rejected — and nothing is stored for them.
+        for invalid in [
+            VideoEvidenceRef {
+                evidence_kind: "signal".into(),
+                evidence_id: backtest.backtest_id.clone(),
+                start_offset: None,
+                end_offset: None,
+                quote: None,
+            },
+            VideoEvidenceRef {
+                evidence_kind: "backtest".into(),
+                evidence_id: "backtest-missing".into(),
+                start_offset: None,
+                end_offset: None,
+                quote: None,
+            },
+            VideoEvidenceRef {
+                evidence_kind: "thesis".into(),
+                evidence_id: "thesis-missing".into(),
+                start_offset: None,
+                end_offset: None,
+                quote: None,
+            },
+            VideoEvidenceRef {
+                evidence_kind: "backtest".into(),
+                evidence_id: backtest.backtest_id.clone(),
+                start_offset: Some(0),
+                end_offset: Some(5),
+                quote: Some("not a span".into()),
+            },
+        ] {
+            assert!(matches!(
+                store.link_video_episode_evidence(&episode.episode_id, 1, &invalid),
+                Err(StoreError::InvalidVideoEvidence)
+            ));
+        }
+        assert_eq!(
+            store
+                .video_episode_evidence(&episode.episode_id, 1)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn f2_visual_spec_validates_backtest_and_thesis_sources() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let now: DateTime<Utc> = "2026-11-24T16:00:00Z".parse().unwrap();
+        let thesis = f2_thesis(now, ThesisBasis::LlmVerifiedOnly, ThesisStatus::Backtested);
+        store.save_thesis(&thesis).unwrap();
+        let backtest = f2_backtest(now);
+        store.save_backtest_evidence(&backtest).unwrap();
+
+        let spec = VideoVisualSpec {
+            spec_id: "visual-spec-f2".into(),
+            revision: 1,
+            schema_version: "video-visual-spec-v1".into(),
+            project_id: "project-f2".into(),
+            episode_id: "episode-f2".into(),
+            scene_id: Some("scene-f2".into()),
+            shot_id: Some("shot-f2".into()),
+            template: nip_domain::VideoVisualTemplate::EvidenceCard,
+            duration_ms: 12_000,
+            width: 1280,
+            height: 720,
+            fps: 30,
+            payload: nip_domain::VideoVisualPayload::EvidenceCard {
+                title: "Ablation A vs B".into(),
+                body: "B beat A out-of-sample by +0.8 Sharpe.".into(),
+                disclosure: Some("Synthetic fixture".into()),
+            },
+            sources: vec![
+                VideoVisualSource {
+                    source_kind: VideoVisualSourceKind::Backtest,
+                    source_id: backtest.backtest_id.clone(),
+                    source_revision: None,
+                    start_offset: None,
+                    end_offset: None,
+                    quote: None,
+                },
+                VideoVisualSource {
+                    source_kind: VideoVisualSourceKind::Thesis,
+                    source_id: thesis.thesis_id.clone(),
+                    source_revision: None,
+                    start_offset: None,
+                    end_offset: None,
+                    quote: None,
+                },
+            ],
+            deterministic: true,
+            created_at: now,
+        };
+        store.save_video_visual_spec(&spec).unwrap();
+        let loaded = store
+            .video_visual_spec("visual-spec-f2", 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded, spec);
+
+        // Unknown ids and span-bearing backtest refs are rejected, and
+        // nothing is stored for them.
+        for (spec_id, source) in [
+            (
+                "visual-spec-f2-bad-backtest",
+                VideoVisualSource {
+                    source_kind: VideoVisualSourceKind::Backtest,
+                    source_id: "backtest-missing".into(),
+                    source_revision: None,
+                    start_offset: None,
+                    end_offset: None,
+                    quote: None,
+                },
+            ),
+            (
+                "visual-spec-f2-bad-thesis",
+                VideoVisualSource {
+                    source_kind: VideoVisualSourceKind::Thesis,
+                    source_id: "thesis-missing".into(),
+                    source_revision: None,
+                    start_offset: None,
+                    end_offset: None,
+                    quote: None,
+                },
+            ),
+            (
+                "visual-spec-f2-span-backtest",
+                VideoVisualSource {
+                    source_kind: VideoVisualSourceKind::Backtest,
+                    source_id: backtest.backtest_id.clone(),
+                    source_revision: None,
+                    start_offset: Some(0),
+                    end_offset: Some(5),
+                    quote: Some("not a span".into()),
+                },
+            ),
+        ] {
+            let mut bad = spec.clone();
+            bad.spec_id = spec_id.into();
+            bad.sources = vec![source];
+            assert!(matches!(
+                store.save_video_visual_spec(&bad),
+                Err(StoreError::InvalidVideoEvidence)
+            ));
+            assert!(store.video_visual_spec(spec_id, 1).unwrap().is_none());
+        }
     }
 }

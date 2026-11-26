@@ -42,7 +42,7 @@ describe('tac-engine tiles', () => {
       expect(screen.getAllByText(title).length, title).toBeGreaterThan(0)
       unmount()
     }
-  })
+  }, 15000) // Synchronous render of 12 heavy tiles; ECharts init alone costs ~1s per chart tile in jsdom, so the 5s default is too tight under parallel load.
 
   it('renders the calibrated vol-surface provenance', () => {
     render(<TacVolSurface />)

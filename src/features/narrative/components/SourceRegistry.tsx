@@ -4,7 +4,7 @@ import { PanelCard } from '../../shared/components/PanelCard'
 import { narrativeApi } from '../api'
 import type { NipSource, NipSourceKind } from '../types'
 
-const KIND_LABELS: Record<NipSourceKind, string> = {
+export const KIND_LABELS: Record<NipSourceKind, string> = {
   podcast: 'Podcast',
   company_meeting: 'Company meeting',
   filing: 'Filing',
@@ -21,7 +21,7 @@ function messageOf(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason)
 }
 
-function kindLabel(kind: NipSourceKind): string {
+export function kindLabel(kind: NipSourceKind): string {
   return KIND_LABELS[kind]
 }
 
@@ -99,12 +99,13 @@ export function AddSourceForm({ onSubmitted }: { onSubmitted: () => Promise<void
   )
 }
 
-function EditSourceForm({ source, onDone, onChanged }: { source: NipSource; onDone: () => void; onChanged: () => Promise<void> }) {
+export function EditSourceForm({ source, onDone, onChanged }: { source: NipSource; onDone: () => void; onChanged: () => Promise<void> }) {
   const [displayName, setDisplayName] = useState(source.display_name)
   const [locator, setLocator] = useState(source.locator ?? '')
   const [rightsStatement, setRightsStatement] = useState(source.rights_statement ?? '')
   const [topics, setTopics] = useState(source.topics.join(', '))
   const [perScanLimit, setPerScanLimit] = useState(String(source.per_scan_limit))
+  const [pollIntervalMinutes, setPollIntervalMinutes] = useState(String(source.poll_interval_minutes))
   const [sync, setSync] = useState(false)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
@@ -121,6 +122,7 @@ function EditSourceForm({ source, onDone, onChanged }: { source: NipSource; onDo
         rightsStatement,
         topics: topics.split(',').map((topic) => topic.trim()).filter(Boolean),
         perScanLimit: Number(perScanLimit) || undefined,
+        pollIntervalMinutes: Number(pollIntervalMinutes) || undefined,
         sync,
       })
       await onChanged()
@@ -139,6 +141,7 @@ function EditSourceForm({ source, onDone, onChanged }: { source: NipSource; onDo
       <textarea className="w-full" aria-label="Rights statement" value={rightsStatement} onChange={(event) => setRightsStatement(event.target.value)} rows={2} />
       <input className="w-full" aria-label="Topics" value={topics} onChange={(event) => setTopics(event.target.value)} />
       <input className="w-full" aria-label="Per-scan limit" type="number" min={1} max={10} value={perScanLimit} onChange={(event) => setPerScanLimit(event.target.value)} />
+      <input className="w-full" aria-label="Poll interval (minutes)" type="number" min={0} value={pollIntervalMinutes} onChange={(event) => setPollIntervalMinutes(event.target.value)} />
       {source.kind === 'podcast' ? <label className="flex items-center gap-2 text-[10px] text-muted"><input type="checkbox" checked={sync} onChange={(event) => setSync(event.target.checked)} /> Refresh the corrected feed now</label> : null}
       <div className="flex gap-2">
         <Button type="submit" size="sm" disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>

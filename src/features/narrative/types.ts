@@ -28,6 +28,9 @@ export interface NipEventTimes {
   ingested_at: string
 }
 
+export type ExtractionTier = 'tier0_lexicon' | 'tier1_onnx' | 'tier2_llm'
+export type ClaimReviewStatus = 'fast_glance' | 'llm_verified' | 'llm_corrected' | 'llm_rejected' | 'llm_disputed'
+
 export interface NipEvent {
   schema_version: number
   event_id: string
@@ -38,6 +41,9 @@ export interface NipEvent {
   content_text: string | null
   times: NipEventTimes
   revision_of: string | null
+  /** Mirrored from the producer at import time; null for legacy imports (unlabelled, never verified). */
+  extraction_tier?: ExtractionTier | null
+  review_status?: ClaimReviewStatus | null
 }
 
 export interface NipEventSearchPage {
@@ -65,7 +71,110 @@ export interface NipClaim {
   provider_profile_id?: string | null
   reasoning_effort?: string | null
   extracted_at: string
+  /** Mirrored from the producer at record time; null for legacy claims (unlabelled, never verified). */
+  extraction_tier?: ExtractionTier | null
+  review_status?: ClaimReviewStatus | null
   evidence: NipClaimEvidence[]
+}
+
+export type ThesisBasis = 'llm_verified_only' | 'provisional_fast_glance'
+export type ThesisDirection = 'long' | 'short' | 'neutral'
+export type ThesisStatus =
+  | 'draft'
+  | 'llm_reviewed'
+  | 'backtested'
+  | 'transcript_ready'
+  | 'video_ready'
+  | 'published'
+  | 'rejected'
+  | 'invalidated'
+
+export interface NipRejectedClaimRef {
+  claim_id: string
+  reason: string
+}
+
+/** Evidence- and backtest-based investment thesis (revamp §c.5). */
+export interface NipThesis {
+  thesis_id: string
+  title: string
+  entity_symbol: string | null
+  direction: ThesisDirection
+  horizon: string | null
+  /** Decision time; every feature/backtest read is point-in-time at this as_of. */
+  as_of: string
+  thesis_basis: ThesisBasis
+  confidence_millis: number | null
+  reason: string | null
+  status: ThesisStatus
+  invalidation_condition: string | null
+  what_would_change_mind: string | null
+  claim_ids: string[]
+  rejected_claims: NipRejectedClaimRef[]
+  created_at: string
+  updated_at: string
+}
+
+export interface NipTranscriptEvidenceRef {
+  kind: string
+  claim_id?: string | null
+  item_id?: string | null
+  backtest_id?: string | null
+  run_id?: string | null
+  evidence_span?: string | null
+}
+
+export interface NipTranscriptBeat {
+  ordinal: number
+  title: string
+  script: string
+  evidence_refs: NipTranscriptEvidenceRef[]
+}
+
+/** Commentary transcript mirrored from fina-scraper (revamp §c.5). */
+export interface NipTranscript {
+  transcript_id: string
+  thesis_id: string
+  transcript_hash: string
+  summary: string | null
+  beats: NipTranscriptBeat[]
+  fina_import_path: string | null
+  created_at: string
+}
+
+export interface NipBacktestMetrics {
+  ic?: number | null
+  icir?: number | null
+  sharpe?: number | null
+  total_return?: number | null
+  max_drawdown?: number | null
+  feature_importances?: Record<string, number>
+}
+
+export interface NipBacktestDelta {
+  ic?: number | null
+  icir?: number | null
+  sharpe?: number | null
+  total_return?: number | null
+  max_drawdown?: number | null
+}
+
+export type BacktestVerdict = 'supported' | 'not_supported' | 'could_not_run'
+
+/** Recorded ablation: Run A (TA+macro) vs Run B (TA+macro+$narr_* tier2_llm). */
+export interface NipBacktestEvidence {
+  backtest_id: string
+  thesis_id: string
+  run_id_a: string
+  run_id_b: string
+  config_fingerprint: string | null
+  metrics_a: NipBacktestMetrics
+  metrics_b: NipBacktestMetrics
+  delta: NipBacktestDelta
+  verdict: BacktestVerdict
+  could_not_run_reason: string | null
+  recorded_at: string
+  source: string
 }
 
 export interface NipProviderStatus {

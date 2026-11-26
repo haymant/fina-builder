@@ -1719,8 +1719,9 @@ mod integration_tests {
     use chrono::Utc;
     use nip_domain::{
         VideoAnalysisMode, VideoAsset, VideoAssetLineage, VideoAssetUpstreamKind, VideoAudioCue,
-        VideoEpisode, VideoEpisodeStatus, VideoNarrative, VideoProject, VideoProjectStatus,
-        VideoReviewStatus, VideoScene, VideoShot, VideoShotStatus, VideoStoryboard,
+        VideoEpisode, VideoEpisodeOrigin, VideoEpisodeStatus, VideoNarrative, VideoProject,
+        VideoProjectStatus, VideoReviewStatus, VideoScene, VideoShot, VideoShotStatus,
+        VideoStoryboard,
     };
     use nip_store::Store;
     use tempfile::TempDir;
@@ -1753,6 +1754,10 @@ mod integration_tests {
                 as_of: None,
                 disclosure: None,
                 status: VideoEpisodeStatus::Draft,
+                thesis_id: None,
+                transcript_id: None,
+                transcript_hash: None,
+                origin: VideoEpisodeOrigin::default(),
                 created_at: now,
                 updated_at: now,
             })
@@ -1767,6 +1772,11 @@ mod integration_tests {
                 analysis_mode: VideoAnalysisMode::DeterministicCandidate,
                 review_status: VideoReviewStatus::Candidate,
                 derivation_run_id: None,
+                thesis_id: None,
+                thesis_basis: None,
+                as_of: None,
+                backtest_ids: Vec::new(),
+                transcript_hash: None,
                 created_at: now,
                 updated_at: now,
             })
@@ -1778,6 +1788,9 @@ mod integration_tests {
                 revision: 1,
                 schema_version: "v1".into(),
                 review_status: VideoReviewStatus::Draft,
+                thesis_id: None,
+                backtest_refs: Vec::new(),
+                source_transcript_hash: None,
                 created_at: now,
                 updated_at: now,
             })

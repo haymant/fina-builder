@@ -313,6 +313,8 @@ impl RigaBridgeClaimProvider {
                     provider_profile_id: extraction.provider_id.clone(),
                     reasoning_effort: reasoning_effort.clone(),
                     extracted_at: chrono::Utc::now(),
+                    extraction_tier: None,
+                    review_status: None,
                     evidence: vec![ClaimEvidence {
                         event_id: event.event_id.clone(),
                         quote: Some(quote),
@@ -442,6 +444,8 @@ mod tests {
                 ingested_at: "2026-11-18T01:00:01Z".parse().unwrap(),
             },
             revision_of: None,
+            extraction_tier: None,
+            review_status: None,
         }
     }
 

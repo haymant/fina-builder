@@ -208,7 +208,9 @@ export function buildTranscriptStoryboard(
     episode_id: episode.episode_id,
     revision: 1,
     summary: 'Deterministic commentary candidate grounded in one retained event transcript.',
-    thesis: 'Treat this source as evidence to review, not as independent confirmation.',
+    // Event explainer: there is no thesis here. A null thesis is honest;
+    // the old hardcoded disclaimer string pretended to be one.
+    thesis: null,
     analysis_mode: 'deterministic_candidate',
     review_status: 'candidate',
     derivation_run_id: null,

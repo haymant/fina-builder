@@ -8,7 +8,7 @@ import {
   Menubar, MenubarCheckboxItem, MenubarContent, MenubarItem, MenubarLabel, MenubarMenu, MenubarRadioGroup, MenubarRadioItem,
   MenubarSeparator, MenubarShortcut, MenubarTrigger, MenubarSub, MenubarSubContent, MenubarSubTrigger,
 } from '@/components/ui/menubar'
-import { accelLabel, matchAccel, TRADE_VIEWS, TRADING2_VIEWS, RD_VIEWS, RISKCUBE_VIEWS, type Location, type TradeView, type Trading2View, type RdView, type RiskCubeView } from '../navigation'
+import { accelLabel, matchAccel, NARRATIVE_VIEWS, TRADE_VIEWS, TRADING2_VIEWS, RD_VIEWS, RISKCUBE_VIEWS, type Location, type TradeView, type Trading2View, type RdView, type RiskCubeView } from '../navigation'
 
 const TRADE_ICONS: Record<TradeView, typeof Layers> = { blotter: BookOpenCheck, positions: Layers, recon: ArrowLeftRight, audit: History, import: FileUp, fixings: CalendarClock }
 const TRADING2_ICONS: Record<Trading2View, typeof BriefcaseBusiness> = { overview: BriefcaseBusiness, account: WalletCards, positions: ListChecks, orders: ClipboardList, news: Newspaper, watchlist: Star, macro: Activity, calendar: CalendarClock }
@@ -49,10 +49,11 @@ export function useMenuCommands(p: AppMenuBarProps): MenuCommand[] {
     const trading2 = TRADING2_VIEWS.map((v) => ({ id: `trading2:${v.id}`, group: 'Trading 2ⁿᵈ', label: `Trading 2ⁿᵈ: ${v.label}`, icon: TRADING2_ICONS[v.id], accel: v.accel, keywords: 'alpaca account positions orders broker', run: () => p.onNavigate({ kind: 'trading2', view: v.id }) }))
     const rd = RD_VIEWS.map((v) => ({ id: `rd:${v.id}`, group: 'R&D', label: `R&D: ${v.label}`, icon: RD_ICONS[v.id], accel: v.accel, keywords: 'research experiment run mlflow qlib model metrics input result blotter registry', run: () => p.onNavigate({ kind: 'rd', view: v.id }) }))
     const riskcube = RISKCUBE_VIEWS.map((v) => ({ id: `riskcube:${v.id}`, group: 'RiskCube', label: `RiskCube: ${v.label}`, icon: RISKCUBE_ICONS[v.id], accel: v.accel, keywords: 'OLAP scenario version sensitivity P&L cube partition', run: () => p.onNavigate({ kind: 'riskcube', view: v.id }) }))
-    const narrative = [
-      { id: 'narrative:overview', group: 'Narrative', label: 'Narrative Intelligence', icon: BrainCircuit, keywords: 'events evidence claims', run: () => p.onNavigate({ kind: 'narrative', view: 'overview' as const }) },
-      { id: 'narrative:claims', group: 'Narrative', label: 'Claim Explorer', icon: ShieldCheck, keywords: 'claims evidence provenance', run: () => p.onNavigate({ kind: 'narrative', view: 'claims' as const }) },
-    ]
+    const narrative = NARRATIVE_VIEWS.map((v) => ({
+      id: `narrative:${v.id}`, group: 'Narrative', label: v.id === 'overview' ? 'Narrative Intelligence' : `Narrative: ${v.label}`, icon: v.id === 'claims' ? ShieldCheck : BrainCircuit,
+      keywords: 'narrative events evidence claims radar timeline graph entities sources schedules thesis',
+      run: () => p.onNavigate({ kind: 'narrative', view: v.id }),
+    }))
     const video = [
       { id: 'video:projects', group: 'Video', label: 'Video Workspace', icon: Clapperboard, accel: 'Alt+V', keywords: 'video projects storyboard shots assets', run: () => p.onNavigate({ kind: 'video', view: 'projects' as const }) },
     ]

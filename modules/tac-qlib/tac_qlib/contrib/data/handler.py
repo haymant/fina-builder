@@ -109,8 +109,8 @@ def check_transform_proc(proc_l, fit_start_time, fit_end_time):
 def get_common_feature_fields(lake_root=None, market="US", timeframe="1d") -> List[str]:
     """Discover feature columns present in *every* feature file of the lake.
 
-    Walks the `family=ta|sp` partition layout (plus any legacy flat files).
-    TA and SP columns are disjoint by construction, so the common set is
+    Walks the `family=ta|sp|macro|narr` partition layout (plus any legacy flat files).
+    TA, SP, macro and narr columns are disjoint by construction, so the common set is
     computed per family (columns shared by all symbol files of that family),
     then the per-family results are unioned. Returns sorted field names
     (without the ``$`` prefix). Empty if no features are persisted.

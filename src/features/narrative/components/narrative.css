@@ -158,3 +158,20 @@ video.media-player { height:auto; max-height:180px; }
 .narrative-adapter-guide p { margin:6px 0 0; font-size:10px; color:var(--theme-muted); }
 .narrative-adapter-guide pre { margin:6px 0 0; overflow:auto; border-radius:6px; background:var(--theme-background); padding:6px 8px; font-family:var(--font-mono); font-size:9px; color:var(--theme-text); white-space:pre; }
 .narrative-adapter-guide code { font-family:var(--font-mono); font-size:9px; }
+
+/* --- F3 revamp: tables, badges, rail disclosure ------------------------- */
+.narrative-table { width:100%; border-collapse:collapse; font-size:11px; }
+.narrative-table th { padding:6px 8px; border-bottom:1px solid var(--theme-border); color:var(--theme-muted); font-size:9px; font-weight:600; text-align:left; text-transform:uppercase; letter-spacing:.04em; white-space:nowrap; }
+.narrative-table td { padding:7px 8px; border-bottom:1px solid var(--theme-border); color:var(--theme-text); vertical-align:top; white-space:nowrap; }
+.narrative-table td:last-child { white-space:normal; }
+.narrative-table tbody tr:hover { background:color-mix(in srgb,var(--theme-primary) 7%,transparent); }
+.narrative-table tr.is-selected { background:color-mix(in srgb,var(--theme-primary) 10%,transparent); }
+.narrative-chip.is-active { border-color:color-mix(in srgb,var(--theme-primary) 55%,var(--theme-border)); background:color-mix(in srgb,var(--theme-primary) 14%,transparent); color:var(--theme-text); }
+.narrative-chip.is-provisional { border-color:color-mix(in srgb,var(--theme-danger) 55%,var(--theme-border)); background:color-mix(in srgb,var(--theme-danger) 12%,transparent); color:var(--theme-danger); }
+.narrative-chip.is-verified { border-color:color-mix(in srgb,var(--theme-success) 55%,var(--theme-border)); background:color-mix(in srgb,var(--theme-success) 12%,transparent); color:var(--theme-success); }
+.evidence-card.is-selected { border-color:color-mix(in srgb,var(--theme-primary) 55%,var(--theme-border)); }
+.narrative-provider-disclosure { border:1px solid var(--theme-border); border-radius:9px; padding:10px 11px; }
+.narrative-provider-disclosure summary { cursor:pointer; }
+.narrative-provider-disclosure > section, .narrative-provider-disclosure > div { margin-top:10px; }
+.narrative-dialog-body { flex:1; overflow:auto; padding:14px 16px; }
+.narrative-dialog-body > * + * { margin-top:12px; }

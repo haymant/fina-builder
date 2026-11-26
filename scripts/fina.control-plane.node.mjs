@@ -57,8 +57,8 @@ ${overrides}
 `;
 }
 
-async function cli(args, cwd) {
-  return execFileAsync(process.execPath, [launcher, ...args], { cwd, env: process.env });
+async function cli(args, cwd, env = process.env) {
+  return execFileAsync(process.execPath, [launcher, ...args], { cwd, env });
 }
 
 test("parses the supported TOML subset and preserves arrays", () => {
@@ -92,6 +92,7 @@ test("derives profile-aware service paths without credentials", () => {
   assert.equal(env.NIP_DATA_DIR, join(root, ".fina", "ci-data", "nip"));
   assert.equal(env.NIP_LAKE_DIR, join(root, ".fina", "ci-data", "nip", "lake"));
   assert.equal(env.TAC_ENGINE_BIN, join(root, "modules", "target", "release", "tac-engine"));
+  assert.equal(env.FINA_SCRAPER_BIN, join(root, "modules", "target", "release", "fina-scraper"));
   assert.equal(env.TAC_QLIB_PYTHON_BIN, join(root, "modules", ".venv", "bin", "python"));
   assert.equal(Object.keys(env).some((key) => /KEY|SECRET|TOKEN|PASSWORD/i.test(key)), false);
 });
@@ -103,10 +104,12 @@ test("preserves explicit service path and binary overrides", () => {
   const env = buildRuntimeEnvironment(project, {
     TAC_LAKE_DIR: "/tmp/custom-lake",
     TAC_ENGINE_BIN: "/tmp/custom-tac-engine",
+    FINA_SCRAPER_BIN: "/tmp/custom-fina-scraper",
   });
   assert.equal(env.TAC_LAKE_DIR, "/tmp/custom-lake");
   assert.equal(env.FINA_PROFILE_TAC_LAKE_DIR, "");
   assert.equal(env.TAC_ENGINE_BIN, "/tmp/custom-tac-engine");
+  assert.equal(env.FINA_SCRAPER_BIN, "/tmp/custom-fina-scraper");
   assert.equal(env.NIP_DATA_DIR, join(root, ".fina", "data", "nip"));
 });
 
@@ -163,10 +166,28 @@ test("doctor --json returns a structured result for a checkout", async () => {
   await writeFile(join(root, "rust-toolchain.toml"), "[toolchain]\nchannel = \"stable\"\n");
   await writeFile(join(root, ".mcp.json"), "{}\n");
   await writeFile(join(root, "fina.toml"), configText());
-  const { stdout } = await cli(["--profile=development", "doctor", "--json"], root);
+  // Scrub any ambient FINA_SCRAPER_BIN so the "binary missing" expectation
+  // holds even when the developer's shell points at a built binary.
+  const scrubbedEnv = { ...process.env };
+  delete scrubbedEnv.FINA_SCRAPER_BIN;
+  // doctor exits 1 here (no binary in the temp checkout, and the test
+  // shell may lack cargo on PATH); capture stdout from the rejection.
+  let stdout;
+  try {
+    ({ stdout } = await cli(["--profile=development", "doctor", "--json"], root, scrubbedEnv));
+  } catch (error) {
+    stdout = error.stdout;
+  }
   const output = JSON.parse(stdout);
   assert.equal(output.profile, "development");
   assert.equal(typeof output.ok, "boolean");
   assert.ok(Array.isArray(output.checks));
+  // Revamp F1: doctor reports the fina-scraper sidecar binary and the lake
+  // dir. The temp checkout has no binary, so the check is present but failing.
+  const checkNames = output.checks.map((check) => check.name);
+  assert.ok(checkNames.includes("fina-scraper binary"));
+  assert.ok(checkNames.includes("NIP_LAKE_DIR"));
+  assert.equal(output.checks.find((check) => check.name === "fina-scraper binary").ok, false);
+  assert.equal(output.checks.find((check) => check.name === "NIP_LAKE_DIR").ok, true);
   await rm(root, { recursive: true, force: true });
 });

@@ -18,18 +18,20 @@ pub mod video_qa_adapter;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use nip_domain::{
     AgentClaimAnnotation, AgentEntityCandidate, AgentNarrativeAnalysis, AgentNarrativeGraphDraft,
-    CapabilitiesResponse, ClaimEvidence, ClaimRecord, EditorialCandidate, EditorialReviewAudit,
+    BacktestDelta, BacktestEvidenceRecord, BacktestMetrics, BacktestVerdict, CapabilitiesResponse,
+    ClaimEvidence, ClaimRecord, ClaimReviewStatus, EditorialCandidate, EditorialReviewAudit,
     EmbeddingIndexManifest, EtfMapping, EventRecord, EventSearchPage, EventSearchQuery,
-    ExtractionStatus, FeatureCapabilities, HealthResponse, LocalEventImport, NarrativeCluster,
-    NarrativeGraph, NarrativeGraphEdge, NarrativeGraphNode, NarrativeSignal,
+    ExtractionStatus, ExtractionTier, FeatureCapabilities, HealthResponse, LocalEventImport,
+    NarrativeCluster, NarrativeGraph, NarrativeGraphEdge, NarrativeGraphNode, NarrativeSignal,
     NarrativeSignalSnapshot, NarrativeSource, PodcastEpisode, PodcastEpisodePage,
     PodcastEpisodeState, PodcastRefreshReport, PodcastSubscription, PodcastSubscriptionState,
     PodcastTranscript, ProviderConsent, ProviderStatus, Readiness, ResourceStatus,
-    SemanticSearchResult, SourceId, SourceKind, SourceState, SourceUpdate, VideoAsset,
-    VideoAssetLineage, VideoAudioCue, VideoEpisode, VideoEvidenceRef, VideoExportManifest,
-    VideoJob, VideoNarrative, VideoProject, VideoQaReport, VideoScene, VideoShot, VideoStoryboard,
-    VideoTimeline, VideoVisualSpec, VideoWorkflow, API_VERSION, DOMAIN_SCHEMA_VERSION,
-    SERVICE_NAME,
+    SemanticSearchResult, SourceId, SourceKind, SourceState, SourceUpdate, ThesisBasis,
+    ThesisDirection, ThesisRecord, ThesisStatus, TranscriptBeat, TranscriptEvidenceRef,
+    TranscriptRecord, VideoAsset, VideoAssetLineage, VideoAudioCue, VideoEpisode, VideoEvidenceRef,
+    VideoExportManifest, VideoJob, VideoNarrative, VideoProject, VideoQaReport, VideoScene,
+    VideoShot, VideoStoryboard, VideoTimeline, VideoVisualSpec, VideoWorkflow, API_VERSION,
+    DOMAIN_SCHEMA_VERSION, SERVICE_NAME,
 };
 use nip_store::{
     SnapshotManifest, Store, StoreError, SubscriptionFetchStateUpdate, VideoProjectDeleteResult,
@@ -113,6 +115,8 @@ impl ClaimExtractionProvider for DeterministicFakeClaimProvider {
             provider_profile_id: None,
             reasoning_effort: None,
             extracted_at: Utc::now(),
+            extraction_tier: None,
+            review_status: None,
             evidence: vec![ClaimEvidence {
                 event_id: event.event_id.clone(),
                 quote: Some(claim_text),
@@ -1592,6 +1596,59 @@ impl NipService {
         Ok(self.store.claims()?)
     }
 
+    /// Record a thesis, or update the pipeline status of an existing one.
+    /// The provisional gate is enforced by the store.
+    pub fn save_thesis(&mut self, thesis: &ThesisRecord) -> Result<(), NipError> {
+        Ok(self.store.save_thesis(thesis)?)
+    }
+
+    pub fn thesis(&self, thesis_id: &str) -> Result<Option<ThesisRecord>, NipError> {
+        Ok(self.store.thesis(thesis_id)?)
+    }
+
+    /// All theses, newest decision `as_of` first.
+    pub fn theses(&self) -> Result<Vec<ThesisRecord>, NipError> {
+        Ok(self.store.theses()?)
+    }
+
+    /// Record a commentary transcript. Refused for provisional theses.
+    pub fn save_transcript(&mut self, transcript: &TranscriptRecord) -> Result<(), NipError> {
+        Ok(self.store.save_transcript(transcript)?)
+    }
+
+    pub fn transcript(&self, transcript_id: &str) -> Result<Option<TranscriptRecord>, NipError> {
+        Ok(self.store.transcript(transcript_id)?)
+    }
+
+    pub fn transcripts_for_thesis(
+        &self,
+        thesis_id: &str,
+    ) -> Result<Vec<TranscriptRecord>, NipError> {
+        Ok(self.store.transcripts_for_thesis(thesis_id)?)
+    }
+
+    /// Record one ablation result (Run A vs Run B) for a thesis.
+    pub fn save_backtest_evidence(
+        &mut self,
+        record: &BacktestEvidenceRecord,
+    ) -> Result<(), NipError> {
+        Ok(self.store.save_backtest_evidence(record)?)
+    }
+
+    pub fn backtest_evidence(
+        &self,
+        backtest_id: &str,
+    ) -> Result<Option<BacktestEvidenceRecord>, NipError> {
+        Ok(self.store.backtest_evidence(backtest_id)?)
+    }
+
+    pub fn backtest_evidence_for_thesis(
+        &self,
+        thesis_id: &str,
+    ) -> Result<Vec<BacktestEvidenceRecord>, NipError> {
+        Ok(self.store.backtest_evidence_for_thesis(thesis_id)?)
+    }
+
     pub fn save_etf_mapping(&mut self, mapping: &EtfMapping) -> Result<(), NipError> {
         self.store.save_etf_mapping(mapping)?;
         Ok(())
@@ -1928,6 +1985,8 @@ impl NipService {
                 provider_profile_id: None,
                 reasoning_effort: None,
                 extracted_at: Utc::now(),
+                extraction_tier: claim.extraction_tier,
+                review_status: claim.review_status,
                 evidence: vec![ClaimEvidence {
                     event_id: event.event_id.clone(),
                     quote: Some(claim.evidence_quote.clone()),
@@ -2694,7 +2753,7 @@ mod tests {
         let health = service.health();
         assert_eq!(health.service, "nip-engine");
         assert_eq!(health.readiness, Readiness::Ready);
-        assert_eq!(health.schema_version, 18);
+        assert_eq!(health.schema_version, 20);
 
         let capabilities = service.capabilities();
         assert!(capabilities.features.duckdb_store);
@@ -3031,6 +3090,8 @@ mod tests {
             source_updated_at: None,
             rights_statement: "User-owned synthetic fixture".into(),
             user_confirmed_rights: true,
+            extraction_tier: None,
+            review_status: None,
         };
         let event = service
             .import_local_event(&import, "2026-11-16T09:00:00Z".parse().unwrap())
@@ -3252,6 +3313,8 @@ mod tests {
             source_updated_at: None,
             rights_statement: "User-owned synthetic fixture".into(),
             user_confirmed_rights: true,
+            extraction_tier: None,
+            review_status: None,
         };
         let first = service.import_local_event(&import, captured_at).unwrap();
         let second = service.import_local_event(&import, captured_at).unwrap();
@@ -3303,6 +3366,8 @@ mod tests {
                         source_updated_at: None,
                         rights_statement: "synthetic fixture".into(),
                         user_confirmed_rights: true,
+                        extraction_tier: None,
+                        review_status: None,
                     },
                     "2026-11-17T00:00:00Z".parse().unwrap(),
                 )
@@ -3470,6 +3535,8 @@ mod tests {
                     source_updated_at: None,
                     rights_statement: "Synthetic fixture approved for local testing".into(),
                     user_confirmed_rights: true,
+                    extraction_tier: None,
+                    review_status: None,
                 },
                 "2026-11-17T09:00:00Z".parse().unwrap(),
             )
@@ -3707,5 +3774,218 @@ mod tests {
                     && message.contains("found 0 matches")
                     && message.contains("Copy the quote verbatim")
         ));
+    }
+
+    #[test]
+    fn f2_migration_applies_on_fresh_temp_data_dir_and_thesis_round_trips_via_service() {
+        let temp = tempdir().unwrap();
+        let mut service = service_at(temp.path());
+        assert_eq!(service.health().schema_version, 20);
+
+        let now: DateTime<Utc> = "2026-11-24T16:00:00Z".parse().unwrap();
+        let thesis = ThesisRecord {
+            thesis_id: "thesis-f2".into(),
+            title: "NVDA long 1-3 days on verified earnings strength".into(),
+            entity_symbol: Some("NVDA".into()),
+            direction: ThesisDirection::Long,
+            horizon: Some("1-3 days".into()),
+            as_of: now,
+            thesis_basis: ThesisBasis::LlmVerifiedOnly,
+            confidence_millis: Some(720),
+            reason: Some("Three llm_verified claims agree.".into()),
+            status: ThesisStatus::Draft,
+            invalidation_condition: Some("NVDA closes below the pre-earnings low.".into()),
+            what_would_change_mind: Some("A second source contradicting the beat.".into()),
+            claim_ids: vec!["claim-1".into()],
+            rejected_claims: vec![],
+            created_at: now,
+            updated_at: now,
+        };
+        service.save_thesis(&thesis).unwrap();
+        assert_eq!(service.thesis("thesis-f2").unwrap().unwrap(), thesis);
+        assert_eq!(service.theses().unwrap(), vec![thesis.clone()]);
+
+        let mut advanced = thesis.clone();
+        advanced.status = ThesisStatus::Backtested;
+        service.save_thesis(&advanced).unwrap();
+        assert_eq!(
+            service.thesis("thesis-f2").unwrap().unwrap().status,
+            ThesisStatus::Backtested
+        );
+
+        let backtest = BacktestEvidenceRecord {
+            backtest_id: "backtest-f2".into(),
+            thesis_id: "thesis-f2".into(),
+            run_id_a: "run-a".into(),
+            run_id_b: "run-b".into(),
+            config_fingerprint: None,
+            metrics_a: BacktestMetrics {
+                sharpe: Some(0.9),
+                ..Default::default()
+            },
+            metrics_b: BacktestMetrics {
+                sharpe: Some(1.7),
+                ..Default::default()
+            },
+            delta: BacktestDelta {
+                sharpe: Some(0.8),
+                ..Default::default()
+            },
+            verdict: BacktestVerdict::Supported,
+            could_not_run_reason: None,
+            recorded_at: now,
+            source: "fina-builder:tac-qlib-rd".into(),
+        };
+        service.save_backtest_evidence(&backtest).unwrap();
+        assert_eq!(
+            service.backtest_evidence("backtest-f2").unwrap().unwrap(),
+            backtest
+        );
+        assert_eq!(
+            service.backtest_evidence_for_thesis("thesis-f2").unwrap(),
+            vec![backtest]
+        );
+
+        let transcript = TranscriptRecord {
+            transcript_id: "transcript-f2".into(),
+            thesis_id: "thesis-f2".into(),
+            transcript_hash: "hash-f2".into(),
+            summary: Some("NVDA long, verified.".into()),
+            beats: vec![TranscriptBeat {
+                ordinal: 1,
+                title: "Hook".into(),
+                script: "NVDA beat expectations.".into(),
+                evidence_refs: vec![TranscriptEvidenceRef {
+                    kind: "claim".into(),
+                    claim_id: Some("claim-1".into()),
+                    item_id: None,
+                    backtest_id: None,
+                    run_id: None,
+                    evidence_span: None,
+                }],
+            }],
+            fina_import_path: None,
+            created_at: now,
+        };
+        service.save_transcript(&transcript).unwrap();
+        assert_eq!(
+            service.transcript("transcript-f2").unwrap().unwrap(),
+            transcript
+        );
+        assert_eq!(
+            service.transcripts_for_thesis("thesis-f2").unwrap(),
+            vec![transcript]
+        );
+
+        // Provisional theses are listed but can never advance.
+        let mut provisional = thesis.clone();
+        provisional.thesis_id = "thesis-f2-provisional".into();
+        provisional.thesis_basis = ThesisBasis::ProvisionalFastGlance;
+        provisional.status = ThesisStatus::Draft;
+        service.save_thesis(&provisional).unwrap();
+        let mut blocked = provisional.clone();
+        blocked.status = ThesisStatus::Published;
+        assert!(service.save_thesis(&blocked).is_err());
+        let blocked_transcript = TranscriptRecord {
+            transcript_id: "transcript-f2-provisional".into(),
+            thesis_id: "thesis-f2-provisional".into(),
+            transcript_hash: "hash-prov".into(),
+            summary: None,
+            beats: vec![],
+            fina_import_path: None,
+            created_at: now,
+        };
+        assert!(service.save_transcript(&blocked_transcript).is_err());
+        assert!(service
+            .transcript("transcript-f2-provisional")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn f2_import_local_event_stores_mirrored_tier_and_review_status() {
+        let temp = tempdir().unwrap();
+        let mut service = service_at(temp.path());
+        let import = LocalEventImport {
+            source_id: SourceId::new("fina-scraper").unwrap(),
+            source_display_name: "Alpaca news".into(),
+            source_native_id: Some("item-nvda-1".into()),
+            canonical_url: Some("https://fixture.test/nvda-1".into()),
+            title: Some("NVDA beats".into()),
+            content_text: "NVIDIA reported revenue above expectations.".into(),
+            published_at: None,
+            source_updated_at: None,
+            rights_statement: "User-owned synthetic fixture".into(),
+            user_confirmed_rights: true,
+            extraction_tier: Some(ExtractionTier::Tier2Llm),
+            review_status: Some(ClaimReviewStatus::LlmVerified),
+        };
+        let event = service
+            .import_local_event(&import, "2026-11-24T16:00:00Z".parse().unwrap())
+            .unwrap();
+        assert_eq!(event.extraction_tier, Some(ExtractionTier::Tier2Llm));
+        assert_eq!(event.review_status, Some(ClaimReviewStatus::LlmVerified));
+        let page = service
+            .search_events(&EventSearchQuery {
+                text: None,
+                source_id: None,
+                as_of: None,
+                cursor: None,
+                limit: 10,
+            })
+            .unwrap();
+        assert_eq!(page.events.len(), 1);
+        assert_eq!(
+            page.events[0].extraction_tier,
+            Some(ExtractionTier::Tier2Llm)
+        );
+    }
+
+    #[test]
+    fn f2_agent_graph_claims_keep_mirrored_tier_and_review_status() {
+        let temp = tempdir().unwrap();
+        let mut service = service_at(temp.path());
+        let event = import_bridge_event(&mut service);
+        let draft = AgentNarrativeGraphDraft {
+            event_id: event.event_id.as_str().to_owned(),
+            producer: "fina-scraper".into(),
+            model: "llm:fixture".into(),
+            prompt_version: "p1".into(),
+            narrative_title: "Policy stays restrictive".into(),
+            narrative_thesis: "Policy remains restrictive until inflation cools.".into(),
+            narrative_summary: "A verified claim about restrictive policy.".into(),
+            entities: vec![nip_domain::AgentEntityDraft {
+                canonical_name: "Federal Reserve".into(),
+                entity_type: "organization".into(),
+                surface_form: "inflation".into(),
+                evidence_quote: "until inflation cools".into(),
+            }],
+            claims: vec![nip_domain::AgentClaimDraft {
+                claim_text: "Policy remains restrictive until inflation cools.".into(),
+                claim_type: "fact".into(),
+                speaker_or_author: None,
+                confidence_millis: 900,
+                evidence_quote: "Policy remains restrictive until inflation cools.".into(),
+                entity_names: vec!["Federal Reserve".into()],
+                polarity: Some("neutral".into()),
+                horizon: None,
+                extraction_tier: Some(ExtractionTier::Tier2Llm),
+                review_status: Some(ClaimReviewStatus::LlmVerified),
+            }],
+        };
+        let (_analysis, claims, _graph) = service.build_agent_narrative_graph(draft).unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].extraction_tier, Some(ExtractionTier::Tier2Llm));
+        assert_eq!(
+            claims[0].review_status,
+            Some(ClaimReviewStatus::LlmVerified)
+        );
+        let stored = service.claims().unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].extraction_tier, Some(ExtractionTier::Tier2Llm));
+        assert_eq!(
+            stored[0].review_status,
+            Some(ClaimReviewStatus::LlmVerified)
+        );
     }
 }

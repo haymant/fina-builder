@@ -31,6 +31,9 @@ describe('riga trade-design tiles', () => {
     render(<RigaParameterImpactMatrixTile />)
     expect(await screen.findByText('Parameter Impact Matrix')).toBeTruthy()
     // a bumped parameter row from the transcript (awaited: the header shows while loading)
-    expect(await screen.findByText('knock in barrier')).toBeTruthy()
-  })
+    // The matrix data arrives after the 150ms debounced trade_design call, and the
+    // tornado tile's ECharts init blocks the jsdom event loop for ~1s, so the 1000ms
+    // default findByText budget is too tight on a loaded VM — wait longer instead.
+    expect(await screen.findByText('knock in barrier', {}, { timeout: 5000 })).toBeTruthy()
+  }, 10000)
 })

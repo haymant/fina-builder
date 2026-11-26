@@ -312,7 +312,7 @@ describe('storage adapters', () => {
     const next = r2.book(admin, { trade: phx() })
     expect(Number(next.tradeId.slice(3))).toBeGreaterThan(before.total)
     await s2.close()
-  })
+  }, 15000) // Seeding the 32-note Phoenix book takes 0.4–3.7s depending on CPU contention; the 5s default is too tight under parallel load.
 
   it('maps records to portable rows and rejects unknown URLs', () => {
     expect(toRow({ kind: 'audit', auditId: 'A', occurredAt: 't', actor: 'x', action: 'y', target: { id: 'T' } }, 1)[0]).toBe('tr_audit_event')

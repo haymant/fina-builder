@@ -31,6 +31,12 @@ export interface VideoEpisode {
   as_of: string | null
   disclosure: string | null
   status: VideoEpisodeStatus
+  /** Thesis this episode was started from, when origin is 'thesis'. */
+  thesis_id?: string | null
+  transcript_id?: string | null
+  transcript_hash?: string | null
+  /** 'thesis' = thesis video; 'event' = event explainer (publish-gated). */
+  origin?: 'thesis' | 'event'
   created_at: string
   updated_at: string
 }
@@ -45,7 +51,7 @@ export interface VideoSourceEvent {
 }
 
 export interface VideoEvidenceRef {
-  evidence_kind: 'event' | 'claim' | string
+  evidence_kind: 'event' | 'claim' | 'backtest' | 'thesis' | string
   evidence_id: string
   start_offset: number | null
   end_offset: number | null
@@ -58,9 +64,16 @@ export interface VideoNarrative {
   revision: number
   summary: string | null
   thesis: string | null
-  analysis_mode: 'human_authored' | 'deterministic_candidate' | 'model_assisted' | 'mixed'
+  analysis_mode: 'human_authored' | 'deterministic_candidate' | 'model_assisted' | 'mixed' | 'thesis_backtest'
   review_status: 'draft' | 'candidate' | 'in_review' | 'approved' | 'rejected'
   derivation_run_id: string | null
+  /** Thesis this narrative states, when thesis-led. */
+  thesis_id?: string | null
+  thesis_basis?: 'llm_verified_only' | 'provisional_fast_glance' | null
+  as_of?: string | null
+  /** Recorded backtests cited by this narrative. */
+  backtest_ids?: string[]
+  transcript_hash?: string | null
   created_at: string
   updated_at: string
 }
@@ -71,6 +84,11 @@ export interface VideoStoryboard {
   revision: number
   schema_version: string
   review_status: string
+  /** Thesis the storyboard was built from, when thesis-led. */
+  thesis_id?: string | null
+  /** Recorded backtests cited by backtest slides. */
+  backtest_refs?: string[]
+  source_transcript_hash?: string | null
   created_at: string
   updated_at: string
 }
@@ -129,6 +147,11 @@ export interface VideoStoryboardDocument {
   source_event_id: string
   audio_provider_state: 'not_configured' | 'ready'
   slides: VideoStoryboardSlide[]
+  /** Thesis the storyboard was built from, when thesis-led (revamp §d.2). */
+  thesis_id?: string | null
+  /** Recorded backtests cited by backtest slides. */
+  backtest_refs?: string[]
+  source_transcript_hash?: string | null
 }
 
 export interface VideoCapabilities {
@@ -139,12 +162,17 @@ export interface VideoCapabilities {
   generative_video: string
   tts: string
   tts_reason?: string
+  tts_engine?: string | null
+  tts_fallback?: string | null
   tts_detail?: {
     ready: boolean
     blockers: string[]
     next_actions: string[]
     comfyui_url?: string | null
     nodes_present?: boolean
+    tts_engine?: string | null
+    tts_fallback?: string | null
+    engines?: Array<{ id: string; label: string; available: boolean; blocker?: string | null }>
   }
   asr: string
   disclosure: string
@@ -195,7 +223,7 @@ export interface VideoWorkflow {
 }
 
 export type VideoVisualTemplate = 'evidence_card' | 'quote_card' | 'kinetic_text' | 'chart_transition' | 'caption' | 'scene_transition'
-export type VideoVisualSourceKind = 'event' | 'claim' | 'transcript_span' | 'signal_snapshot'
+export type VideoVisualSourceKind = 'event' | 'claim' | 'transcript_span' | 'signal_snapshot' | 'backtest' | 'thesis'
 
 export interface VideoChartPoint {
   label: string

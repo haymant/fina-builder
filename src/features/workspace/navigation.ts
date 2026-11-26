@@ -4,7 +4,7 @@ export type TradeView = 'blotter' | 'positions' | 'recon' | 'audit' | 'import' |
 export type Trading2View = 'overview' | 'account' | 'positions' | 'orders' | 'news' | 'watchlist' | 'macro' | 'calendar'
 export type RdView = 'dashboard' | 'input' | 'result' | 'model' | 'blotter' | 'dataset' | 'models'
 export type RiskCubeView = 'scenarios' | 'versions' | 'slice' | 'cubes'
-export type NarrativeView = 'overview' | 'claims'
+export type NarrativeView = 'overview' | 'radar' | 'timeline' | 'graph' | 'entities' | 'sources' | 'schedules' | 'themes' | 'editorial' | 'claims' | 'thesis'
 export type VideoView = 'projects' | 'workspace'
 
 export type Location =
@@ -31,6 +31,12 @@ export const RD_VIEWS: { id: RdView; label: string; accel?: string }[] = [
 ]
 export const RISKCUBE_VIEWS: { id: RiskCubeView; label: string; accel?: string }[] = [
   { id: 'scenarios', label: 'Scenarios' }, { id: 'versions', label: 'Versions' }, { id: 'slice', label: 'Slice' }, { id: 'cubes', label: 'Cubes', accel: 'Alt+Shift+C' },
+]
+export const NARRATIVE_VIEWS: { id: NarrativeView; label: string }[] = [
+  { id: 'overview', label: 'Overview' }, { id: 'radar', label: 'Radar' }, { id: 'timeline', label: 'Timeline' },
+  { id: 'graph', label: 'Graph' }, { id: 'entities', label: 'Entities' }, { id: 'sources', label: 'Sources' },
+  { id: 'schedules', label: 'Schedules' }, { id: 'claims', label: 'Claim Explorer' }, { id: 'themes', label: 'ETF Themes' },
+  { id: 'editorial', label: 'Editorial' }, { id: 'thesis', label: 'Thesis' },
 ]
 const KEY = 'fina.location.v1'
 export function loadLocation(): Location | null { try { return JSON.parse(localStorage.getItem(KEY) ?? 'null') as Location | null } catch { return null } }

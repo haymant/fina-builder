@@ -13,6 +13,20 @@ description: Process podcast audio and retained transcripts through fina-builder
 
 RIGA may be used by a coding agent as its available model/runtime, but it does not bypass NIP's source rights, transcript privacy, evidence validation, or provider-consent rules. Caller-declared external producer/model fields are not verified by NIP.
 
+## Thesis path vs event path
+
+Publisher transcripts and local ASR remain the **event** path:
+they produce retained events and ordinary claims. The
+**thesis** path starts from fina-scraper items — which may
+themselves be transcript-first podcast episodes — and runs
+through triage, LLM deep dive, the thesis gate, the ablation
+backtest, and `write_commentary_transcript` (see the
+`fina-thesis-review` and `fina-scraper-thesis-backtest-video`
+skills). The two paths converge at `import_local_event`, not
+before: a thesis video's transcript is imported as its
+primary source event input, and the thesis arrives with the
+transcript rather than being re-derived from it.
+
 ## Rights, privacy, and readiness
 
 - Process only sources with confirmed rights. NIP must not fetch an episode before the source's rights are confirmed.

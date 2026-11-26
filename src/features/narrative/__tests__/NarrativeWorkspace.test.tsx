@@ -464,10 +464,13 @@ describe('NarrativeWorkspace derived projections', () => {
     narrativeApiMock.findPodcastEpisodeEvent.mockResolvedValue({ event })
     const onNipEpisodeSelection = vi.fn()
     render(<NarrativeWorkspace onNipEpisodeSelection={onNipEpisodeSelection} />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Use in Notebook' }))
-    await waitFor(() => expect(onNipEpisodeSelection).toHaveBeenLastCalledWith({ ...episode, state: 'transcribed' }, event, { loading: false, error: null }))
+    // The workspace mounts a large tree and loads ~15 endpoints plus the episode
+    // page before the row appears (~1.5s on this VM, more under parallel load),
+    // past the 1000ms default findByRole budget — wait longer instead.
+    fireEvent.click(await screen.findByRole('button', { name: 'Use in Notebook' }, { timeout: 5000 }))
+    await waitFor(() => expect(onNipEpisodeSelection).toHaveBeenLastCalledWith({ ...episode, state: 'transcribed' }, event, { loading: false, error: null }), { timeout: 5000 })
     expect(narrativeApiMock.findPodcastEpisodeEvent).toHaveBeenCalledWith({ sourceId: episode.source_id, sourceNativeId: episode.source_native_id, canonicalUrl: episode.canonical_url })
-  })
+  }, 10000)
 
   it('rebuilds clusters and the graph after a background transcription commits', async () => {
     stubWorkspaceApi()

@@ -80,6 +80,7 @@ export default defineConfig({
       '/riskcube': { target: process.env.VITE_RISKCUBE_UPSTREAM ?? 'http://127.0.0.1:8797', changeOrigin: true, rewrite: (path) => path.replace(/^\/riskcube/, '') },
       '/trade-repo': { target: process.env.VITE_TRADE_REPO_UPSTREAM ?? 'http://127.0.0.1:8792', changeOrigin: true, rewrite: (path) => path.replace(/^\/trade-repo/, '') },
       '/nip': { target: process.env.VITE_NIP_UPSTREAM ?? 'http://127.0.0.1:8794', changeOrigin: true, rewrite: (path) => path.replace(/^\/nip/, '') },
+      '/fina-scraper': { target: process.env.VITE_FINA_SCRAPER_UPSTREAM ?? 'http://127.0.0.1:8798', changeOrigin: true, rewrite: (path) => path.replace(/^\/fina-scraper/, '') },
       '/nip-media': { target: process.env.VITE_NIP_UPSTREAM ?? 'http://127.0.0.1:8794', changeOrigin: true, rewrite: (path) => path.replace(/^\/nip-media/, '/media') },
       '/ws': { target: 'ws://127.0.0.1:8787', ws: true },
       '/health': { target: 'http://127.0.0.1:8787' },

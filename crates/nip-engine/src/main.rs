@@ -14,10 +14,11 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use nip_domain::{
-    AgentClaimDraft, AgentEntityDraft, AgentNarrativeGraphDraft, EtfMapping, EventSearchQuery,
-    LocalEventImport, PodcastEpisode, PodcastSubscriptionState, SourceId, SourceKind, SourceState,
-    SourceUpdate, VideoAsset, VideoAssetLineage, VideoAssetUpstreamKind, VideoAudioCue, VideoJob,
-    VideoNarrative, VideoTimeline, VideoVisualSourceKind, VideoVisualSpec, VideoWorkflow,
+    AgentClaimDraft, AgentEntityDraft, AgentNarrativeGraphDraft, BacktestEvidenceRecord,
+    EtfMapping, EventSearchQuery, LocalEventImport, PodcastEpisode, PodcastSubscriptionState,
+    SourceId, SourceKind, SourceState, SourceUpdate, ThesisRecord, TranscriptRecord, VideoAsset,
+    VideoAssetLineage, VideoAssetUpstreamKind, VideoAudioCue, VideoJob, VideoNarrative,
+    VideoTimeline, VideoVisualSourceKind, VideoVisualSpec, VideoWorkflow,
 };
 use nip_engine::{
     asr::{AsrError, AsrProvider, ComfyUiAsrProvider, DeterministicFakeAsrProvider},
@@ -30,7 +31,7 @@ use nip_engine::{
         DeterministicEmbeddingProvider, HttpEmbeddingProvider, QdrantIndex, DEFAULT_DIMENSIONS,
         DEFAULT_MODEL_ID, DEFAULT_MODEL_REVISION,
     },
-    tts::{self, ComfyTtsStatus},
+    tts::{self, ComfyTtsStatus, TtsEngine},
     NipConfig, NipError, NipService, PodcastSubscriptionRequest, SourceDraft,
 };
 use nip_store::{Store, StoreError};
@@ -490,19 +491,19 @@ impl NipMcp {
     fn video_capabilities(&self) -> CallToolResult {
         let tts = match self.service.lock() {
             Ok(service) => ComfyTtsStatus::collect(service.config()),
-            Err(_) => ComfyTtsStatus {
-                ready: false,
-                render_script: String::new(),
-                render_script_present: false,
-                comfyui_url: None,
-                server_reachable: false,
-                nodes_present: false,
-                python: String::new(),
-                python_present: false,
-                ffmpeg_present: false,
-                blockers: vec!["NIP service lock failed".into()],
-                next_actions: Vec::new(),
-            },
+            Err(_) => ComfyTtsStatus::unavailable("NIP service lock failed"),
+        };
+        let tts_engine = tts.tts_engine.clone();
+        let tts_fallback = tts.tts_fallback.clone();
+        let disclosure = if let Some(fallback) = &tts_fallback {
+            format!("Evidence and planning are available; narration uses {fallback}. No model-generated video is executed by this surface.")
+        } else if tts.ready {
+            "Evidence and planning are available; narration uses a loopback Qwen3-TTS model and no model-generated video is executed by this surface.".to_owned()
+        } else {
+            format!(
+                "Evidence and planning are available; narration is unavailable: {}. No model-generated video is executed by this surface.",
+                tts.blockers.first().cloned().unwrap_or_default()
+            )
         };
         structured_success(json!({
             "planning": "ready",
@@ -512,9 +513,11 @@ impl NipMcp {
             "generative_video": "not_configured",
             "tts": if tts.ready { "ready" } else { "not_configured" },
             "tts_reason": tts.blockers.first().cloned().unwrap_or_default(),
+            "tts_engine": tts_engine,
+            "tts_fallback": tts_fallback,
             "tts_detail": tts,
             "asr": "not_configured",
-            "disclosure": "Evidence and planning are available; narration uses a loopback Qwen3-TTS model and no model-generated video is executed by this surface."
+            "disclosure": disclosure
         }))
     }
 
@@ -731,12 +734,12 @@ impl NipMcp {
         Parameters(params): Parameters<VideoEpisodeSpecsParams>,
     ) -> CallToolResult {
         match self.service.lock() {
-            Ok(service) => match service
-                .video_episode_visual_specs(&params.project_id, &params.episode_id)
-            {
-                Ok(specs) => structured_success(serde_json::to_value(specs).unwrap()),
-                Err(error) => structured_error("storage_unavailable", error.to_string()),
-            },
+            Ok(service) => {
+                match service.video_episode_visual_specs(&params.project_id, &params.episode_id) {
+                    Ok(specs) => structured_success(serde_json::to_value(specs).unwrap()),
+                    Err(error) => structured_error("storage_unavailable", error.to_string()),
+                }
+            }
             Err(_) => structured_error("internal", "NIP service lock failed"),
         }
     }
@@ -1254,18 +1257,14 @@ impl NipMcp {
             Ok(service) => service,
             Err(_) => return structured_error("internal", "NIP service lock failed"),
         };
-        if params.narrate {
-            let status = ComfyTtsStatus::collect(service.config());
-            if !status.ready {
-                return structured_error(
-                    "capability_unavailable",
-                    format!(
-                        "local Qwen3-TTS is not ready: {}",
-                        status.blockers.join("; ")
-                    ),
-                );
-            }
-        }
+        // Narration was requested but no TTS engine is available: the job is
+        // still accepted and completes silent, with the reason recorded on the
+        // job (see spawn_video_linkzag_job). Never a fake `narrated` flag.
+        let tts_status = if params.narrate {
+            Some(ComfyTtsStatus::collect(service.config()))
+        } else {
+            None
+        };
         let mut typed_specs = Vec::with_capacity(references.len());
         for reference in &references {
             let spec = match service.video_visual_spec(reference.spec_id.trim(), reference.revision)
@@ -1311,7 +1310,11 @@ impl NipMcp {
         job.resource_estimate = Some(json!({
             "visual_specs": visual_specs,
             "capture_mode": capture_mode.as_str(),
-            "narrate": params.narrate
+            "narrate": params.narrate,
+            "tts_engine": tts_status.as_ref().and_then(|status| status.tts_engine.clone()),
+            "tts_unavailable_reason": tts_status.as_ref().and_then(|status| {
+                if status.ready { None } else { Some(status.blockers.join("; ")) }
+            }),
         }));
         if let Err(error) = service.save_video_job(&job) {
             return structured_error("video_job_rejected", error.to_string());
@@ -2670,6 +2673,142 @@ impl NipMcp {
     }
 
     #[tool(
+        description = "Record a thesis, or update the pipeline status of an existing one. A provisional_fast_glance thesis can never enter backtested or any later stage; the store enforces that gate."
+    )]
+    fn save_thesis(&self, Parameters(params): Parameters<ThesisParams>) -> CallToolResult {
+        let thesis = match parse_video_value::<ThesisRecord>(params.thesis) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_thesis(&thesis) {
+                Ok(()) => structured_success(serde_json::to_value(thesis).unwrap()),
+                Err(error) => structured_error("thesis_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "Read one recorded thesis by ID.")]
+    fn get_thesis(&self, Parameters(params): Parameters<ThesisIdParams>) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.thesis(&params.thesis_id) {
+                Ok(Some(thesis)) => structured_success(serde_json::to_value(thesis).unwrap()),
+                Ok(None) => structured_error("not_found", "Thesis was not found"),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "List recorded theses, newest decision as_of first.")]
+    fn list_theses(&self) -> CallToolResult {
+        match self
+            .service
+            .lock()
+            .map_err(|_| "NIP service lock failed".to_owned())
+            .and_then(|service| service.theses().map_err(|error| error.to_string()))
+        {
+            Ok(theses) => structured_success(serde_json::to_value(theses).unwrap()),
+            Err(error) => structured_error("storage_unavailable", error),
+        }
+    }
+
+    #[tool(
+        description = "Record a commentary transcript for a thesis. Refused for provisional_fast_glance theses: a transcript for a provisional thesis does not exist."
+    )]
+    fn save_transcript(&self, Parameters(params): Parameters<TranscriptParams>) -> CallToolResult {
+        let transcript = match parse_video_value::<TranscriptRecord>(params.transcript) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_transcript(&transcript) {
+                Ok(()) => structured_success(serde_json::to_value(transcript).unwrap()),
+                Err(error) => structured_error("transcript_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "Read one recorded commentary transcript by ID.")]
+    fn get_transcript(&self, Parameters(params): Parameters<TranscriptIdParams>) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.transcript(&params.transcript_id) {
+                Ok(Some(transcript)) => {
+                    structured_success(serde_json::to_value(transcript).unwrap())
+                }
+                Ok(None) => structured_error("not_found", "Transcript was not found"),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "List recorded commentary transcripts for one thesis.")]
+    fn list_transcripts(
+        &self,
+        Parameters(params): Parameters<TranscriptsForThesisParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.transcripts_for_thesis(&params.thesis_id) {
+                Ok(transcripts) => structured_success(serde_json::to_value(transcripts).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Record one ablation result (Run A vs Run B) for a thesis. The two run IDs must differ, and a could_not_run verdict must record exactly why."
+    )]
+    fn save_backtest_evidence(
+        &self,
+        Parameters(params): Parameters<BacktestEvidenceParams>,
+    ) -> CallToolResult {
+        let record = match parse_video_value::<BacktestEvidenceRecord>(params.backtest_evidence) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.save_backtest_evidence(&record) {
+                Ok(()) => structured_success(serde_json::to_value(record).unwrap()),
+                Err(error) => structured_error("backtest_evidence_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "Read one recorded backtest-evidence record by ID.")]
+    fn get_backtest_evidence(
+        &self,
+        Parameters(params): Parameters<BacktestEvidenceIdParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.backtest_evidence(&params.backtest_id) {
+                Ok(Some(record)) => structured_success(serde_json::to_value(record).unwrap()),
+                Ok(None) => structured_error("not_found", "Backtest evidence was not found"),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "List recorded backtest evidence for one thesis, newest first.")]
+    fn list_backtest_evidence(
+        &self,
+        Parameters(params): Parameters<BacktestEvidenceForThesisParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.backtest_evidence_for_thesis(&params.thesis_id) {
+                Ok(records) => structured_success(serde_json::to_value(records).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
         description = "List versioned manual narrative-to-ETF research mappings. Ticker validity and market-data coverage are reported separately; no performance claim is produced."
     )]
     fn list_etf_mappings(&self) -> CallToolResult {
@@ -2929,20 +3068,56 @@ impl NipMcp {
                     evidence_quote: entity.evidence_quote,
                 })
                 .collect(),
-            claims: params
+            claims: match params
                 .claims
                 .into_iter()
-                .map(|claim| AgentClaimDraft {
-                    claim_text: claim.claim_text,
-                    claim_type: claim.claim_type,
-                    speaker_or_author: claim.speaker_or_author,
-                    confidence_millis: claim.confidence_millis,
-                    evidence_quote: claim.evidence_quote,
-                    entity_names: claim.entity_names,
-                    polarity: claim.polarity,
-                    horizon: claim.horizon,
+                .map(|claim| {
+                    let extraction_tier = match claim.tier.as_deref() {
+                        None => None,
+                        Some(value) => match nip_domain::ExtractionTier::parse(value) {
+                            Some(tier) => Some(tier),
+                            None => {
+                                return Err(CallToolResult::structured_error(json!({
+                                    "code": "invalid_request",
+                                    "message": format!(
+                                        "claims[].tier is not a known extraction tier: {value}"
+                                    ),
+                                })));
+                            }
+                        },
+                    };
+                    let review_status = match claim.review_status.as_deref() {
+                        None => None,
+                        Some(value) => match nip_domain::ClaimReviewStatus::parse(value) {
+                            Some(status) => Some(status),
+                            None => {
+                                return Err(CallToolResult::structured_error(json!({
+                                    "code": "invalid_request",
+                                    "message": format!(
+                                        "claims[].review_status is not a known review status: {value}"
+                                    ),
+                                })));
+                            }
+                        },
+                    };
+                    Ok(AgentClaimDraft {
+                        claim_text: claim.claim_text,
+                        claim_type: claim.claim_type,
+                        speaker_or_author: claim.speaker_or_author,
+                        confidence_millis: claim.confidence_millis,
+                        evidence_quote: claim.evidence_quote,
+                        entity_names: claim.entity_names,
+                        polarity: claim.polarity,
+                        horizon: claim.horizon,
+                        extraction_tier,
+                        review_status,
+                    })
                 })
-                .collect(),
+                .collect::<Result<Vec<_>, CallToolResult>>()
+            {
+                Ok(claims) => claims,
+                Err(result) => return result,
+            },
         };
         match self.service.lock() {
             Ok(mut service) => match service.build_agent_narrative_graph(draft) {
@@ -3020,6 +3195,54 @@ struct EventIdParams {
 #[serde(deny_unknown_fields)]
 struct CandidateParams {
     candidate_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ThesisParams {
+    thesis: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ThesisIdParams {
+    thesis_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct TranscriptParams {
+    transcript: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct TranscriptIdParams {
+    transcript_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct TranscriptsForThesisParams {
+    thesis_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct BacktestEvidenceParams {
+    backtest_evidence: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct BacktestEvidenceIdParams {
+    backtest_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct BacktestEvidenceForThesisParams {
+    thesis_id: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -3164,6 +3387,12 @@ struct AgentClaimGraphParams {
     entity_names: Vec<String>,
     polarity: Option<String>,
     horizon: Option<String>,
+    /// Mirror of the producer's extraction tier (`tier` in the
+    /// fina-import JSON: tier0_lexicon | tier1_onnx | tier2_llm).
+    tier: Option<String>,
+    /// Mirror of the producer's review status (fast_glance |
+    /// llm_verified | llm_corrected | llm_rejected | llm_disputed).
+    review_status: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -3254,9 +3483,10 @@ fn linkzag_asset_lineage(asset: &VideoAsset, specs: &[VideoVisualSpec]) -> Vec<V
             let upstream_kind = match source.source_kind {
                 VideoVisualSourceKind::Event => VideoAssetUpstreamKind::Event,
                 VideoVisualSourceKind::Claim => VideoAssetUpstreamKind::Claim,
-                VideoVisualSourceKind::TranscriptSpan | VideoVisualSourceKind::SignalSnapshot => {
-                    continue
-                }
+                VideoVisualSourceKind::TranscriptSpan
+                | VideoVisualSourceKind::SignalSnapshot
+                | VideoVisualSourceKind::Backtest
+                | VideoVisualSourceKind::Thesis => continue,
             };
             if lineage.iter().any(|record| {
                 record.upstream_kind == upstream_kind
@@ -3455,14 +3685,30 @@ fn spawn_video_linkzag_job(
             .get("narrate")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let mut narration_clips: Vec<(Option<PathBuf>, u64)> = Vec::new();
+        // The engine is selected once up front. When narration was requested
+        // but no engine is available the job completes silent instead of
+        // failing: the reason is recorded on the output manifest.
+        let mut effective_narrate = narrate;
+        let mut narration_engine: Option<TtsEngine> = None;
+        let mut tts_unavailable_reason: Option<String> = None;
         if narrate {
-            let status = ComfyTtsStatus::collect(&config);
-            if !status.ready {
-                update(&|job| { job.status = "failed".into(); job.safe_error_message = Some(format!("capability_unavailable: local Qwen3-TTS is not ready: {}", status.blockers.join("; "))); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
-                cleanup_cancel();
-                return;
+            let (engine, probes) = tts::select_engine(&config);
+            match engine {
+                Some(selected) => narration_engine = Some(selected),
+                None => {
+                    tts_unavailable_reason = Some(
+                        probes
+                            .iter()
+                            .filter_map(|probe| probe.blocker.clone())
+                            .collect::<Vec<_>>()
+                            .join("; "),
+                    );
+                    effective_narrate = false;
+                }
             }
+        }
+        let mut narration_clips: Vec<(Option<PathBuf>, u64)> = Vec::new();
+        if effective_narrate {
             let narration_texts: Vec<Option<String>> = match service.lock() {
                 Ok(service) => specs
                     .iter()
@@ -3508,14 +3754,17 @@ fn spawn_video_linkzag_job(
                     Some(text) => {
                         update(&|job| job.progress_millis = 2_000 + ((index as u32 * 23_000) / specs.len() as u32));
                         let output = narration_root.join(format!("slide-{:02}.flac", index + 1));
-                        if let Err(error) = tts::synthesize(&config, text, &output, &cancel) {
-                            if cancel.load(Ordering::SeqCst) {
-                                update(&|job| { job.status = "cancelled".into(); job.cancellation_requested = true; job.safe_error_message = Some(error.clone()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
-                            } else {
-                                update(&|job| { job.status = "failed".into(); job.safe_error_message = Some(format!("capability_unavailable: {error}")); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+                        match tts::synthesize(&config, text, &output, &cancel) {
+                            Ok(engine) => narration_engine = Some(engine),
+                            Err(error) => {
+                                if cancel.load(Ordering::SeqCst) {
+                                    update(&|job| { job.status = "cancelled".into(); job.cancellation_requested = true; job.safe_error_message = Some(error.clone()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+                                } else {
+                                    update(&|job| { job.status = "failed".into(); job.safe_error_message = Some(format!("capability_unavailable: {error}")); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
+                                }
+                                cleanup_cancel();
+                                return;
                             }
-                            cleanup_cancel();
-                            return;
                         }
                         narration_clips.push((Some(output), duration_ms));
                     }
@@ -3523,8 +3772,8 @@ fn spawn_video_linkzag_job(
                 }
             }
         }
-        let render_base: u32 = if narrate { 25_000 } else { 5_000 };
-        let render_span: u32 = if narrate { 55_000 } else { 70_000 };
+        let render_base: u32 = if effective_narrate { 25_000 } else { 5_000 };
+        let render_span: u32 = if effective_narrate { 55_000 } else { 70_000 };
         let mut segments = Vec::with_capacity(specs.len());
         for (index, spec) in specs.iter().enumerate() {
             update(&|job| job.progress_millis = render_base + ((index as u32 * render_span) / specs.len() as u32));
@@ -3557,7 +3806,7 @@ fn spawn_video_linkzag_job(
                 return;
             }
         };
-        let narration = if narrate {
+        let narration = if effective_narrate {
             update(&|job| job.progress_millis = 90_000);
             if narration_clips.len() != segments.len() {
                 update(&|job| { job.status = "failed".into(); job.safe_error_message = Some("narration did not match the rendered slide count".into()); job.finished_at = Some(Utc::now()); job.progress_millis = 100_000; });
@@ -3569,6 +3818,7 @@ fn spawn_video_linkzag_job(
                 &narration_clips,
                 &media_root,
                 &job_id,
+                narration_engine.map(|engine| engine.provider_id()).unwrap_or("qwen3_tts_local"),
                 &cancel,
             ) {
                 Ok(narration) => Some(narration),
@@ -3624,13 +3874,12 @@ fn spawn_video_linkzag_job(
             duration_ms,
             provider: "linkzag".into(),
             workflow_id: Some("linkzag.commentary.v1".into()),
-            model: narrate.then(|| "Qwen3-TTS-12Hz-0.6B-CustomVoice".to_owned()),
-            reproducibility: if narrate {
-                "seeded_nondeterministic".into()
-            } else if capture_mode == "full" {
-                "deterministic".into()
-            } else {
-                "nondeterministic".into()
+            model: narration_engine.map(|engine| engine.model_name().to_owned()),
+            reproducibility: match narration_engine {
+                Some(TtsEngine::ComfyQwen3) => "seeded_nondeterministic".into(),
+                Some(_) => "deterministic".into(),
+                None if capture_mode == "full" => "deterministic".into(),
+                None => "nondeterministic".into(),
             },
             capability_state: "ready".into(),
             license_state: "internal_review_only".into(),
@@ -3670,6 +3919,8 @@ fn spawn_video_linkzag_job(
                             "chart_renderer": if capture_mode == "flash" { "canvas" } else { "svg" },
                             "deterministic": capture_mode == "full" && narration.is_none(),
                             "narrated": narration.is_some(),
+                            "tts_engine": narration_engine.map(|engine| engine.id()),
+                            "tts_unavailable_reason": tts_unavailable_reason,
                             "narration": narration.as_ref().map(|value| value.manifest.clone()),
                             "renderer_revision": segments.first().map(|segment| segment.renderer_revision.clone()),
                             "scene_checksums": segments.iter().map(|segment| segment.scene_checksum.clone()).collect::<Vec<_>>(),

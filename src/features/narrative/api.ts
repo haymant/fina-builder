@@ -1,6 +1,6 @@
 import { nip } from '../../api/nipTransport'
 import { toSnakeKeys } from '../../api/keyCase'
-import type { NipAgentNarrativeGraphImport, NipAsrStatus, NipCapabilities, NipClaim, NipComfyWorkspaceReport, NipEditorialCandidate, NipEditorialReviewAudit, NipEpisodeEventLookup, NipEmbeddingManifest, NipEpisodePage, NipEtfMapping, NipEventSearchPage, NipExtractionStatus, NipHealth, NipMediaArtifact, NipNarrativeCluster, NipNarrativeGraph, NipNarrativeSignalSnapshot, NipPodcastEpisode, NipPodcastSubscription, NipProviderConsent, NipProviderStatus, NipResourceStatus, NipSemanticResult, NipSource, NipSourceKind, NipSourceState, NipTranscriptionJob } from './types'
+import type { NipAgentNarrativeGraphImport, NipAsrStatus, NipBacktestEvidence, NipCapabilities, NipClaim, NipComfyWorkspaceReport, NipEditorialCandidate, NipEditorialReviewAudit, NipEpisodeEventLookup, NipEmbeddingManifest, NipEpisodePage, NipEtfMapping, NipEventSearchPage, NipExtractionStatus, NipHealth, NipMediaArtifact, NipNarrativeCluster, NipNarrativeGraph, NipNarrativeSignalSnapshot, NipPodcastEpisode, NipPodcastSubscription, NipProviderConsent, NipProviderStatus, NipResourceStatus, NipSemanticResult, NipSource, NipSourceKind, NipSourceState, NipThesis, NipTranscript, NipTranscriptionJob } from './types'
 
 function fromTransport<T>(value: unknown): T {
   return toSnakeKeys(value) as T
@@ -118,4 +118,17 @@ export const narrativeApi = {
   saveEtfMapping: (mapping: NipEtfMapping) => nip.callTool('save_etf_mapping', { mapping }).then((value) => fromTransport<NipEtfMapping>(value)),
   listEditorialCandidates: () => nip.callTool('list_editorial_candidates').then((value) => fromTransport<NipEditorialCandidate[]>(value)),
   reviewEditorialCandidate: (args: { candidateId: string; status: string; reason: string; reviewer: string; reviewedAt: string }) => nip.callTool('review_editorial_candidate', { candidate_id: args.candidateId, status: args.status, reason: args.reason, reviewer: args.reviewer, reviewed_at: args.reviewedAt }),
+  // Thesis / transcript / backtest records (revamp F2 §c.5). The store
+  // enforces the provisional gate: save_thesis refuses a
+  // provisional_fast_glance thesis past draft, and save_transcript refuses
+  // to write a transcript for one. The UI mirrors the gate; it never is the gate.
+  listTheses: () => nip.callTool('list_theses').then((value) => fromTransport<NipThesis[]>(value)),
+  getThesis: (thesisId: string) => nip.callTool('get_thesis', { thesis_id: thesisId }).then((value) => fromTransport<NipThesis>(value)),
+  saveThesis: (thesis: NipThesis) => nip.callTool('save_thesis', { thesis }).then((value) => fromTransport<NipThesis>(value)),
+  listTranscripts: (thesisId: string) => nip.callTool('list_transcripts', { thesis_id: thesisId }).then((value) => fromTransport<NipTranscript[]>(value)),
+  getTranscript: (transcriptId: string) => nip.callTool('get_transcript', { transcript_id: transcriptId }).then((value) => fromTransport<NipTranscript>(value)),
+  saveTranscript: (transcript: NipTranscript) => nip.callTool('save_transcript', { transcript }).then((value) => fromTransport<NipTranscript>(value)),
+  listBacktestEvidence: (thesisId: string) => nip.callTool('list_backtest_evidence', { thesis_id: thesisId }).then((value) => fromTransport<NipBacktestEvidence[]>(value)),
+  getBacktestEvidence: (backtestId: string) => nip.callTool('get_backtest_evidence', { backtest_id: backtestId }).then((value) => fromTransport<NipBacktestEvidence>(value)),
+  saveBacktestEvidence: (evidence: NipBacktestEvidence) => nip.callTool('save_backtest_evidence', { backtest: evidence }).then((value) => fromTransport<NipBacktestEvidence>(value)),
 }

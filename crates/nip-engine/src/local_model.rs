@@ -248,6 +248,8 @@ fn build_claim_records(
                 provider_profile_id: Some("direct-local".into()),
                 reasoning_effort: None,
                 extracted_at: Utc::now(),
+                extraction_tier: None,
+                review_status: None,
                 evidence: vec![ClaimEvidence {
                     event_id: event.event_id.clone(),
                     quote: Some(quote),
@@ -293,6 +295,8 @@ mod tests {
                 ingested_at: now,
             },
             revision_of: None,
+            extraction_tier: None,
+            review_status: None,
         }
     }
 

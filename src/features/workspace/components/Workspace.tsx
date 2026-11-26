@@ -3,7 +3,7 @@ import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, use
 import { invoke } from '@tauri-apps/api/core'
 import { AppMenuBar } from './AppMenuBar'
 import { ConfirmDialog } from './ConfirmDialog'
-import { loadLocation, saveLocation, splitPrimary, TRADE_VIEWS, TRADING2_VIEWS, RD_VIEWS, RISKCUBE_VIEWS, type Location, type TradeView } from '../navigation'
+import { loadLocation, saveLocation, splitPrimary, NARRATIVE_VIEWS, TRADE_VIEWS, TRADING2_VIEWS, RD_VIEWS, RISKCUBE_VIEWS, type Location, type TradeView } from '../navigation'
 import { Responsive, WidthProvider, type Layout, type ResponsiveLayouts } from 'react-grid-layout/legacy'
 import { useExplorerStore, BUILT_IN_DASHBOARDS } from '../../../store/explorerStore'
 import { TILE_CATALOG, tileFromType } from '../../dashboards/catalog'
@@ -114,7 +114,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
     if (l?.kind === 'trading2' && TRADING2_VIEWS.some((v) => v.id === l.view)) return l
     if (l?.kind === 'rd' && RD_VIEWS.some((v) => v.id === l.view)) return l
     if (l?.kind === 'riskcube' && RISKCUBE_VIEWS.some((v) => v.id === l.view)) return l
-    if (l?.kind === 'narrative' && (l.view === 'overview' || l.view === 'claims')) return l
+    if (l?.kind === 'narrative' && NARRATIVE_VIEWS.some((v) => v.id === l.view)) return l
     if (l?.kind === 'video' && (l.view === 'projects' || l.view === 'workspace') && [l.projectId, l.episodeId, l.claimId].every((value) => value === undefined || (typeof value === 'string' && value.trim().length > 0))) return l
     return { kind: 'dashboard', dashboardId: selectedId }
   })
@@ -281,7 +281,7 @@ export function Workspace({ onOpenLocalAgent }: { onOpenLocalAgent: () => void }
         <main className="workspace-canvas relative min-h-0 flex-1 overflow-auto p-5">
           <ViewLoadBoundary label="Narrative Intelligence">
             <Suspense fallback={<SlowModuleNotice label="Narrative Intelligence" />}>
-              <NarrativeWorkspace view={location.view} onOpenVideoEpisode={(projectId, episodeId, claimId) => navigate({ kind: 'video', view: 'workspace', projectId, episodeId, claimId })} onNipEpisodeSelection={(episode, event, status) => setNipNotebookSelection({ episode, event, loading: status?.loading ?? false, error: status?.error ?? null })} importRefreshSignal={nipImportRefresh} />
+              <NarrativeWorkspace view={location.view} onOpenVideoEpisode={(projectId, episodeId, claimId) => navigate({ kind: 'video', view: 'workspace', projectId, episodeId, claimId })} onNipEpisodeSelection={(episode, event, status) => setNipNotebookSelection({ episode, event, loading: status?.loading ?? false, error: status?.error ?? null })} importRefreshSignal={nipImportRefresh} onOpenThesisVideo={(_thesisId, _transcriptId) => navigate({ kind: 'video', view: 'workspace' })} />
             </Suspense>
           </ViewLoadBoundary>
         </main>

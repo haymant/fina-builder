@@ -15,7 +15,9 @@ function usage() {
   console.log(`Usage: npm run dev:http [-- --cpu|--cuda] [--public]
 
 Builds riga-mcp and tac-engine, then starts the HTTP engines, the trade-repo MCP server,
-the qlib book/R&D bridges, the RiskCube bridge, and Vite.
+the qlib book/R&D bridges, the RiskCube bridge, the fina-scraper MCP server
+(Streamable HTTP on 127.0.0.1:8798, when its binary is built and NIP_LAKE_DIR
+is set), and Vite.
   --cpu      Build the portable CPU backend (default)
   --cuda     Build riga-mcp with its CUDA GPU feature; requires CUDA 13+ and an NVIDIA GPU
   --public   Bind Vite to 0.0.0.0 for a forwarded/public preview; backends stay on loopback
@@ -184,6 +186,7 @@ async function assertPortsFree() {
     ['book MCP bridge', Number(process.env.BOOK_MCP_HTTP_PORT ?? 8795)],
     ['R&D MCP bridge', Number(process.env.RD_MCP_HTTP_PORT ?? 8796)],
     ['RiskCube MCP bridge', Number(process.env.RISKCUBE_MCP_HTTP_PORT ?? 8797)],
+    ['fina-scraper MCP', Number(process.env.FINA_SCRAPER_HTTP_PORT ?? 8798)],
   ]) {
     if (await portReachable(port)) {
       throw new Error(`${label} port ${port} is already in use. Stop the existing process or free the port before starting dev:http.`)
@@ -319,6 +322,10 @@ async function main() {
   const book = startService('book MCP bridge', process.execPath, [resolve(root, 'scripts/book-mcp-http.mjs')], { optional: true })
   const rd = startService('R&D MCP bridge', process.execPath, [resolve(root, 'scripts/rd-mcp-http.mjs')], { optional: true })
   const riskcube = startService('RiskCube MCP bridge', process.execPath, [resolve(root, 'scripts/riskcube-mcp-http.mjs')], { optional: true })
+  // Revamp F1: fina-scraper sidecar, Streamable HTTP on 127.0.0.1:8798.
+  // Optional, like the qlib bridges: the launcher exits 1 when the binary
+  // is missing or NIP_LAKE_DIR is unset, and dev:http keeps going without it.
+  const finaScraper = startService('fina-scraper MCP', process.execPath, [resolve(root, 'scripts/fina-scraper-mcp-http.mjs')], { optional: true })
   const viteArgs = [resolve(root, 'node_modules/vite/bin/vite.js'), '--host', options.publicHost ? '0.0.0.0' : '127.0.0.1']
   startService('Vite', process.execPath, viteArgs)
 
@@ -329,15 +336,16 @@ async function main() {
     waitForPort('Vite', 5173),
   ])
   const qlibTimeout = Number(process.env.QLIB_MCP_STARTUP_TIMEOUT_MS ?? 300_000)
-  const [bookReady, rdReady, riskcubeReady] = await Promise.all([
+  const [bookReady, rdReady, riskcubeReady, finaScraperReady] = await Promise.all([
     waitForOptionalPort('book MCP bridge', Number(process.env.BOOK_MCP_HTTP_PORT ?? 8795), book, qlibTimeout),
     waitForOptionalPort('R&D MCP bridge', Number(process.env.RD_MCP_HTTP_PORT ?? 8796), rd, qlibTimeout),
     waitForOptionalPort('RiskCube MCP bridge', Number(process.env.RISKCUBE_MCP_HTTP_PORT ?? 8797), riskcube),
+    waitForOptionalPort('fina-scraper MCP', Number(process.env.FINA_SCRAPER_HTTP_PORT ?? 8798), finaScraper),
   ])
   if (stopping) return
   console.log(`\n[dev:http] Ready: http://127.0.0.1:5173/${options.publicHost ? ' (Vite bound to 0.0.0.0)' : ''}`)
   console.log('[dev:http] Ready: trade-repo MCP at http://127.0.0.1:8792/mcp.')
-  console.log(`[dev:http] Optional bridges: book ${bookReady ? 'ready' : 'unavailable'}, R&D ${rdReady ? 'ready' : 'unavailable'}, RiskCube ${riskcubeReady ? 'ready' : 'unavailable'}.`)
+  console.log(`[dev:http] Optional bridges: book ${bookReady ? 'ready' : 'unavailable'}, R&D ${rdReady ? 'ready' : 'unavailable'}, RiskCube ${riskcubeReady ? 'ready' : 'unavailable'}, fina-scraper ${finaScraperReady ? 'ready' : 'unavailable'}.`)
   console.log('[dev:http] Press Ctrl+C to stop all services.')
 }
 

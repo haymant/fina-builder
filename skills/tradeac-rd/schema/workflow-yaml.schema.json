@@ -422,7 +422,7 @@
               "type": "string",
               "maxLength": 8192,
               "default": "$open,$high,$low,$close,$volume",
-              "description": "Comma-separated Qlib feature field expressions, commonly prefixed with '$'. Each referenced lake field must exist for the selected market, symbols, and dates. TA/SP candidates must be computed and persisted in the lake before preflight/run if not already present."
+              "description": "Comma-separated Qlib feature field expressions, commonly prefixed with '$'. Each referenced lake field must exist for the selected market, symbols, and dates. TA/SP candidates must be computed and persisted in the lake before preflight/run if not already present. Narrative features use $narr_* fields (schema narr-v1, family=narr, ingested via tac-engine ingest_narrative_features)."
             },
             "infer_processors": {
               "type": [

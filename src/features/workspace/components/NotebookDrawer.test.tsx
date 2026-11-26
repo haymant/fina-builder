@@ -51,7 +51,7 @@ describe('NotebookDrawer R&D context', () => {
     expect(copiedContext).toContain('ema_{n}')
     expect(copiedContext).toContain(DEFAULT_RD_WORKFLOW_YAML.trim())
     expect(copiedContext).toContain(RD_WORKFLOW_SCHEMA_TEXT.trim())
-  })
+  }, 15000) // Heavy drawer (large raw skill/schema imports, jsdom role queries ~1s each under load); the 5s default is too tight on a loaded VM.
 })
 
 describe('NotebookDrawer NIP transcript context', () => {
