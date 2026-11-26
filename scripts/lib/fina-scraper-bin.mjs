@@ -30,9 +30,9 @@ function exeName() {
   return process.platform === "win32" ? "fina-scraper.exe" : "fina-scraper";
 }
 
-export function finaScraperCandidates(projectRoot = root) {
+export function finaScraperCandidates(projectRoot = root, env = process.env) {
   const exe = exeName();
-  const sharedTarget = process.env.CARGO_TARGET_DIR ?? resolve(projectRoot, "modules", "target");
+  const sharedTarget = env.CARGO_TARGET_DIR ?? resolve(projectRoot, "modules", "target");
   return [
     resolve(sharedTarget, "release", exe),
     resolve(sharedTarget, "debug", exe),
@@ -45,24 +45,24 @@ export function finaScraperCandidates(projectRoot = root) {
  * Return the resolved binary path, or `null` when no candidate exists.
  * Throws when `FINA_SCRAPER_BIN` is set but does not point at a file.
  */
-export function resolveFinaScraperBin(projectRoot = root) {
-  const explicit = process.env[FINA_SCRAPER_BIN_ENV]?.trim();
+export function resolveFinaScraperBin(projectRoot = root, env = process.env) {
+  const explicit = env[FINA_SCRAPER_BIN_ENV]?.trim();
   if (explicit) {
     if (existsSync(explicit)) return explicit;
     throw new Error(
       `${FINA_SCRAPER_BIN_ENV} is set but does not point at a file: ${explicit}`,
     );
   }
-  return finaScraperCandidates(projectRoot).find((candidate) => existsSync(candidate)) ?? null;
+  return finaScraperCandidates(projectRoot, env).find((candidate) => existsSync(candidate)) ?? null;
 }
 
 /** Human-readable remediation for a missing binary. */
-export function finaScraperBinMissingHelp(projectRoot = root) {
+export function finaScraperBinMissingHelp(projectRoot = root, env = process.env) {
   return (
     "fina-scraper binary not found. Build the submodule " +
-    "(`cargo build --release --manifest-path modules/fina-scraper/Cargo.toml`, " +
-    "with CARGO_TARGET_DIR=modules/target to land in the shared target dir) " +
+    "(`npm run mcp:sidecar:fina-scraper`, or cargo build --release with " +
+    "CARGO_TARGET_DIR=modules/target to land in the shared target dir) " +
     `or set ${FINA_SCRAPER_BIN_ENV} to a built binary. ` +
-    `Looked in: ${finaScraperCandidates(projectRoot).join(", ")}`
+    `Looked in: ${finaScraperCandidates(projectRoot, env).join(", ")}`
   );
 }

@@ -18,6 +18,13 @@
  */
 import { spawn } from "node:child_process";
 import { finaScraperBinMissingHelp, resolveFinaScraperBin } from "./lib/fina-scraper-bin.mjs";
+import { applyRuntimeEnvironment } from "./lib/runtime-env.mjs";
+
+// Work both when started through `fina desktop`/`dev:http` and when the UI
+// tells the user to run `npm run mcp:http:fina-scraper` by hand: load the
+// checkout `.env`, then fill the profile default for NIP_LAKE_DIR when the
+// host did not set one.
+applyRuntimeEnvironment();
 
 function fail(message) {
   console.error(`fina-scraper: ${message}`);
@@ -35,8 +42,8 @@ if (!binary) fail(finaScraperBinMissingHelp());
 const lakeDir = process.env.NIP_LAKE_DIR?.trim();
 if (!lakeDir || lakeDir.startsWith("${")) {
   fail(
-    "NIP_LAKE_DIR is not set. Set it in the host environment to the narrative lake root " +
-      "(e.g. the profile default .fina/data/nip/lake); it is never hardcoded in repo config.",
+    "NIP_LAKE_DIR is not set. Run this launcher from the Fina checkout (so fina.toml/.env can " +
+      "resolve the profile default .fina/data/nip/lake), or set NIP_LAKE_DIR in the host environment.",
   );
 }
 

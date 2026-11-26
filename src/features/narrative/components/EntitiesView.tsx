@@ -94,7 +94,7 @@ export function EntitiesView({ asOf, initialEntity }: { asOf: string | null; ini
   return (
     <div className="space-y-3" data-testid="entities-view">
       <PanelCard title="Entities" subtitle={`Per-entity mentions, sentiment and tiers · 24h window ending at as_of ${asOf ?? 'not set'}`} collapsible={false} bodyClassName="narrative-card-body" actions={<Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</Button>}>
-        {error ? <div className="narrative-empty" data-testid="entities-empty"><p>{error}</p><span>Start the fina-scraper sidecar (npm run mcp:http:fina-scraper) and refresh.</span></div>
+        {error ? <div className="narrative-empty" data-testid="entities-empty"><p>{error}</p><span>Restart desktop with <code>node scripts/fina.mjs desktop</code>, or run <code>npm run mcp:http:fina-scraper</code> in browser mode, then refresh.</span></div>
         : loading && !entities.length ? <p className="mt-2 text-[11px] text-muted">Loading entities…</p>
         : entities.length ? (
           <div className="overflow-x-auto">

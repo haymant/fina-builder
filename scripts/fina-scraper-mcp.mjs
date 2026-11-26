@@ -14,6 +14,11 @@
  */
 import { spawn } from "node:child_process";
 import { finaScraperBinMissingHelp, resolveFinaScraperBin } from "./lib/fina-scraper-bin.mjs";
+import { applyRuntimeEnvironment } from "./lib/runtime-env.mjs";
+
+// `.mcp.json` may pass an unexpanded `${NIP_LAKE_DIR}`; resolve the checkout
+// `.env` and profile default before requiring the lake directory.
+applyRuntimeEnvironment();
 
 function fail(message) {
   console.error(`fina-scraper: ${message}`);
@@ -31,8 +36,8 @@ if (!binary) fail(finaScraperBinMissingHelp());
 const lakeDir = process.env.NIP_LAKE_DIR?.trim();
 if (!lakeDir || lakeDir.startsWith("${")) {
   fail(
-    "NIP_LAKE_DIR is not set. Set it in the host environment to the narrative lake root " +
-      "(e.g. the profile default .fina/data/nip/lake); it is never hardcoded in repo config.",
+    "NIP_LAKE_DIR is not set. Run this launcher from the Fina checkout (so fina.toml/.env can " +
+      "resolve the profile default .fina/data/nip/lake), or set NIP_LAKE_DIR in the host environment.",
   );
 }
 

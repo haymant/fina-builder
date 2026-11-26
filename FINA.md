@@ -83,11 +83,13 @@ not required in the shell just to run `config` or `doctor`.
 | `TAC_ENGINE_BIN` | Profile-resolved release `tac-engine` binary path; an explicit caller value is preserved. | `/home/ubuntu/fina-builder/modules/target/release/tac-engine` |
 | `TAC_QLIB_PYTHON_BIN` | Shared qlib interpreter path under `modules/.venv`; `uv` creates it when preparing runtimes. | `/home/ubuntu/fina-builder/modules/.venv/bin/python` |
 
-All paths are absolute and derived from `fina.toml` plus the selected profile data root;
-credentials are not loaded or copied by the launcher. These variables are the stable boundary
-for scripts and sidecars. Explicit caller values for service paths and binary overrides are
-preserved. Provider settings such as `VITE_*` remain service-specific because they are not
-filesystem or runtime path contracts.
+All paths are absolute and derived from `fina.toml` plus the selected profile data root.
+For configured commands the launcher also reads the checkout `.env` and the two module
+`.env` files, matching `dev_http` and the desktop host; explicit shell values win, and
+credentials are never printed or copied into checked-in config. These variables are the
+stable boundary for scripts and sidecars. Explicit caller values for service paths and
+binary overrides are preserved. Provider settings such as `VITE_*` remain service-specific
+because they are not filesystem or runtime path contracts.
 
 ### Full E2E verification in a Manus sandbox
 
@@ -149,6 +151,10 @@ credentials in the host environment or an ignored user-owned `.env` file only.
 - `TAC_ENGINE_BIN` is the supported override for a prebuilt `tac-engine` executable. It is not
   needed for normal development: `dev_http` builds the locked release binary and resolves it
   from `CARGO_TARGET_DIR`, while the desktop sidecar scripts use the same override if present.
+- `FINA_SCRAPER_BIN` is the equivalent optional override for `fina-scraper`. Normal development
+  resolves it from the shared target directory; `npm run mcp:sidecar:fina-scraper` (also run by
+  `runtime:prepare`) builds it there. The launcher falls back to the submodule target for an
+  existing checkout and never pins a path that does not exist.
 - `TRADEAC_ENGINE_BIN` is not used by this repository and should not be set. For the qlib
   services, the relevant optional interpreter override is `TAC_QLIB_PYTHON_BIN`; otherwise the
   wrapper uses the locked `uv` environment at `modules/.venv`.
@@ -157,8 +163,10 @@ credentials in the host environment or an ignored user-owned `.env` file only.
 reads the checkout `.env` and the two module `.env` files (shell values win), so browser mode
 receives the same Alpaca credentials and database configuration as the Tauri sidecar. The
 control-plane lake root (`FINA_DATA_ROOT/lake`) is used unless the checkout `.env` sets
-`TAC_LAKE_DIR`; an explicit shell export always wins. The control-plane launcher itself still
-does not load or copy secrets.
+`TAC_LAKE_DIR`; an explicit shell export always wins. Configured control-plane commands read
+the same local files, and the sidecar wrappers (`npm run mcp:http:fina-scraper`,
+`scripts/fina-scraper-mcp.mjs`) resolve the profile default for `NIP_LAKE_DIR` when neither
+the shell nor `.env` supplies it.
 
 For a predictable full local stack, the following override is valid but optional:
 

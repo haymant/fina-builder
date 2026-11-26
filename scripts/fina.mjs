@@ -12,6 +12,9 @@ import { spawn } from "node:child_process";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { finaScraperCandidates } from "./lib/fina-scraper-bin.mjs";
+import { loadLocalEnv } from "./lib/local-env.mjs";
+
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const START_DIR = process.cwd();
 const CONFIG_NAME = "fina.toml";
@@ -180,11 +183,11 @@ export function buildRuntimeEnvironment(project, baseEnv = process.env) {
     NIP_DATA_DIR: baseEnv.NIP_DATA_DIR ?? project.paths.nip_data,
     NIP_LAKE_DIR: baseEnv.NIP_LAKE_DIR ?? project.paths.nip_lake,
     TAC_ENGINE_BIN: baseEnv.TAC_ENGINE_BIN ?? join(releaseTarget, process.platform === "win32" ? "tac-engine.exe" : "tac-engine"),
-    // fina-scraper sidecar (revamp F1): explicit host override wins, else the
-    // shared workspace target dir — the same rule as TAC_ENGINE_BIN. The
-    // submodule build lands here when built with CARGO_TARGET_DIR set to the
-    // shared target dir; a sibling checkout can be used via FINA_SCRAPER_BIN.
-    FINA_SCRAPER_BIN: baseEnv.FINA_SCRAPER_BIN ?? join(releaseTarget, process.platform === "win32" ? "fina-scraper.exe" : "fina-scraper"),
+    // fina-scraper sidecar (revamp F1): only forward an explicit override.
+    // The launcher resolves an unset value at spawn time, after
+    // `runtime:prepare` has built the shared target binary, instead of
+    // pinning a path that may not exist yet.
+    ...(baseEnv.FINA_SCRAPER_BIN ? { FINA_SCRAPER_BIN: baseEnv.FINA_SCRAPER_BIN } : {}),
     TAC_QLIB_PYTHON_BIN: baseEnv.TAC_QLIB_PYTHON_BIN ?? join(project.paths.modules, ".venv", process.platform === "win32" ? "Scripts" : "bin", "python"),
   };
 }
@@ -297,21 +300,25 @@ export async function doctor(project, json) {
   // check is required: without it `tools/list` cannot show the scraper
   // tools. Remediation is in the detail when the binary is missing.
   const runtimeEnv = buildRuntimeEnvironment(project);
-  const scraperBin = runtimeEnv.FINA_SCRAPER_BIN;
+  const scraperCandidates = finaScraperCandidates(project.root, process.env);
+  const scraperBin = process.env.FINA_SCRAPER_BIN?.trim()
+    || scraperCandidates.find((candidate) => existsSync(candidate))
+    || null;
+  const scraperReady = Boolean(scraperBin && existsSync(scraperBin));
   add(
     "fina-scraper binary",
-    existsSync(scraperBin),
-    existsSync(scraperBin)
+    scraperReady,
+    scraperReady
       ? scraperBin
-      : `${scraperBin} (not found; build modules/fina-scraper with cargo build --release, or set FINA_SCRAPER_BIN)`,
+      : `${scraperBin ?? scraperCandidates[0]} (not found; run npm run mcp:sidecar:fina-scraper, or set FINA_SCRAPER_BIN)`,
   );
   const nipLake = runtimeEnv.NIP_LAKE_DIR;
   add(
     "NIP_LAKE_DIR",
     Boolean(nipLake),
     nipLake
-      ? `${nipLake}${process.env.NIP_LAKE_DIR ? " (host env)" : " (profile default)"}`
-      : "not set (set NIP_LAKE_DIR in the host env, or rely on the profile default)",
+      ? `${nipLake}${process.env.NIP_LAKE_DIR ? " (host env or .env)" : " (profile default)"}`
+      : "not set (set NIP_LAKE_DIR in the host env or .env, or rely on the profile default)",
   );
 
   const failed = checks.filter((check) => check.required && !check.ok);
@@ -353,6 +360,11 @@ export async function main(argv = process.argv.slice(2), start = START_DIR) {
   const invocation = parseInvocation(argv);
   const [requested = "help", ...args] = invocation.args;
   const project = loadProject(start, invocation.profile);
+  // Read the same ignored `.env` files as the desktop host and dev:http so
+  // configured commands (and doctor) see the user's lake/database/provider
+  // settings. Explicit shell exports still win; `loadLocalEnv` only lets a
+  // local file replace the profile lake default it injected itself.
+  const loadedEnv = loadLocalEnv(project.root, process.env);
   const command = requested === "run" ? args.shift() : requested;
   if (!command || command === "help" || command === "--help" || command === "-h") {
     printHelp();
@@ -366,6 +378,7 @@ export async function main(argv = process.argv.slice(2), start = START_DIR) {
   if (command === "run" || !project.config.commands?.[command]) {
     throw new Error(command === "run" ? "run requires a command name; use `fina help`" : `unknown command '${command}'; use 'fina help'`);
   }
+  if (loadedEnv.length > 0) console.error(`fina: loaded local environment from ${loadedEnv.join(", ")}`);
   return runConfigured(project, command, args);
 }
 

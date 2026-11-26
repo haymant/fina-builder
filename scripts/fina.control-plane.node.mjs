@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, realpath } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 
 import { atLeast, buildRuntimeEnvironment, findRoot, parseToml, resolveProject, selectProfile } from "./fina.mjs";
 import { loadLocalEnv } from "./dev-http.mjs";
+import { applyRuntimeEnvironment } from "./lib/runtime-env.mjs";
 
 const execFileAsync = promisify(execFile);
 const launcher = join(process.cwd(), "scripts", "fina.mjs");
@@ -92,7 +93,10 @@ test("derives profile-aware service paths without credentials", () => {
   assert.equal(env.NIP_DATA_DIR, join(root, ".fina", "ci-data", "nip"));
   assert.equal(env.NIP_LAKE_DIR, join(root, ".fina", "ci-data", "nip", "lake"));
   assert.equal(env.TAC_ENGINE_BIN, join(root, "modules", "target", "release", "tac-engine"));
-  assert.equal(env.FINA_SCRAPER_BIN, join(root, "modules", "target", "release", "fina-scraper"));
+  // The scraper binary is resolved at spawn time unless the caller supplied
+  // an explicit override, so a not-yet-built checkout still gets the
+  // resolver's actionable "binary missing" message instead of a stale path.
+  assert.equal(env.FINA_SCRAPER_BIN, undefined);
   assert.equal(env.TAC_QLIB_PYTHON_BIN, join(root, "modules", ".venv", "bin", "python"));
   assert.equal(Object.keys(env).some((key) => /KEY|SECRET|TOKEN|PASSWORD/i.test(key)), false);
 });
@@ -136,6 +140,22 @@ test("dev-http dotenv replaces only the launcher profile lake default", async ()
   await rm(root, { recursive: true, force: true });
 });
 
+test("sidecar runtime environment loads .env and fills profile defaults", async () => {
+  const root = await mkdtemp(join("/tmp", "fina-sidecar-env-"));
+  await writeFile(join(root, "fina.toml"), configText());
+  await writeFile(join(root, ".env"), "NIP_LAKE_DIR=/env/nip-lake\nAPCA_API_KEY_ID=local-test-key\n");
+  // `.mcp.json` can pass an unexpanded placeholder; the launcher treats it as
+  // unset so the checkout `.env`/profile default still wins.
+  const env = { NIP_LAKE_DIR: "${NIP_LAKE_DIR}" };
+  const { project } = applyRuntimeEnvironment(root, env);
+  assert.ok(project);
+  assert.equal(env.NIP_LAKE_DIR, "/env/nip-lake");
+  assert.equal(env.TAC_LAKE_DIR, join(root, ".fina", "data", "lake"));
+  assert.equal(env.FINA_DATA_ROOT, join(root, ".fina", "data"));
+  assert.equal(env.APCA_API_KEY_ID, "local-test-key");
+  await rm(root, { recursive: true, force: true });
+});
+
 test("compares toolchain versions numerically", () => {
   assert.equal(atLeast("22.19.0", "22.19.0"), true);
   assert.equal(atLeast("22.20.0", "22.19.0"), true);
@@ -148,7 +168,9 @@ test("config --json reports the selected profile and resolved data root", async 
   const { stdout } = await cli(["--profile", "ci", "config", "--json"], root);
   const output = JSON.parse(stdout);
   assert.equal(output._resolved.profile, "ci");
-  assert.equal(output._resolved.data_root, join(root, ".fina", "ci-data"));
+  // macOS resolves /tmp to /private/tmp when a child process starts with that
+  // cwd, so compare against the canonical root.
+  assert.equal(output._resolved.data_root, join(await realpath(root), ".fina", "ci-data"));
   await rm(root, { recursive: true, force: true });
 });
 

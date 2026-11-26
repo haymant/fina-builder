@@ -27,9 +27,11 @@ function requireFile(path, label) {
 function main() {
   requireFile(resolve(root, 'modules/riga-flow/Cargo.toml'), 'riga-flow submodule')
   requireFile(resolve(root, 'modules/tac-engine/Cargo.toml'), 'tac-engine submodule')
+  requireFile(resolve(root, 'modules/fina-scraper/Cargo.toml'), 'fina-scraper submodule')
   run('bash', ['scripts/build-engine-sidecar.sh', 'riga-flow', 'riga-mcp', 'RIGA_MCP_BIN'], 'Build riga-mcp')
   run('bash', ['scripts/build-engine-sidecar.sh', 'tac-engine', 'tac-engine', 'TAC_ENGINE_BIN'], 'Build tac-engine')
   run('bash', ['scripts/build-nip-sidecar.sh'], 'Build nip-engine')
+  run('bash', ['scripts/build-engine-sidecar.sh', 'fina-scraper', 'fina-scraper', 'FINA_SCRAPER_BIN'], 'Build fina-scraper')
 
   run('uv', ['sync', '--project', resolve(modulesDir, 'tac-qlib'), '--locked'], 'Synchronize shared TAC Python environment', {
     env: { ...env, UV_PROJECT_ENVIRONMENT: sharedPythonEnv },

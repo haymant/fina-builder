@@ -4,8 +4,9 @@ import { createConnection } from 'node:net'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { applyRuntimeEnvironment } from './lib/runtime-env.mjs'
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const serverUrl = `http://127.0.0.1:${process.env.TRADE_REPO_HTTP_PORT ?? 8792}/health`
 const children = []
 let stopping = false
 
@@ -83,7 +84,7 @@ function shutdown(code) {
   })
 }
 
-async function waitForRepository(server) {
+async function waitForRepository(server, serverUrl) {
   const deadline = Date.now() + 30_000
   while (Date.now() < deadline) {
     if (stopping || server.exitCode !== null) throw new Error('Trade repository exited before becoming ready.')
@@ -99,9 +100,16 @@ async function waitForRepository(server) {
 }
 
 async function main() {
+  // `tauri dev` can be launched directly (or by the Tauri CLI), so apply the
+  // control-plane defaults here too: `.env` first, then profile paths such as
+  // NIP_LAKE_DIR for the optional fina-scraper sidecar.
+  const { loaded } = applyRuntimeEnvironment(root)
+  if (loaded.length > 0) console.log(`[dev] Loaded local environment from ${loaded.join(', ')}.`)
+
   const node = process.execPath
+  const serverUrl = `http://127.0.0.1:${process.env.TRADE_REPO_HTTP_PORT ?? 8792}/health`
   const repository = spawnChild('trade-repo MCP', node, ['scripts/trade-repo-mcp-http.mjs', '--seed'])
-  await waitForRepository(repository)
+  await waitForRepository(repository, serverUrl)
   console.log(`[dev] trade-repo MCP ready at ${serverUrl.replace('/health', '/mcp')}`)
 
   // Revamp F1: fina-scraper sidecar (Streamable HTTP on 127.0.0.1:8798),

@@ -115,7 +115,7 @@ export function RadarView({
             ) : <p className="mt-2 text-[11px] text-muted">No weekly signals for the last completed UTC week.</p>}
           </div>
         ) : error ? (
-          <div className="narrative-empty" data-testid="radar-empty"><p>{error}</p><span>Start the fina-scraper sidecar (npm run mcp:http:fina-scraper) and refresh. NIP views keep working without it.</span></div>
+          <div className="narrative-empty" data-testid="radar-empty"><p>{error}</p><span>Restart desktop with <code>node scripts/fina.mjs desktop</code>, or run <code>npm run mcp:http:fina-scraper</code> in browser mode, then refresh. NIP views keep working without it.</span></div>
         ) : loading && !rows.length ? (
           <p className="mt-3 text-[11px] text-muted">Loading hourly entity signals…</p>
         ) : rows.length ? (
