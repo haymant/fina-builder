@@ -2,10 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { Search, Star } from 'lucide-react'
 import { Button } from '../../../components/ui/button'
 import { PanelCard } from '../../shared/components/PanelCard'
-import { narrativeApi } from '../api'
-import { scraperApi } from '../scraperApi'
 import type { NipPodcastSubscription, NipEvent, NipSource, NipSourceKind } from '../types'
 import type { ScraperSchedule, ScraperSiteInventory, ScraperStorage } from '../scraperTypes'
+import { narrativeRepository } from '../repository'
 import { AddSourceForm, EditSourceForm, KIND_LABELS, kindLabel } from './SourceRegistry'
 
 const FAVOURITES_KEY = 'fina.nip.source-favourites.v1'
@@ -25,17 +24,6 @@ function saveFavourites(favourites: Set<string>): void {
   } catch {
     /* favourites are a convenience; losing them is not an error */
   }
-}
-
-/**
- * Which side owns the fetch for this row (revamp §c.2, decision §f.1):
- * two registries behind one view, never merged. A source with a recorded
- * fina-scraper schedule is scraper-managed; everything else — including
- * NIP-only kinds such as local documents and company-meeting uploads —
- * is nip-engine-managed.
- */
-export function managedBy(source: NipSource, scraperSiteIds: Set<string>): 'fina-scraper' | 'nip-engine' {
-  return scraperSiteIds.has(source.source_id) ? 'fina-scraper' : 'nip-engine'
 }
 
 const KIND_GROUPS: Array<{ id: string; label: string; kinds: NipSourceKind[] }> = [
@@ -69,6 +57,7 @@ export function SourcesView({
   events,
   scraperSchedules,
   siteInventory = [],
+  scraperInventoryKnown = false,
   storage = null,
   onChanged,
 }: {
@@ -77,6 +66,7 @@ export function SourcesView({
   events: NipEvent[]
   scraperSchedules: ScraperSchedule[]
   siteInventory?: ScraperSiteInventory[]
+  scraperInventoryKnown?: boolean
   storage?: ScraperStorage | null
   onChanged: () => Promise<void>
 }) {
@@ -96,7 +86,13 @@ export function SourcesView({
     () => new Map(subscriptions.map((subscription) => [subscription.source_id, subscription])),
     [subscriptions],
   )
-  const scraperSiteIds = useMemo(() => new Set(scraperSchedules.map((schedule) => schedule.site_id)), [scraperSchedules])
+  const ownershipBySource = useMemo(() => new Map(sources.map((source) => [source.source_id, narrativeRepository.resolveSourceOwnership({
+    source,
+    subscription: subscriptionBySource.get(source.source_id),
+    scraperSchedules,
+    scraperSites: siteInventory,
+    scraperInventoryKnown,
+  })])), [sources, subscriptionBySource, scraperSchedules, siteInventory, scraperInventoryKnown])
   const scheduleBySite = useMemo(
     () => new Map(scraperSchedules.map((schedule) => [schedule.site_id, schedule])),
     [scraperSchedules],
@@ -162,16 +158,20 @@ export function SourcesView({
     setMessage(null)
     setMessageIsError(false)
     try {
+      const actions = ids.flatMap((id) => {
+        const ownership = ownershipBySource.get(id)
+        if (!ownership) return []
+        const siteId = ownership.owner === 'fina-scraper' ? ownership.reference.siteId : null
+        return [{ ownership, schedule: siteId ? scheduleBySite.get(siteId) ?? null : null }]
+      })
       if (action === 'run-now') {
-        const scraperIds = ids.filter((id) => scraperSiteIds.has(id))
-        const skipped = ids.length - scraperIds.length
-        if (!scraperIds.length) throw new Error('None of the selected sources is managed by fina-scraper. NIP-owned sources refresh on the desktop timer — see the Schedules view.')
-        await scraperApi.scrapeTrigger({ sites: scraperIds })
-        setMessage(`Scrape triggered for ${scraperIds.length} scraper-managed source${scraperIds.length === 1 ? '' : 's'}${skipped ? ` · ${skipped} NIP-owned source${skipped === 1 ? '' : 's'} skipped (desktop timer owns those)` : ''}.`)
+        const result = await narrativeRepository.triggerSourcesNow(actions.map(({ ownership }) => ownership))
+        if (!result.triggeredSiteIds.length) throw new Error('None of the selected sources is verified as scraper-owned. NIP-owned sources refresh on the desktop timer; unresolved source IDs are read-only.')
+        setMessage(`Scrape triggered for ${result.triggeredSiteIds.length} fina-scraper site${result.triggeredSiteIds.length === 1 ? '' : 's'}${result.skippedNipSourceCount ? ` · ${result.skippedNipSourceCount} NIP-owned source${result.skippedNipSourceCount === 1 ? '' : 's'} skipped (desktop timer owns those)` : ''}.`)
       } else {
         const state = action === 'pause' ? 'paused' : action === 'resume' ? 'active' : 'removed'
-        for (const id of ids) await narrativeApi.setSourceState(id, state)
-        setMessage(`${ids.length} source${ids.length === 1 ? '' : 's'} ${action === 'remove' ? 'removed' : action === 'pause' ? 'paused' : 'resumed'}.`)
+        await narrativeRepository.setSourcesLifecycle(actions, state)
+        setMessage(`${actions.length} source${actions.length === 1 ? '' : 's'} ${action === 'remove' ? 'removed' : action === 'pause' ? 'paused' : 'resumed'} through its authoritative owner.`)
       }
       setSelected(new Set())
       await onChanged()
@@ -184,12 +184,13 @@ export function SourcesView({
   }
 
   const drawerSource = drawerId ? sources.find((source) => source.source_id === drawerId) ?? null : null
-  const drawerSchedule = drawerSource ? scheduleBySite.get(drawerSource.source_id) ?? null : null
+  const drawerOwnership = drawerSource ? ownershipBySource.get(drawerSource.source_id) ?? null : null
+  const drawerSchedule = drawerOwnership?.owner === 'fina-scraper' ? scheduleBySite.get(drawerOwnership.reference.siteId) ?? null : null
   const drawerEvents = drawerSource ? events.filter((event) => event.source_id === drawerSource.source_id).slice(0, 5) : []
 
   return (
     <div className="space-y-3" data-testid="sources-view">
-      <PanelCard title="Sources" subtitle="Two registries, one view · fina-scraper owns scraper kinds, nip-engine owns local kinds · rights gate unchanged" collapsible={false} bodyClassName="narrative-card-body" actions={<Button size="sm" onClick={() => setAddOpen(true)} data-testid="add-source-open">Add source</Button>}>
+      <PanelCard title="Sources" subtitle="One owner-aware view · source IDs stay namespaced · rights gate unchanged" collapsible={false} bodyClassName="narrative-card-body" actions={<Button size="sm" onClick={() => setAddOpen(true)} data-testid="add-source-open">Add source</Button>}>
         <p className="mb-2 text-[10px] text-muted" data-testid="narrative-storage-paths">NIP_LAKE_DIR: <code>{storage?.lake_dir ?? 'loading'}</code> · derived NIP_DATA_DIR: <code>{storage?.data_dir ?? 'loading'}</code> · DuckDB and scraper Parquet remain separate stores; rows are not auto-imported.</p>
         <div className="flex flex-wrap items-center gap-2">
           <label className="flex min-w-52 flex-1 items-center gap-2 text-[11px] text-muted"><Search size={13} /><input type="search" aria-label="Search sources" placeholder="Search name, locator, topics…" value={search} onChange={(event) => setSearch(event.target.value)} data-testid="sources-search" className="min-w-0 flex-1" /></label>
@@ -220,20 +221,21 @@ export function SourcesView({
             {collapsedGroups.has(group.id) ? null : (
               <div className="mt-2 overflow-x-auto">
                 <table className="narrative-table" data-testid={`sources-table-${group.id}`}>
-                  <thead><tr><th aria-label="Select" /><th aria-label="Favourite" /><th>Name</th><th>Kind</th><th>Managed by</th><th>State</th><th>Health</th><th>Events</th><th>Episodes</th><th>Last checked</th><th>Next poll</th><th>Poll interval</th><th>Per-scan</th><th>Topics</th></tr></thead>
+                  <thead><tr><th aria-label="Select" /><th aria-label="Favourite" /><th>Name</th><th>Kind</th><th>Feed / write owner</th><th>NIP state</th><th>NIP subscription health</th><th>NIP events</th><th>NIP episodes</th><th>Last checked</th><th>Next poll</th><th>Poll interval</th><th>Per-scan</th><th>Topics</th></tr></thead>
                   <tbody>
                     {group.rows.map((source) => {
                       const subscription = subscriptionBySource.get(source.source_id)
+                      const ownership = ownershipBySource.get(source.source_id)!
                       const health = subscription?.last_error_code
                         ? `error ${subscription.last_error_code} · ${subscription.consecutive_failures} failure${subscription.consecutive_failures === 1 ? '' : 's'}`
                         : subscription ? 'ok' : 'no feed record'
                       return (
-                        <tr key={source.source_id} data-testid={`source-table-row-${source.source_id}`} onClick={() => setDrawerId(source.source_id)} className="cursor-pointer">
+                        <tr key={source.source_id} data-testid={`source-table-row-${source.source_id}`} data-source-origin={ownership.persistedOrigin} data-native-reference={JSON.stringify(ownership.reference)} onClick={() => setDrawerId(source.source_id)} className="cursor-pointer">
                           <td onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`Select ${source.display_name}`} checked={selected.has(source.source_id)} onChange={() => toggleSelected(source.source_id)} data-testid={`source-select-${source.source_id}`} /></td>
                           <td onClick={(event) => event.stopPropagation()}><button type="button" aria-label={`Favourite ${source.display_name}`} aria-pressed={favourites.has(source.source_id)} onClick={() => toggleFavourite(source.source_id)} data-testid={`source-favourite-${source.source_id}`}><Star size={13} fill={favourites.has(source.source_id) ? 'currentColor' : 'none'} /></button></td>
                           <td><strong className="text-xs text-main">{source.display_name}</strong><span className="block max-w-44 truncate text-[10px] text-muted" title={source.locator ?? undefined}>{source.locator ?? 'No locator'}</span></td>
                           <td>{kindLabel(source.kind)}</td>
-                          <td><span className="narrative-chip" data-testid={`source-managed-by-${source.source_id}`}>{managedBy(source, scraperSiteIds)}</span></td>
+                          <td><span className="narrative-chip" data-owner={ownership.owner} title={ownership.reason ?? undefined} data-testid={`source-managed-by-${source.source_id}`}>{ownership.owner}</span>{ownership.owner === 'fina-scraper' ? <span className="ml-1 narrative-chip">NIP read-only</span> : null}</td>
                           <td><span className="narrative-chip" data-testid={`source-state-${source.source_id}`}>{source.state}</span></td>
                           <td className={subscription?.last_error_code ? 'text-red-600' : undefined}>{health}</td>
                           <td>{source.event_count}</td>
@@ -281,7 +283,7 @@ export function SourcesView({
         <div className="narrative-dialog-backdrop" data-testid="add-source-dialog" onMouseDown={() => setAddOpen(false)}>
           <div className="narrative-dialog" role="dialog" aria-modal="true" aria-label="Add a source" onMouseDown={(event) => event.stopPropagation()}>
             <div className="narrative-dialog-body">
-              <AddSourceForm onSubmitted={async () => { await onChanged(); setAddOpen(false) }} />
+              <AddSourceForm scraperSites={siteInventory} scraperInventoryKnown={scraperInventoryKnown} onSubmitted={async () => { await onChanged(); setAddOpen(false) }} />
               <Button variant="ghost" size="sm" onClick={() => setAddOpen(false)}>Close</Button>
             </div>
           </div>
@@ -291,7 +293,7 @@ export function SourcesView({
         <div className="narrative-dialog-backdrop" data-testid="source-drawer" onMouseDown={() => setDrawerId(null)}>
           <div className="narrative-dialog" role="dialog" aria-modal="true" aria-label={`Source ${drawerSource.display_name}`} onMouseDown={(event) => event.stopPropagation()}>
             <header className="narrative-dialog-head">
-              <div className="min-w-0"><p className="eyebrow">Source detail</p><h2 className="mt-1 truncate text-sm font-semibold text-main">{drawerSource.display_name}</h2><p className="mt-1 text-[10px] text-muted">{KIND_LABELS[drawerSource.kind]} · managed by {managedBy(drawerSource, scraperSiteIds)} · {drawerSource.state} · rights {drawerSource.rights_status}</p></div>
+              <div className="min-w-0"><p className="eyebrow">Source detail</p><h2 className="mt-1 truncate text-sm font-semibold text-main">{drawerSource.display_name}</h2><p className="mt-1 text-[10px] text-muted">{KIND_LABELS[drawerSource.kind]} · owner {drawerOwnership?.owner ?? 'unresolved'} · NIP record {drawerSource.state} · rights {drawerSource.rights_status}</p><code className="mt-1 block break-all text-[9px] text-muted">{drawerOwnership ? JSON.stringify(drawerOwnership.reference) : 'No resolved native reference'}</code></div>
               <Button variant="ghost" size="sm" onClick={() => setDrawerId(null)}>Close</Button>
             </header>
             <div className="narrative-dialog-body">
@@ -304,9 +306,9 @@ export function SourcesView({
             </dl>
             {drawerSchedule ? (
               <section className="mt-3"><h3 className="text-xs font-semibold text-main">Scraper schedule</h3><dl className="narrative-provenance mt-1"><div><dt>Enabled</dt><dd>{drawerSchedule.enabled ? 'yes' : 'no'}</dd></div><div><dt>Interval</dt><dd>{drawerSchedule.poll_interval_min} min</dd></div><div><dt>Next run</dt><dd>{formatDate(drawerSchedule.next_run)}</dd></div><div><dt>Last run</dt><dd>{drawerSchedule.last_run ? `${drawerSchedule.last_run.status} · finished ${formatDate(drawerSchedule.last_run.finished_at)}${drawerSchedule.last_run.error ? ` · ${drawerSchedule.last_run.error}` : ''}` : 'no covering run yet'}</dd></div><div><dt>Budgets</dt><dd>LLM {drawerSchedule.llm_daily_budget}/day · theses {drawerSchedule.thesis_daily_budget}/day</dd></div></dl></section>
-            ) : <p className="mt-3 text-[10px] text-muted">No fina-scraper schedule recorded for this source. NIP-owned sources refresh on the desktop timer; add a schedule in the Schedules view to make it scraper-managed.</p>}
-            <section className="mt-3"><h3 className="text-xs font-semibold text-main">Recent items</h3>{drawerEvents.length ? <ul className="mt-1 space-y-1">{drawerEvents.map((event) => <li key={event.event_id} className="text-[11px] text-main">{event.source_native_id ?? event.event_id} · published {formatDate(event.times.published_at)}</li>)}</ul> : <p className="mt-1 text-[10px] text-muted">No retained events for this source in the current page.</p>}</section>
-            <EditSourceForm source={drawerSource} onDone={() => setDrawerId(null)} onChanged={onChanged} />
+            ) : drawerOwnership?.owner === 'fina-scraper' ? <p className="mt-3 text-[10px] text-muted">This feed is scraper-owned, but no schedule is recorded for its native site ID. Configure that site in the Schedules view; the NIP compatibility record will remain unchanged.</p> : drawerOwnership?.owner === 'unresolved' ? <p className="mt-3 text-[10px] text-amber-700">The source ID cannot be safely joined to the scraper site ID. Resolve the ownership conflict before making changes; no NIP fallback is available.</p> : <p className="mt-3 text-[10px] text-muted">This NIP-owned source has no fina-scraper schedule. NIP podcast refresh behavior remains controlled by the desktop timer.</p>}
+            <section className="mt-3"><h3 className="text-xs font-semibold text-main">Retained NIP events</h3>{drawerEvents.length ? <ul className="mt-1 space-y-1">{drawerEvents.map((event) => <li key={event.event_id} className="text-[11px] text-main">{event.source_native_id ?? event.event_id} · published {formatDate(event.times.published_at)}</li>)}</ul> : <p className="mt-1 text-[10px] text-muted">No retained NIP events for this source in the current page.</p>}</section>
+            {drawerOwnership?.owner === 'nip-engine' ? <EditSourceForm source={drawerSource} onDone={() => setDrawerId(null)} onChanged={onChanged} /> : <p className="mt-3 rounded border border-line p-2 text-[10px] text-muted" role="note" data-testid="source-read-only">{drawerOwnership?.reason ?? 'Ownership could not be resolved. This row is read-only; no alternate backend will be tried.'}{drawerOwnership?.owner === 'fina-scraper' ? ' Use the Schedules view for scraper-owned pause/resume and run actions.' : ''}</p>}
             </div>
           </div>
         </div>

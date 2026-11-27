@@ -5,7 +5,7 @@ import type { NipEvent, NipPodcastSubscription, NipSource } from '../types'
 import type { ScraperSchedule, ScraperSiteInventory } from '../scraperTypes'
 
 const narrativeApiMock = vi.hoisted(() => ({ setSourceState: vi.fn(async () => ({})) }))
-const scraperApiMock = vi.hoisted(() => ({ scrapeTrigger: vi.fn(async () => ({})) }))
+const scraperApiMock = vi.hoisted(() => ({ scrapeTrigger: vi.fn(async () => ({})), scrapeSchedule: vi.fn(async () => ({})) }))
 vi.mock('../api', () => ({ narrativeApi: narrativeApiMock }))
 vi.mock('../scraperApi', () => ({ scraperApi: scraperApiMock }))
 
@@ -19,29 +19,40 @@ const subscriptions: NipPodcastSubscription[] = [
 ]
 const schedules: ScraperSchedule[] = [
   { site_id: 'alpaca-news', poll_interval_min: 5, enabled: true, llm_daily_budget: 15, thesis_daily_budget: 3, last_run: null, next_run: null },
+  { site_id: 'fina-site-a', poll_interval_min: 15, enabled: true, llm_daily_budget: 15, thesis_daily_budget: 3, last_run: null, next_run: null },
 ]
 const siteInventory: ScraperSiteInventory[] = [
   { site_id: 'alpaca-news', display_name: 'Alpaca News', kind: 'news', enabled: true, poll_interval_min: 5, feed_url: null, source_seed_status: 'seeded', schedule_seed_status: 'recorded', credential_status: 'not_required' },
+  { site_id: 'fina-site-a', display_name: 'TTU scraper podcast', kind: 'podcast', enabled: true, poll_interval_min: 15, feed_url: 'https://example.com/feed.xml', source_seed_status: 'seeded', schedule_seed_status: 'recorded', credential_status: 'not_required' },
   { site_id: 'reuters', display_name: 'Reuters', kind: 'news', enabled: false, poll_interval_min: 60, feed_url: null, source_seed_status: 'not_seeded', schedule_seed_status: 'not_seeded', credential_status: 'missing' },
 ]
 const events: NipEvent[] = []
 
-function renderView(inventory?: ScraperSiteInventory[]) {
-  return render(<SourcesView sources={sources} subscriptions={subscriptions} events={events} scraperSchedules={schedules} siteInventory={inventory} onChanged={vi.fn(async () => {})} />)
+function renderView(inventory: ScraperSiteInventory[] = siteInventory, inventoryKnown = true) {
+  return render(<SourcesView sources={sources} subscriptions={subscriptions} events={events} scraperSchedules={schedules} siteInventory={inventory} scraperInventoryKnown={inventoryKnown} onChanged={vi.fn(async () => {})} />)
 }
 
 describe('SourcesView (revamp §c.2)', () => {
   it('renders a table (not cards) with the managed-by badge per row', () => {
     renderView()
     expect(screen.getByTestId('source-table-row-alpaca-news')).toBeTruthy()
-    expect(screen.getByTestId('source-managed-by-alpaca-news').textContent).toBe('fina-scraper')
-    expect(screen.getByTestId('source-managed-by-ttu-podcast').textContent).toBe('nip-engine')
+    expect(screen.getByTestId('source-managed-by-alpaca-news').textContent).toBe('unresolved')
+    expect(screen.getByTestId('source-managed-by-ttu-podcast').textContent).toBe('fina-scraper')
     expect(screen.getByTestId('source-managed-by-local-notes').textContent).toBe('nip-engine')
   })
 
   it('joins feed health into the row, so a failing source is visible where it is managed', () => {
     renderView()
     expect(screen.getByTestId('source-table-row-ttu-podcast').textContent).toContain('error FEED_500 · 2 failures')
+  })
+
+  it('keeps a matched NIP compatibility record readable and read-only', () => {
+    renderView()
+    expect(screen.getByTestId('source-table-row-ttu-podcast').getAttribute('data-source-origin')).toBe('nip_store_compatibility')
+    fireEvent.click(screen.getByTestId('source-table-row-ttu-podcast'))
+    expect(screen.getByTestId('source-drawer').textContent).toContain('4 / 9')
+    expect(screen.getByTestId('source-read-only').textContent).toContain('existing NIP row remains readable')
+    expect(screen.queryByTestId('edit-source-ttu-podcast')).toBeNull()
   })
 
   it('search filters rows and the Errors filter finds the failing feed', () => {
@@ -55,7 +66,7 @@ describe('SourcesView (revamp §c.2)', () => {
     expect(screen.getByTestId('source-table-row-ttu-podcast')).toBeTruthy()
   })
 
-  it('favourites pin and bulk pause acts on the selection', async () => {
+  it('favourites pin and bulk pause routes compatibility records to the scraper schedule', async () => {
     renderView()
     const star = screen.getByTestId('source-favourite-alpaca-news')
     expect(star.getAttribute('aria-pressed')).toBe('false')
@@ -64,15 +75,16 @@ describe('SourcesView (revamp §c.2)', () => {
     fireEvent.click(screen.getByTestId('source-select-ttu-podcast'))
     expect(screen.getByTestId('sources-bulk-bar')).toBeTruthy()
     fireEvent.click(screen.getByTestId('sources-bulk-pause'))
-    await waitFor(() => expect(narrativeApiMock.setSourceState).toHaveBeenCalledWith('ttu-podcast', 'paused'))
+    await waitFor(() => expect(scraperApiMock.scrapeSchedule).toHaveBeenCalledWith(expect.objectContaining({ siteId: 'fina-site-a', enabled: false })))
+    expect(narrativeApiMock.setSourceState).not.toHaveBeenCalled()
   })
 
   it('bulk run-now only triggers scraper-managed sources', async () => {
     renderView()
-    fireEvent.click(screen.getByTestId('source-select-alpaca-news'))
     fireEvent.click(screen.getByTestId('source-select-ttu-podcast'))
+    fireEvent.click(screen.getByTestId('source-select-local-notes'))
     fireEvent.click(screen.getByTestId('sources-bulk-run-now'))
-    await waitFor(() => expect(scraperApiMock.scrapeTrigger).toHaveBeenCalledWith({ sites: ['alpaca-news'] }))
+    await waitFor(() => expect(scraperApiMock.scrapeTrigger).toHaveBeenCalledWith({ sites: ['fina-site-a'] }))
   })
 
   it('shows YAML site inventory separately without creating NIP-source rows', () => {
@@ -80,7 +92,7 @@ describe('SourcesView (revamp §c.2)', () => {
     expect(screen.getByTestId('scraper-inventory-row-alpaca-news')).toBeTruthy()
     expect(screen.getByTestId('scraper-inventory-row-reuters')).toBeTruthy()
     expect(screen.queryByTestId('source-table-row-reuters')).toBeNull()
-    expect(screen.getByTestId('source-managed-by-alpaca-news').textContent).toBe('fina-scraper')
+    expect(screen.getByTestId('source-managed-by-alpaca-news').textContent).toBe('unresolved')
     expect(screen.getByTestId('scraper-inventory-row-alpaca-news').textContent).toContain('seeded')
     expect(screen.getByTestId('scraper-inventory-row-alpaca-news').textContent).toContain('recorded')
     expect(screen.getByTestId('scraper-inventory-row-alpaca-news').textContent).toContain('not required')
@@ -97,7 +109,7 @@ describe('SourcesView (revamp §c.2)', () => {
   })
 
   it('handles a legacy response with no YAML inventory', () => {
-    renderView()
+    renderView([], false)
     expect(screen.getByTestId('scraper-inventory-empty').textContent).toContain('older sidecar')
   })
 })

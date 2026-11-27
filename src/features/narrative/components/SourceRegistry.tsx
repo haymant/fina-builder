@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { Button } from '../../../components/ui/button'
 import { PanelCard } from '../../shared/components/PanelCard'
-import { narrativeApi } from '../api'
-import type { NipSource, NipSourceKind } from '../types'
+import { narrativeRepository } from '../repository'
+import type { ScraperSchedule, ScraperSiteInventory } from '../scraperTypes'
+import type { NipPodcastSubscription, NipSource, NipSourceKind } from '../types'
 
 export const KIND_LABELS: Record<NipSourceKind, string> = {
   podcast: 'Podcast',
@@ -25,7 +26,7 @@ export function kindLabel(kind: NipSourceKind): string {
   return KIND_LABELS[kind]
 }
 
-export function AddSourceForm({ onSubmitted }: { onSubmitted: () => Promise<void> }) {
+export function AddSourceForm({ onSubmitted, scraperSites = [], scraperInventoryKnown = false }: { onSubmitted: () => Promise<void>; scraperSites?: ScraperSiteInventory[]; scraperInventoryKnown?: boolean }) {
   const [kind, setKind] = useState<NipSourceKind>('podcast')
   const [sourceId, setSourceId] = useState('')
   const [displayName, setDisplayName] = useState('')
@@ -44,7 +45,7 @@ export function AddSourceForm({ onSubmitted }: { onSubmitted: () => Promise<void
     setSubmitting(true)
     setMessage(null)
     try {
-      await narrativeApi.createSource({
+      await narrativeRepository.createSource({
         sourceId: sourceId.trim(),
         kind,
         displayName: displayName.trim(),
@@ -53,7 +54,7 @@ export function AddSourceForm({ onSubmitted }: { onSubmitted: () => Promise<void
         userConfirmedRights: confirmed,
         topics: topics.split(',').map((topic) => topic.trim()).filter(Boolean),
         perScanLimit: Number(perScanLimit) || undefined,
-      })
+      }, { scraperInventoryKnown, scraperSites })
       setSourceId('')
       setDisplayName('')
       setLocator('')
@@ -115,7 +116,7 @@ export function EditSourceForm({ source, onDone, onChanged }: { source: NipSourc
     setBusy(true)
     setMessage(null)
     try {
-      await narrativeApi.updateSource({
+      await narrativeRepository.nip.updateSource({
         sourceId: source.source_id,
         displayName: displayName.trim(),
         locator: locator.trim(),
@@ -152,18 +153,29 @@ export function EditSourceForm({ source, onDone, onChanged }: { source: NipSourc
   )
 }
 
-export function SourceRegistry({ sources, onChanged }: { sources: NipSource[]; onChanged: () => Promise<void> }) {
+export function SourceRegistry({ sources, subscriptions = [], scraperSites = [], scraperSchedules = [], scraperInventoryKnown = false, onChanged }: { sources: NipSource[]; subscriptions?: NipPodcastSubscription[]; scraperSites?: ScraperSiteInventory[]; scraperSchedules?: ScraperSchedule[]; scraperInventoryKnown?: boolean; onChanged: () => Promise<void> }) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [showRemoved, setShowRemoved] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const visible = sources.filter((source) => showRemoved || source.state !== 'removed')
+  const subscriptionBySource = new Map(subscriptions.map((subscription) => [subscription.source_id, subscription]))
+  const scheduleBySite = new Map(scraperSchedules.map((schedule) => [schedule.site_id, schedule]))
+  const ownershipFor = (source: NipSource) => narrativeRepository.resolveSourceOwnership({
+    source,
+    subscription: subscriptionBySource.get(source.source_id),
+    scraperSchedules,
+    scraperSites,
+    scraperInventoryKnown,
+  })
 
   const change = async (source: NipSource, state: 'active' | 'paused' | 'removed') => {
     setBusyId(source.source_id)
     setMessage(null)
     try {
-      await narrativeApi.setSourceState(source.source_id, state)
+      const ownership = ownershipFor(source)
+      const schedule = ownership.owner === 'fina-scraper' ? scheduleBySite.get(ownership.reference.siteId) ?? null : null
+      await narrativeRepository.setSourceLifecycle({ ownership, schedule }, state)
       await onChanged()
     } catch (reason) {
       setMessage(messageOf(reason))
@@ -176,7 +188,9 @@ export function SourceRegistry({ sources, onChanged }: { sources: NipSource[]; o
     setBusyId(source.source_id)
     setMessage(null)
     try {
-      await narrativeApi.deleteSource(source.source_id)
+      const ownership = ownershipFor(source)
+      const schedule = ownership.owner === 'fina-scraper' ? scheduleBySite.get(ownership.reference.siteId) ?? null : null
+      await narrativeRepository.deleteSource({ ownership, schedule })
       await onChanged()
     } catch (reason) {
       setMessage(messageOf(reason))
@@ -196,9 +210,13 @@ export function SourceRegistry({ sources, onChanged }: { sources: NipSource[]; o
       <div className="space-y-2" data-testid="source-registry">
         {visible.length ? visible.map((source) => (
           <div className="evidence-card" key={source.source_id} data-testid={`source-row-${source.source_id}`}>
+            {(() => {
+              const ownership = ownershipFor(source)
+              const canEdit = ownership.owner === 'nip-engine' && ownership.writable
+              return <>
             <div className="flex items-center justify-between gap-2">
               <strong className="min-w-0 truncate text-xs text-main">{source.display_name}</strong>
-              <span className="narrative-chip">{kindLabel(source.kind)}</span>
+              <span className="flex gap-1"><span className="narrative-chip">{kindLabel(source.kind)}</span><span className="narrative-chip" data-testid={`source-owner-${source.source_id}`}>{ownership.owner}</span></span>
             </div>
             <p className="mt-1 truncate text-[10px] text-muted" title={source.locator ?? undefined}>{source.locator ?? 'No locator (local reference)'}</p>
             <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] text-muted">
@@ -209,16 +227,18 @@ export function SourceRegistry({ sources, onChanged }: { sources: NipSource[]; o
             </div>
             {source.topics.length ? <p className="mt-1 text-[10px] text-muted">Topics: {source.topics.join(' · ')}</p> : null}
             <div className="mt-2 flex flex-wrap gap-1">
-              <Button size="sm" variant="outline" disabled={busyId === source.source_id || source.state === 'removed'} onClick={() => setEditingId(editingId === source.source_id ? null : source.source_id)}>Edit</Button>
+              <Button size="sm" variant="outline" disabled={busyId === source.source_id || source.state === 'removed' || !canEdit} onClick={() => setEditingId(editingId === source.source_id ? null : source.source_id)}>Edit</Button>
               {source.state === 'active'
-                ? <Button size="sm" variant="outline" disabled={busyId === source.source_id} onClick={() => void change(source, 'paused')}>Pause</Button>
+                ? <Button size="sm" variant="outline" disabled={busyId === source.source_id || !ownership.writable} onClick={() => void change(source, 'paused')}>Pause</Button>
                 : source.state === 'paused'
-                  ? <Button size="sm" variant="outline" disabled={busyId === source.source_id} onClick={() => void change(source, 'active')}>Resume</Button>
-                  : <Button size="sm" variant="outline" disabled={busyId === source.source_id} onClick={() => void change(source, 'active')}>Restore</Button>}
-              {source.state !== 'removed' ? <Button size="sm" variant="ghost" disabled={busyId === source.source_id} onClick={() => void change(source, 'removed')}>Remove</Button> : null}
-              <Button size="sm" variant="ghost" disabled={busyId === source.source_id || source.event_count > 0} title={source.event_count > 0 ? 'Sources with retained events must be marked removed' : 'Delete source'} onClick={() => void remove(source)}>Delete</Button>
+                  ? <Button size="sm" variant="outline" disabled={busyId === source.source_id || !ownership.writable} onClick={() => void change(source, 'active')}>Resume</Button>
+                  : <Button size="sm" variant="outline" disabled={busyId === source.source_id || !ownership.writable} onClick={() => void change(source, 'active')}>Restore</Button>}
+              {source.state !== 'removed' ? <Button size="sm" variant="ghost" disabled={busyId === source.source_id || !ownership.writable} onClick={() => void change(source, 'removed')}>Remove</Button> : null}
+              <Button size="sm" variant="ghost" disabled={busyId === source.source_id || source.event_count > 0 || !canEdit} title={source.event_count > 0 ? 'Sources with retained events must be marked removed' : !canEdit ? 'Source owner is not verified as NIP' : 'Delete source'} onClick={() => void remove(source)}>Delete</Button>
             </div>
-            {editingId === source.source_id ? <EditSourceForm source={source} onDone={() => setEditingId(null)} onChanged={onChanged} /> : null}
+            {editingId === source.source_id && canEdit ? <EditSourceForm source={source} onDone={() => setEditingId(null)} onChanged={onChanged} /> : null}
+              </>
+            })()}
           </div>
         )) : <p className="text-[11px] text-muted">No sources registered. Add a podcast, company meeting, filing, Reddit/X reference or local document after reviewing access and retention rights.</p>}
         {message ? <p className="text-[10px] text-red-600" role="alert">{message}</p> : null}

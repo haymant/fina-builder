@@ -738,13 +738,23 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
     let scraper_owned_feeds: Vec<String> = storage_init
         .site_inventory
         .iter()
-        .filter(|site| site.enabled && site.kind == "podcast")
+        .filter(|site| site.kind == "podcast")
         .filter_map(|site| site.feed_url.clone())
         .collect();
     env.push((
         "NIP_SCRAPER_OWNED_PODCAST_FEEDS".to_string(),
         serde_json::to_string(&scraper_owned_feeds)
             .map_err(|error| format!("could not serialize scraper feed ownership: {error}"))?,
+    ));
+    let scraper_site_ids: Vec<String> = storage_init
+        .site_inventory
+        .iter()
+        .map(|site| site.site_id.clone())
+        .collect();
+    env.push((
+        "NIP_SCRAPER_OWNED_SITE_IDS".to_string(),
+        serde_json::to_string(&scraper_site_ids)
+            .map_err(|error| format!("could not serialize scraper site ownership: {error}"))?,
     ));
     if let Some(bridge) = bridge {
         env.push(("NIP_RIGA_BRIDGE_URL".to_string(), bridge.url.clone()));

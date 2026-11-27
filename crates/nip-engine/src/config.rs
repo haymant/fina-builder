@@ -47,6 +47,8 @@ pub enum ConfigError {
     IncompleteLocalLlmConfig,
     #[error("NIP_SCRAPER_OWNED_PODCAST_FEEDS must be a JSON array of feed URLs")]
     InvalidScraperPodcastFeeds,
+    #[error("NIP_SCRAPER_OWNED_SITE_IDS must be a JSON array of non-empty site IDs")]
+    InvalidScraperSiteIds,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +150,7 @@ pub struct NipConfig {
     claim_provider_mode: ClaimProviderMode,
     local_llm: Option<LocalLlmConfig>,
     scraper_owned_podcast_feeds: BTreeSet<String>,
+    scraper_owned_site_ids: BTreeSet<String>,
 }
 
 impl NipConfig {
@@ -173,6 +176,7 @@ impl NipConfig {
             "NIP_LOCAL_LLM_URL",
             "NIP_LOCAL_LLM_MODEL",
             "NIP_SCRAPER_OWNED_PODCAST_FEEDS",
+            "NIP_SCRAPER_OWNED_SITE_IDS",
         ]
         .into_iter()
         .filter_map(|key| env::var(key).ok().map(|value| (key.to_owned(), value)))
@@ -219,7 +223,29 @@ impl NipConfig {
                     .map_err(|_| ConfigError::InvalidScraperPodcastFeeds)?;
                 feeds
                     .iter()
-                    .map(|feed| canonical_feed_url(feed).ok_or(ConfigError::InvalidScraperPodcastFeeds))
+                    .map(|feed| {
+                        canonical_feed_url(feed).ok_or(ConfigError::InvalidScraperPodcastFeeds)
+                    })
+                    .collect::<Result<BTreeSet<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let scraper_owned_site_ids = values
+            .get("NIP_SCRAPER_OWNED_SITE_IDS")
+            .map(|raw| {
+                let ids: Vec<String> =
+                    serde_json::from_str(raw).map_err(|_| ConfigError::InvalidScraperSiteIds)?;
+                ids.into_iter()
+                    .map(|id| {
+                        if id.trim().is_empty()
+                            || id.trim() != id
+                            || id.chars().any(char::is_control)
+                        {
+                            Err(ConfigError::InvalidScraperSiteIds)
+                        } else {
+                            Ok(id)
+                        }
+                    })
                     .collect::<Result<BTreeSet<_>, _>>()
             })
             .transpose()?
@@ -289,6 +315,7 @@ impl NipConfig {
             claim_provider_mode,
             local_llm,
             scraper_owned_podcast_feeds,
+            scraper_owned_site_ids,
         })
     }
 
@@ -303,6 +330,10 @@ impl NipConfig {
     pub fn scraper_owns_podcast_feed(&self, feed_url: &str) -> bool {
         canonical_feed_url(feed_url)
             .is_some_and(|canonical| self.scraper_owned_podcast_feeds.contains(&canonical))
+    }
+
+    pub fn scraper_owns_site_id(&self, site_id: &str) -> bool {
+        self.scraper_owned_site_ids.contains(site_id)
     }
 
     pub fn database_path(&self) -> PathBuf {

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button } from '../../../components/ui/button'
 import { PanelCard } from '../../shared/components/PanelCard'
-import { scraperApi } from '../scraperApi'
+import { narrativeRepository } from '../repository'
 import type { NoveltyResult, ScraperEntityRow, SentimentTrend } from '../scraperTypes'
 import type { NipNarrativeSignal } from '../types'
 import { formatNumber, hasSufficientData, zScoreDisplay } from '../thesisGates'
+
+const scraperApi = narrativeRepository.scraper
 
 export interface RadarRow {
   entity: ScraperEntityRow

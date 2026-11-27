@@ -2196,6 +2196,9 @@ impl NipMcp {
                 Ok(source) => source,
                 Err(error) => return structured_error("invalid_request", error.message),
             };
+            if let Err(error) = service.ensure_nip_owned_source(&source_id) {
+                return structured_error("scraper_owned_feed", error.to_string());
+            }
             let episodes = match service.podcast_episodes(&source_id) {
                 Ok(episodes) => episodes,
                 Err(error) => return structured_error("storage_unavailable", error.to_string()),
@@ -2354,6 +2357,9 @@ impl NipMcp {
                 Ok(source) => source,
                 Err(error) => return structured_error("invalid_request", error.message),
             };
+            if let Err(error) = service.ensure_nip_owned_source(&source_id) {
+                return structured_error("scraper_owned_feed", error.to_string());
+            }
             let episodes = match service.podcast_episodes(&source_id) {
                 Ok(episodes) => episodes,
                 Err(error) => return structured_error("storage_unavailable", error.to_string()),

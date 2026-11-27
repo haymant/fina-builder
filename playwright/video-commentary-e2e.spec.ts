@@ -74,9 +74,10 @@ test.describe('External-agent commentary MCP journey (local fixtures)', () => {
     test.setTimeout(600_000)
 
     const mcp = client()
-    const runId = process.env.NIP_E2E_RUN_ID ?? 'e2e-run'
+    const runId = process.env.NIP_E2E_RUN_ID
+    expect(runId, 'PLAYWRIGHT_NIP=on requires the launcher's explicit fresh NIP_E2E_RUN_ID').toBeTruthy()
     const runRoot = path.resolve('playwright/.data/nip', runId)
-    const mediaRoot = path.join(runRoot, 'media')
+    const mediaRoot = path.join(runRoot, '_nip', 'media')
     const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
     const sourceId = `agent-commentary-${suffix}`
     const feedUrl = 'http://127.0.0.1:8795/fixture/multi-speaker-feed.xml'
