@@ -59,7 +59,7 @@ async function stubSetupJourney(page: Page, options: { directLocal?: boolean; re
     } else if (body.method === 'tools/call') {
       const name = body.params?.name
       const args = body.params?.arguments ?? {}
-      if (['list_video_projects', 'create_video_project', 'create_video_episode', 'link_video_evidence', 'get_video_episode', 'list_video_evidence', 'video_capabilities', 'list_video_assets', 'list_video_workflows', 'get_event'].includes(name ?? '')) {
+      if (['list_video_projects', 'create_video_project', 'create_video_episode', 'link_video_evidence', 'get_video_episode', 'list_video_episodes', 'list_video_evidence', 'list_video_project_assets', 'video_capabilities', 'list_video_assets', 'list_video_workflows', 'get_event'].includes(name ?? '')) {
         let videoResult: unknown = {}
         if (name === 'list_video_projects') videoResult = state.videoProjects
         else if (name === 'create_video_project') {
@@ -73,9 +73,10 @@ async function stubSetupJourney(page: Page, options: { directLocal?: boolean; re
           state.videoEvidence.push(args.evidence as Record<string, unknown>)
           videoResult = args
         } else if (name === 'get_video_episode') videoResult = state.videoEpisode?.episode_id === args.episode_id ? state.videoEpisode : null
+        else if (name === 'list_video_episodes') videoResult = state.videoEpisode?.project_id === args.project_id ? [state.videoEpisode] : []
         else if (name === 'list_video_evidence') videoResult = state.videoEvidence
+        else if (name === 'list_video_project_assets' || name === 'list_video_assets' || name === 'list_video_episode_visual_specs' || name === 'list_video_workflows') videoResult = []
         else if (name === 'video_capabilities') videoResult = { planning: 'ready', evidence_linkage: 'ready', deterministic_renderer: 'linkzag_adapter', generative_video: 'not_configured', tts: 'not_configured', asr: 'not_configured', disclosure: 'Fixture-backed deterministic test.' }
-        else if (name === 'list_video_assets' || name === 'list_video_workflows') videoResult = []
         else if (name === 'get_event') videoResult = args.event_id === event.event_id ? event : null
         result = { structuredContent: videoResult, content: [{ type: 'text', text: JSON.stringify(videoResult) }] }
         await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Mcp-Session-Id': 'setup-session' }, body: JSON.stringify({ jsonrpc: '2.0', id: body.id, result }) })
@@ -172,9 +173,9 @@ async function stubSetupJourney(page: Page, options: { directLocal?: boolean; re
       const structuredContent = name === 'capabilities'
         ? options.legacyCapabilities
           ? { service: 'nip-engine', service_version: 'older-sidecar', api_version: 1, schema_version: 8 }
-          : { service: 'nip-engine', service_version: 'fixture', api_version: 1, schema_version: 9, features: { duckdb_store: true, podcast_rss_subscriptions: true, local_audio_transcription: true, claim_extraction: true, parquet_export: true, semantic_search: false } }
+          : { service: 'nip-engine', service_version: 'fixture', api_version: 1, schema_version: 20, features: { duckdb_store: true, podcast_rss_subscriptions: true, local_audio_transcription: true, claim_extraction: true, parquet_export: true, semantic_search: false } }
         : name === 'health'
-          ? { service: 'nip-engine', api_version: 1, readiness: 'ready', schema_version: 9 }
+          ? { service: 'nip-engine', api_version: 1, readiness: 'ready', schema_version: options.legacyCapabilities ? 8 : 20 }
         : name === 'list_podcast_subscriptions'
           ? state.subscribed ? [subscription] : []
           : name === 'list_sources'
@@ -236,7 +237,43 @@ async function stubSetupJourney(page: Page, options: { directLocal?: boolean; re
     }
     await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Mcp-Session-Id': 'setup-session' }, body: JSON.stringify({ jsonrpc: '2.0', id: body.id, result }) })
   })
+  // Podcast ownership checks require a fresh, known scraper inventory; an
+  // unreachable sidecar must block creation rather than silently fall back.
+  await page.route('**/fina-scraper/mcp', async (route) => {
+    const body = route.request().postDataJSON() as { id?: number; method?: string; params?: { name?: string } }
+    if (body.method === 'notifications/initialized') {
+      await route.fulfill({ status: 202, body: '' })
+      return
+    }
+    let result: Record<string, unknown> = {}
+    if (body.method === 'initialize') {
+      result = { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'scraper-e2e', version: '0.1.0' } }
+    } else if (body.method === 'tools/call' && body.params?.name === 'scrape_status') {
+      result = { structuredContent: { last_run: null, lake: { items: 0, entities: 0, claims: 0, edges: 0, prices: 0, backtests: 0, max_ingested_at: null }, schedules: [], budgets: { date: '2026-11-17', llm_daily_budget: 0, llm_reviews_today: 0, thesis_daily_budget: 0, theses_today: 0 }, site_inventory: [] } }
+    } else if (body.method === 'tools/call' && body.params?.name === 'query_claim_corroboration') {
+      result = { structuredContent: { claim: {}, source_count: 0, distinct_source_count: 0, corroboration_score: 0, agreeing: [], contradicting: [] } }
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Mcp-Session-Id': 'scraper-setup-session' }, body: JSON.stringify({ jsonrpc: '2.0', id: body.id, result }) })
+  })
   return state
+}
+
+async function openNarrative(page: Page) {
+  const workspace = new WorkspacePage(page)
+  await workspace.open()
+  await page.getByTestId('menu-narrative').click()
+  await page.getByTestId('menuitem-narrative-overview').click()
+  await expect(page.getByRole('heading', { name: 'Narrative Intelligence' })).toBeVisible()
+  await expect(page.getByTestId('nip-setup-checklist')).toBeVisible()
+  return workspace
+}
+
+async function openAddSourceForm(page: Page) {
+  await page.getByTestId('tab-sources').click()
+  await page.getByTestId('add-source-open').click()
+  const dialog = page.getByRole('dialog', { name: 'Add a source' })
+  await expect(dialog.getByTestId('add-source-form')).toBeVisible()
+  return dialog
 }
 
 test.describe('Narrative Intelligence first-run setup', () => {
@@ -244,11 +281,10 @@ test.describe('Narrative Intelligence first-run setup', () => {
     tag: [TAG.journey.narrativeEvidenceReview, TAG.feature.narrativeClaims, TAG.feature.videoWorkspace, TAG.priority.p1],
   }, async ({ page }) => {
     const state = await stubSetupJourney(page, { retainedClaim: true })
-    const workspace = new WorkspacePage(page)
-    await workspace.open()
-    await page.getByTestId('menu-narrative').click()
-    await page.getByTestId('menuitem-narrative-overview').click()
-    await page.getByRole('tab', { name: 'Claim Explorer' }).click()
+    await openNarrative(page)
+    const claimsTab = page.getByTestId('tab-claims')
+    await claimsTab.click()
+    await expect(claimsTab).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByRole('heading', { name: claim.claim_text })).toBeVisible()
     await page.getByRole('button', { name: 'Create video episode' }).click()
 
@@ -286,14 +322,12 @@ test.describe('Narrative Intelligence first-run setup', () => {
     tag: [TAG.journey.narrativeSetup, TAG.feature.narrativeSetup, TAG.priority.p1],
   }, async ({ page }) => {
     await stubSetupJourney(page, { directLocal: true })
-    const workspace = new WorkspacePage(page)
-    await workspace.open()
-    await page.getByTestId('menu-narrative').click()
-    await page.getByTestId('menuitem-narrative-overview').click()
+    await openNarrative(page)
 
     const checklist = page.getByTestId('nip-setup-checklist')
     await expect(checklist).toContainText('fixture-local-model · direct local · extraction available')
     await expect(checklist).not.toContainText('Consent needed')
+    await page.locator('details.narrative-provider-disclosure > summary').click()
     await expect(page.getByText(/NIP calls this model directly/)).toBeVisible()
     await expect(page.getByText(/Transcript text stays on the machine/)).toBeVisible()
     await expect(page.getByText(/no RIGA or remote fallback/)).toBeVisible()
@@ -303,10 +337,7 @@ test.describe('Narrative Intelligence first-run setup', () => {
     tag: [TAG.journey.narrativeSetup, TAG.feature.narrativeSetup, TAG.priority.p1],
   }, async ({ page }) => {
     await stubSetupJourney(page, { legacyCapabilities: true })
-    const workspace = new WorkspacePage(page)
-    await workspace.open()
-    await page.getByTestId('menu-narrative').click()
-    await page.getByTestId('menuitem-narrative-overview').click()
+    await openNarrative(page)
 
     await expect(page.getByTestId('nip-setup-checklist')).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Discovered episodes' })).toBeVisible()
@@ -316,42 +347,39 @@ test.describe('Narrative Intelligence first-run setup', () => {
     tag: [TAG.journey.narrativeSetup, TAG.feature.narrativeSetup, TAG.priority.p0, TAG.smoke],
   }, async ({ page }) => {
     await stubSetupJourney(page)
-    const workspace = new WorkspacePage(page)
-    await workspace.open()
-    await page.getByTestId('menu-narrative').click()
-    await page.getByTestId('menuitem-narrative-overview').click()
+    await openNarrative(page)
 
     const checklist = page.getByTestId('nip-setup-checklist')
     await expect(checklist).toBeVisible()
     await expect(checklist).toContainText('From source rights to reviewable evidence')
-    await expect(checklist).toContainText('DuckDB schema v9')
+    await expect(checklist).toContainText(/DuckDB schema v\d+/)
     await expect(checklist).toContainText('Consent needed')
     await expect(checklist).toContainText('1/5 complete')
-    await expect(page.getByText(/No sources registered/)).toBeVisible()
+    await page.getByTestId('tab-sources').click()
+    await expect(page.getByText('No sources match the current search or filter.')).toBeVisible()
   })
 
   test('requires rights confirmation, then transcribes, consents, and extracts evidence', {
     tag: [TAG.journey.narrativeIngestion, TAG.journey.narrativeEvidenceReview, TAG.feature.narrativeSources, TAG.feature.narrativeClaims, TAG.priority.p0],
   }, async ({ page }) => {
     const state = await stubSetupJourney(page)
-    const workspace = new WorkspacePage(page)
-    await workspace.open()
-    await page.getByTestId('menu-narrative').click()
-    await page.getByTestId('menuitem-narrative-overview').click()
+    await openNarrative(page)
 
-    await page.getByLabel('Source ID').fill('setup-fixture-source')
-    await page.getByLabel('Podcast feed URL').fill('http://127.0.0.1:8795/fixture/feed.xml')
-    await page.getByLabel('Show name').fill('Illustrative Test Corpus')
-    await page.getByLabel('Rights statement').fill('Synthetic fixture approved for local processing and retention.')
+    const sourceDialog = await openAddSourceForm(page)
+    await sourceDialog.getByLabel('Source ID').fill('setup-fixture-source')
+    await sourceDialog.getByLabel('Podcast feed URL').fill('http://127.0.0.1:8795/fixture/feed.xml')
+    await sourceDialog.getByLabel('Show name').fill('Illustrative Test Corpus')
+    await sourceDialog.getByLabel('Rights statement').fill('Synthetic fixture approved for local processing and retention.')
 
-    const approve = page.getByRole('button', { name: 'Approve and sync' })
+    const approve = sourceDialog.getByRole('button', { name: 'Approve and sync' })
     await expect(approve).toBeDisabled()
-    await page.getByLabel(/I confirm access and retention rights/).check()
+    await sourceDialog.getByLabel(/I confirm access and retention rights/).check()
     await expect(approve).toBeEnabled()
     await approve.click()
 
-    await expect(page.getByText('Feed approved and initial sync requested.')).toBeVisible()
+    await expect(page.getByTestId('source-table-row-setup-fixture-source')).toContainText('Illustrative Test Corpus')
     await expect(page.getByText('Illustrative Test Corpus').first()).toBeVisible()
+    await page.getByTestId('tab-overview').click()
     await expect(page.getByText('Policy outlook fixture')).toBeVisible()
     await page.getByRole('button', { name: 'Transcribe locally' }).click()
     await expect.poll(() => state.transcribed, { timeout: 120_000 }).toBe(true)
@@ -371,7 +399,7 @@ test.describe('Narrative Intelligence first-run setup', () => {
     await page.getByRole('button', { name: 'Extract claims' }).click()
     await expect(page.locator('.event-detail').getByText('1 claim committed with source evidence.')).toBeVisible()
 
-    await page.getByRole('tab', { name: 'Claim Explorer' }).click()
+    await page.getByTestId('tab-claims').click()
     await expect(page.getByRole('heading', { name: /Policy is expected to remain restrictive/ })).toBeVisible()
     await expect(page.getByText('riga_bridge', { exact: true })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Source evidence' })).toBeVisible()
