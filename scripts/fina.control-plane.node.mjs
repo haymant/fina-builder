@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { atLeast, buildRuntimeEnvironment, findRoot, parseToml, resolveProject, selectProfile } from "./fina.mjs";
 import { loadLocalEnv } from "./dev-http.mjs";
 import { applyRuntimeEnvironment } from "./lib/runtime-env.mjs";
+import { tauriAppDataDir } from "./lib/local-env.mjs";
 
 const execFileAsync = promisify(execFile);
 const launcher = join(process.cwd(), "scripts", "fina.mjs");
@@ -90,7 +91,7 @@ test("derives profile-aware service paths without credentials", () => {
   assert.equal(env.FINA_DATA_ROOT, join(root, ".fina", "ci-data"));
   assert.equal(env.TAC_LAKE_DIR, join(root, ".fina", "ci-data", "lake"));
   assert.equal(env.FINA_PROFILE_TAC_LAKE_DIR, join(root, ".fina", "ci-data", "lake"));
-  assert.equal(env.NIP_DATA_DIR, join(root, ".fina", "ci-data", "nip"));
+  assert.equal(env.NIP_DATA_DIR, join(root, ".fina", "ci-data", "nip", "lake", "_nip"));
   assert.equal(env.NIP_LAKE_DIR, join(root, ".fina", "ci-data", "nip", "lake"));
   assert.equal(env.TAC_ENGINE_BIN, join(root, "modules", "target", "release", "tac-engine"));
   // The scraper binary is resolved at spawn time unless the caller supplied
@@ -99,6 +100,16 @@ test("derives profile-aware service paths without credentials", () => {
   assert.equal(env.FINA_SCRAPER_BIN, undefined);
   assert.equal(env.TAC_QLIB_PYTHON_BIN, join(root, "modules", ".venv", "bin", "python"));
   assert.equal(Object.keys(env).some((key) => /KEY|SECRET|TOKEN|PASSWORD/i.test(key)), false);
+});
+
+test("packaged profile defaults to Tauri app data and derives NIP_DATA_DIR", () => {
+  const root = "/tmp/fina-packaged";
+  const config = parseToml(configText());
+  const project = resolveProject({ root, config, configPath: join(root, "fina.toml") }, "packaged");
+  const env = buildRuntimeEnvironment(project, {});
+  assert.equal(env.NIP_LAKE_DIR, join(tauriAppDataDir(), "NIPLake"));
+  assert.equal(env.NIP_DATA_DIR, join(tauriAppDataDir(), "NIPLake", "_nip"));
+  assert.equal(project.paths.tac_lake, join(root, "platform-data", "lake"));
 });
 
 test("preserves explicit service path and binary overrides", () => {
@@ -114,7 +125,7 @@ test("preserves explicit service path and binary overrides", () => {
   assert.equal(env.FINA_PROFILE_TAC_LAKE_DIR, "");
   assert.equal(env.TAC_ENGINE_BIN, "/tmp/custom-tac-engine");
   assert.equal(env.FINA_SCRAPER_BIN, "/tmp/custom-fina-scraper");
-  assert.equal(env.NIP_DATA_DIR, join(root, ".fina", "data", "nip"));
+  assert.equal(env.NIP_DATA_DIR, join(root, ".fina", "data", "nip", "lake", "_nip"));
 });
 
 test("dev-http dotenv replaces only the launcher profile lake default", async () => {
@@ -128,28 +139,49 @@ test("dev-http dotenv replaces only the launcher profile lake default", async ()
     TAC_LAKE_DIR: "/profile/lake",
     SHARED: "shell",
   };
-  loadLocalEnv(root, profileEnv);
+  loadLocalEnv(root, profileEnv, { cwd: root });
   assert.equal(profileEnv.TAC_LAKE_DIR, "/env/lake");
   assert.equal(profileEnv.TAC_LAKE_START_DATE, "2000-01-03");
   assert.equal(profileEnv.SHARED, "shell");
 
   const explicitEnv = { TAC_LAKE_DIR: "/explicit/lake" };
-  loadLocalEnv(root, explicitEnv);
+  loadLocalEnv(root, explicitEnv, { cwd: root });
   assert.equal(explicitEnv.TAC_LAKE_DIR, "/explicit/lake");
   assert.equal(explicitEnv.TAC_LAKE_START_DATE, "2000-01-03");
+  await rm(root, { recursive: true, force: true });
+});
+
+test("dotenv order is cwd, app data, checkout, then submodules", async () => {
+  const root = await mkdtemp(join("/tmp", "fina-env-order-"));
+  const cwd = join(root, "cwd");
+  const appData = join(root, "app-data");
+  await mkdir(cwd, { recursive: true });
+  await mkdir(appData, { recursive: true });
+  await mkdir(join(root, "modules", "tac-engine"), { recursive: true });
+  await writeFile(join(cwd, ".env"), "ORDER=cwd\n");
+  await writeFile(join(appData, ".env"), "ORDER=app-data\nAPP_ONLY=yes\n");
+  await writeFile(join(root, ".env"), "ORDER=checkout\nCHECKOUT_ONLY=yes\n");
+  await writeFile(join(root, "modules", "tac-engine", ".env"), "ORDER=tac-engine\nTAC_ONLY=yes\n");
+  const env = {};
+  loadLocalEnv(root, env, { cwd, appDataDir: appData });
+  assert.equal(env.ORDER, "cwd");
+  assert.equal(env.APP_ONLY, "yes");
+  assert.equal(env.CHECKOUT_ONLY, "yes");
+  assert.equal(env.TAC_ONLY, "yes");
   await rm(root, { recursive: true, force: true });
 });
 
 test("sidecar runtime environment loads .env and fills profile defaults", async () => {
   const root = await mkdtemp(join("/tmp", "fina-sidecar-env-"));
   await writeFile(join(root, "fina.toml"), configText());
-  await writeFile(join(root, ".env"), "NIP_LAKE_DIR=/env/nip-lake\nAPCA_API_KEY_ID=local-test-key\n");
+  await writeFile(join(root, ".env"), "NIP_LAKE_DIR=./custom/nip-lake\nNIP_DATA_DIR=/retired/nip\nAPCA_API_KEY_ID=local-test-key\n");
   // `.mcp.json` can pass an unexpanded placeholder; the launcher treats it as
   // unset so the checkout `.env`/profile default still wins.
   const env = { NIP_LAKE_DIR: "${NIP_LAKE_DIR}" };
-  const { project } = applyRuntimeEnvironment(root, env);
+  const { project } = applyRuntimeEnvironment(root, env, undefined, { cwd: root });
   assert.ok(project);
-  assert.equal(env.NIP_LAKE_DIR, "/env/nip-lake");
+  assert.equal(env.NIP_LAKE_DIR, join(root, "custom", "nip-lake"));
+  assert.equal(env.NIP_DATA_DIR, join(root, "custom", "nip-lake", "_nip"));
   assert.equal(env.TAC_LAKE_DIR, join(root, ".fina", "data", "lake"));
   assert.equal(env.FINA_DATA_ROOT, join(root, ".fina", "data"));
   assert.equal(env.APCA_API_KEY_ID, "local-test-key");

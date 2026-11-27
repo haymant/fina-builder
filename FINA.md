@@ -12,7 +12,7 @@ The control plane is intentionally small at this stage. It does not replace ecos
 - Secrets must not be committed to `fina.toml`, `.mcp.json`, experiment branches, logs, or generated diagnostics.
 - Paths in the configuration are repository-relative and are resolved to absolute paths by the launcher.
 - Existing npm scripts remain the implementation for now; later lifecycle features should be added behind `fina` rather than as another set of documented commands.
-- Development, CI, and packaged execution should eventually use the same logical configuration with profile-specific path resolution.
+- Development, CI, and packaged execution use the same storage contract with profile-specific defaults. Narrative storage is configured through one value, `NIP_LAKE_DIR`; `NIP_DATA_DIR` is derived as `$NIP_LAKE_DIR/_nip` and must not be configured separately.
 
 ## Configuration
 
@@ -78,18 +78,26 @@ not required in the shell just to run `config` or `doctor`.
 | `FINA_RUST_TARGET_DIR` | Shared Rust build-output directory selected by the control plane. Delegated commands also receive this as `CARGO_TARGET_DIR` unless the caller already supplied `CARGO_TARGET_DIR`. | `/home/ubuntu/fina-builder/modules/target` |
 | `FINA_QLIB_ROOT` | Absolute source root for the qlib/TAC research module. The Python environment remains managed by `uv` and its lockfile. | `/home/ubuntu/fina-builder/modules/tac-qlib` |
 | `TAC_LAKE_DIR` | Profile-owned TradeAC market lake root. | `/home/ubuntu/fina-builder/.fina/data/lake` |
-| `NIP_DATA_DIR` | Profile-owned NIP canonical DuckDB/state directory. | `/home/ubuntu/fina-builder/.fina/data/nip` |
-| `NIP_LAKE_DIR` | Profile-owned NIP Parquet export directory, separate from the TAC lake. | `/home/ubuntu/fina-builder/.fina/data/nip/lake` |
+| `NIP_LAKE_DIR` | The sole configured narrative storage root, separate from TAC. | `/home/ubuntu/fina-builder/.fina/data/nip/lake` |
+| `NIP_DATA_DIR` | Derived only as `$NIP_LAKE_DIR/_nip`; an input value is ignored with a warning. | `/home/ubuntu/fina-builder/.fina/data/nip/lake/_nip` |
 | `TAC_ENGINE_BIN` | Profile-resolved release `tac-engine` binary path; an explicit caller value is preserved. | `/home/ubuntu/fina-builder/modules/target/release/tac-engine` |
 | `TAC_QLIB_PYTHON_BIN` | Shared qlib interpreter path under `modules/.venv`; `uv` creates it when preparing runtimes. | `/home/ubuntu/fina-builder/modules/.venv/bin/python` |
 
-All paths are absolute and derived from `fina.toml` plus the selected profile data root.
-For configured commands the launcher also reads the checkout `.env` and the two module
-`.env` files, matching `dev_http` and the desktop host; explicit shell values win, and
-credentials are never printed or copied into checked-in config. These variables are the
-stable boundary for scripts and sidecars. Explicit caller values for service paths and
-binary overrides are preserved. Provider settings such as `VITE_*` remain service-specific
-because they are not filesystem or runtime path contracts.
+All paths are absolute. `NIP_LAKE_DIR` resolves in this order: explicit process environment,
+the first matching value in the dotenv search order (working-directory `.env`, app-data
+`.env`, checkout `.env`, `modules/tac-engine/.env`, then `modules/riga-flow/.env`), then the
+selected profile default. The development default is
+`<checkout>/.fina/data/nip/lake`; CI is `<checkout>/.fina/ci-data/nip/lake`. For a packaged
+desktop with no override, the default is `app_data_dir()/NIPLake` (on macOS, typically
+`~/Library/Application Support/com.fina.payoffexplorer/NIPLake`). The retired
+`app_data_dir()/NIP` root is never selected, copied, migrated, or deleted. Only the derived
+`_nip` directory holds the canonical DuckDB, media, logs, and pidfile; scraper Parquet,
+YAML, schedules, state, runs, transcripts, and exports live in the lake root. Credentials
+remain environment-only and are never printed or copied into checked-in config. See the
+[storage map](./docs/STORAGE_MAP.md) for the complete layout and compatibility rules.
+These variables remain the stable boundary for scripts and sidecars. Explicit caller values
+for supported service paths and binary overrides are preserved. Provider settings such as
+`VITE_*` remain service-specific because they are not filesystem or runtime path contracts.
 
 ### Full E2E verification in a Manus sandbox
 

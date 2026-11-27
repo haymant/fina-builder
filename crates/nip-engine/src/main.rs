@@ -4528,6 +4528,11 @@ async fn main() -> ExitCode {
 async fn run() -> Result<(), String> {
     let cli = parse_cli()?;
     let config = NipConfig::from_env().map_err(|_| "NIP configuration is invalid".to_owned())?;
+    eprintln!(
+        "NIP storage: NIP_LAKE_DIR={} NIP_DATA_DIR={} (legacy app-data storage location is unused)",
+        config.lake_dir().display(),
+        config.data_dir().display()
+    );
     if let Some(snapshot) = cli.restore_snapshot {
         Store::restore_parquet_snapshot(&snapshot, config.database_path())
             .map_err(|error| format!("NIP snapshot restore failed: {error}"))?;

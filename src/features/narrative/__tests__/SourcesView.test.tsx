@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { SourcesView } from '../components/SourcesView'
 import type { NipEvent, NipPodcastSubscription, NipSource } from '../types'
-import type { ScraperSchedule } from '../scraperTypes'
+import type { ScraperSchedule, ScraperSiteInventory } from '../scraperTypes'
 
 const narrativeApiMock = vi.hoisted(() => ({ setSourceState: vi.fn(async () => ({})) }))
 const scraperApiMock = vi.hoisted(() => ({ scrapeTrigger: vi.fn(async () => ({})) }))
@@ -20,10 +20,14 @@ const subscriptions: NipPodcastSubscription[] = [
 const schedules: ScraperSchedule[] = [
   { site_id: 'alpaca-news', poll_interval_min: 5, enabled: true, llm_daily_budget: 15, thesis_daily_budget: 3, last_run: null, next_run: null },
 ]
+const siteInventory: ScraperSiteInventory[] = [
+  { site_id: 'alpaca-news', display_name: 'Alpaca News', kind: 'news', enabled: true, poll_interval_min: 5, feed_url: null, source_seed_status: 'seeded', schedule_seed_status: 'recorded', credential_status: 'not_required' },
+  { site_id: 'reuters', display_name: 'Reuters', kind: 'news', enabled: false, poll_interval_min: 60, feed_url: null, source_seed_status: 'not_seeded', schedule_seed_status: 'not_seeded', credential_status: 'missing' },
+]
 const events: NipEvent[] = []
 
-function renderView() {
-  return render(<SourcesView sources={sources} subscriptions={subscriptions} events={events} scraperSchedules={schedules} onChanged={vi.fn(async () => {})} />)
+function renderView(inventory?: ScraperSiteInventory[]) {
+  return render(<SourcesView sources={sources} subscriptions={subscriptions} events={events} scraperSchedules={schedules} siteInventory={inventory} onChanged={vi.fn(async () => {})} />)
 }
 
 describe('SourcesView (revamp §c.2)', () => {
@@ -69,5 +73,31 @@ describe('SourcesView (revamp §c.2)', () => {
     fireEvent.click(screen.getByTestId('source-select-ttu-podcast'))
     fireEvent.click(screen.getByTestId('sources-bulk-run-now'))
     await waitFor(() => expect(scraperApiMock.scrapeTrigger).toHaveBeenCalledWith({ sites: ['alpaca-news'] }))
+  })
+
+  it('shows YAML site inventory separately without creating NIP-source rows', () => {
+    renderView(siteInventory)
+    expect(screen.getByTestId('scraper-inventory-row-alpaca-news')).toBeTruthy()
+    expect(screen.getByTestId('scraper-inventory-row-reuters')).toBeTruthy()
+    expect(screen.queryByTestId('source-table-row-reuters')).toBeNull()
+    expect(screen.getByTestId('source-managed-by-alpaca-news').textContent).toBe('fina-scraper')
+    expect(screen.getByTestId('scraper-inventory-row-alpaca-news').textContent).toContain('seeded')
+    expect(screen.getByTestId('scraper-inventory-row-alpaca-news').textContent).toContain('recorded')
+    expect(screen.getByTestId('scraper-inventory-row-alpaca-news').textContent).toContain('not required')
+  })
+
+  it('lists Reuters as disabled inventory and does not imply it can be probed', () => {
+    renderView(siteInventory)
+    expect(screen.getByTestId('scraper-inventory-enabled-reuters').textContent).toBe('disabled')
+    expect(screen.getByTestId('scraper-inventory-row-reuters').textContent).toContain('not seeded')
+    expect(screen.getByTestId('scraper-inventory-row-reuters').textContent).toContain('missing')
+    expect(screen.getByText(/Inventory does not create a NIP source/)).toBeTruthy()
+    expect(screen.getByText(/Podcast feeds remain scraper-YAML-owned/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /probe reuters/i })).toBeNull()
+  })
+
+  it('handles a legacy response with no YAML inventory', () => {
+    renderView()
+    expect(screen.getByTestId('scraper-inventory-empty').textContent).toContain('older sidecar')
   })
 })

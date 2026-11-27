@@ -118,10 +118,8 @@ fn validate_local_model_settings(base_url: &str, model: &str) -> Result<(), Stri
 }
 
 fn local_model_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map(|directory| directory.join("NIP").join("local-model.json"))
-        .map_err(|_| "Could not access application data directory".to_owned())
+    crate::mcp_commands::resolve_nip_lake_dir(app)
+        .map(|lake| lake.join("_nip").join("local-model.json"))
 }
 
 fn read_saved_local_model_settings(path: &Path) -> Result<Option<SavedLocalModelSettings>, String> {
@@ -661,11 +659,8 @@ impl NipServiceState {
 }
 
 /// The data directory owned by the single NIP engine for this host run.
-fn nip_data_dir(app: &AppHandle) -> PathBuf {
-    app.path()
-        .app_data_dir()
-        .map(|dir| dir.join("NIP"))
-        .unwrap_or_else(|_| PathBuf::from(".nip-data"))
+fn nip_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    crate::mcp_commands::resolve_nip_lake_dir(app).map(|lake| lake.join("_nip"))
 }
 
 /// Resolve a managed media file for the webview's asset protocol.
@@ -675,7 +670,7 @@ fn nip_data_dir(app: &AppHandle) -> PathBuf {
 /// command never exposes the rest of the filesystem.
 #[tauri::command]
 pub fn nip_media_file(app: AppHandle, relative_path: String) -> Result<String, String> {
-    let root = nip_data_dir(&app).join("media");
+    let root = nip_data_dir(&app)?.join("media");
     let root = root
         .canonicalize()
         .map_err(|_| "NIP media directory is not available".to_owned())?;
@@ -715,7 +710,17 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
         .port();
     drop(listener);
 
-    let data_dir = nip_data_dir(app);
+    let lake_dir = crate::mcp_commands::resolve_nip_lake_dir(app)?;
+    // Share the scraper's lock and safety checks. This occurs before NIP logs,
+    // pidfiles, media directories, or the engine process are created.
+    let storage_init = fina_scraper::storage::initialize(&lake_dir, None)
+        .map_err(|error| format!("could not initialize NIP_LAKE_DIR: {error}"))?;
+    let data_dir = lake_dir.join("_nip");
+    eprintln!(
+        "NIP storage: NIP_LAKE_DIR={} NIP_DATA_DIR={} (legacy app-data storage location is unused)",
+        lake_dir.display(),
+        data_dir.display()
+    );
     let pidfile = pidfile_for(&data_dir);
     // A previous run that was killed rather than shut down still owns the
     // DuckDB lock; starting a second engine would only fail.
@@ -727,9 +732,20 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
         ),
         (
             "NIP_LAKE_DIR".to_string(),
-            data_dir.join("lake").to_string_lossy().into_owned(),
+            lake_dir.to_string_lossy().into_owned(),
         ),
     ];
+    let scraper_owned_feeds: Vec<String> = storage_init
+        .site_inventory
+        .iter()
+        .filter(|site| site.enabled && site.kind == "podcast")
+        .filter_map(|site| site.feed_url.clone())
+        .collect();
+    env.push((
+        "NIP_SCRAPER_OWNED_PODCAST_FEEDS".to_string(),
+        serde_json::to_string(&scraper_owned_feeds)
+            .map_err(|error| format!("could not serialize scraper feed ownership: {error}"))?,
+    ));
     if let Some(bridge) = bridge {
         env.push(("NIP_RIGA_BRIDGE_URL".to_string(), bridge.url.clone()));
         env.push(("NIP_RIGA_BRIDGE_TOKEN".to_string(), bridge.token.clone()));
@@ -945,7 +961,10 @@ mod tests {
     #[test]
     fn saved_settings_round_trip_only_url_and_model() {
         let directory = std::env::temp_dir().join(format!("nip-settings-{}", uuid::Uuid::new_v4()));
-        let path = directory.join("NIP").join("local-model.json");
+        let path = directory
+            .join("NIPLake")
+            .join("_nip")
+            .join("local-model.json");
         save_local_model_settings(&path, "http://127.0.0.1:11434/v1", "model:latest").unwrap();
         let serialized = std::fs::read_to_string(&path).unwrap();
         let json: Value = serde_json::from_str(&serialized).unwrap();
@@ -1034,8 +1053,9 @@ mod tests {
             eprintln!("skipping: nip-engine binary is not built");
             return;
         };
-        let data_dir = std::env::temp_dir().join(format!("nip-http-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&data_dir).unwrap();
+        let root = std::env::temp_dir().join(format!("nip-http-test-{}", uuid::Uuid::new_v4()));
+        let lake_dir = root.join("lake");
+        let data_dir = lake_dir.join("_nip");
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
@@ -1045,7 +1065,7 @@ mod tests {
             .arg("--bind")
             .arg(format!("127.0.0.1:{port}"))
             .env("NIP_DATA_DIR", &data_dir)
-            .env("NIP_LAKE_DIR", data_dir.join("lake"))
+            .env("NIP_LAKE_DIR", &lake_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1080,7 +1100,7 @@ mod tests {
         });
         let _ = child.kill();
         let _ = child.wait();
-        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&root);
         result.unwrap();
     }
 }

@@ -17,6 +17,11 @@ const status: ScraperStatus = {
     { site_id: 'alpaca-news', poll_interval_min: 5, enabled: true, llm_daily_budget: 15, thesis_daily_budget: 3, last_run: { run_id: 'run-1', started_at: '2026-11-24T15:55:00Z', finished_at: '2026-11-24T15:58:00Z', status: 'finished', summary: { new: 4 }, outputs: null, error: null }, next_run: '2026-11-24T16:03:00Z' },
   ],
   budgets: { date: '2026-11-24', llm_daily_budget: 15, llm_reviews_today: 7, thesis_daily_budget: 3, theses_today: 1 },
+  storage: {
+    lake_dir: '/data/fina/lake', data_dir: '/data/fina/lake/_nip', config_dir: '/home/user/.config/fina',
+    schedules_dir: '/home/user/.config/fina/schedules', state_path: '/home/user/.local/state/fina/state.json',
+    output_dir: '/data/fina/output', initialized: true, initialization_status: 'initialized', schema_version: '1',
+  },
 }
 
 describe('SchedulesView (revamp §c.3)', () => {
@@ -28,6 +33,30 @@ describe('SchedulesView (revamp §c.3)', () => {
     expect(row.textContent).toContain('every 5 min')
     expect(row.textContent).toContain('finished')
     expect(row.textContent).toContain('new 4')
+  })
+
+  it('shows the lake root, derived _nip and configured storage paths without implying NIP event import', () => {
+    render(<SchedulesView status={status} sidecarError={null} resource={null} onChanged={vi.fn(async () => {})} />)
+    expect(screen.getByTestId('scraper-storage-lake-dir').textContent).toBe('/data/fina/lake')
+    expect(screen.getByTestId('scraper-storage-nip-path').textContent).toBe('/data/fina/lake/_nip')
+    const storage = screen.getByTestId('scraper-storage-details')
+    expect(storage.textContent).toContain('/home/user/.config/fina')
+    expect(storage.textContent).toContain('/home/user/.config/fina/schedules')
+    expect(storage.textContent).toContain('/home/user/.local/state/fina/state.json')
+    expect(storage.textContent).toContain('/data/fina/output')
+    expect(screen.getByTestId('scraper-storage-initialized').textContent).toBe('initialized · schema v1')
+    expect(screen.getByText('Lake Parquet data is not imported as NIP DuckDB event rows.')).toBeTruthy()
+  })
+
+  it('handles a legacy status response without storage metadata', () => {
+    const legacyStatus: ScraperStatus = {
+      last_run: null,
+      lake: status.lake,
+      schedules: [],
+      budgets: status.budgets,
+    }
+    render(<SchedulesView status={legacyStatus} sidecarError={null} resource={null} onChanged={vi.fn(async () => {})} />)
+    expect(screen.getByTestId('scraper-storage-unavailable').textContent).toContain('legacy status response')
   })
 
   it('run-now triggers the schedule’s site', async () => {
@@ -59,5 +88,6 @@ describe('SchedulesView (revamp §c.3)', () => {
   it('says plainly when the sidecar is down', () => {
     render(<SchedulesView status={null} sidecarError={'connect ECONNREFUSED 127.0.0.1:8798'} resource={null} onChanged={vi.fn(async () => {})} />)
     expect(screen.getByText(/sidecar unavailable/)).toBeTruthy()
+    expect(screen.getByTestId('scraper-storage-unavailable').textContent).toContain('Unavailable')
   })
 })

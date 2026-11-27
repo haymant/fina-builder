@@ -13,7 +13,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { finaScraperCandidates } from "./lib/fina-scraper-bin.mjs";
-import { loadLocalEnv } from "./lib/local-env.mjs";
+import { isEnvPlaceholder, loadLocalEnv, tauriAppDataDir } from "./lib/local-env.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const START_DIR = process.cwd();
@@ -155,8 +155,11 @@ export function resolveProject(project, profile = DEFAULT_PROFILE) {
     mcp_manifest: resolvePath(project.root, project.config.mcp?.manifest, "mcp.manifest"),
   };
   resolvedPaths.tac_lake = resolvePath(project.root, selected.values.tac_lake ?? join(profileDataRoot, "lake"), "profile tac_lake");
-  resolvedPaths.nip_data = resolvePath(project.root, selected.values.nip_data ?? join(profileDataRoot, "nip"), "profile nip_data");
-  resolvedPaths.nip_lake = resolvePath(project.root, selected.values.nip_lake ?? join(profileDataRoot, "nip", "lake"), "profile nip_lake");
+  const defaultNipLake = selected.name === "packaged"
+    ? join(tauriAppDataDir(), "NIPLake")
+    : join(profileDataRoot, "nip", "lake");
+  resolvedPaths.nip_lake = resolvePath(project.root, selected.values.nip_lake ?? defaultNipLake, "profile nip_lake");
+  resolvedPaths.nip_data = join(resolvedPaths.nip_lake, "_nip");
   return {
     ...project,
     profile: selected.name,
@@ -167,21 +170,32 @@ export function resolveProject(project, profile = DEFAULT_PROFILE) {
 
 export function buildRuntimeEnvironment(project, baseEnv = process.env) {
   const releaseTarget = join(project.paths.rust_target, "release");
-  const hasExplicitLake = baseEnv.TAC_LAKE_DIR !== undefined;
+  const hasValue = (value) => value !== undefined && value !== "" && !isEnvPlaceholder(value);
+  const profileTacLake = project.paths.tac_lake;
+  const profileNipLake = project.paths.nip_lake;
+  const inheritedTacDefault = baseEnv.FINA_PROFILE_TAC_LAKE_DIR && baseEnv.TAC_LAKE_DIR === baseEnv.FINA_PROFILE_TAC_LAKE_DIR;
+  const inheritedNipDefault = baseEnv.FINA_PROFILE_NIP_LAKE_DIR && baseEnv.NIP_LAKE_DIR === baseEnv.FINA_PROFILE_NIP_LAKE_DIR;
+  const hasExplicitTacLake = hasValue(baseEnv.TAC_LAKE_DIR) && !inheritedTacDefault;
+  const hasExplicitNipLake = hasValue(baseEnv.NIP_LAKE_DIR) && !inheritedNipDefault;
+  if (hasValue(baseEnv.NIP_DATA_DIR)) {
+    console.warn("Ignoring NIP_DATA_DIR; it is derived from NIP_LAKE_DIR.");
+  }
+  const nipLake = resolvePath(project.root, hasValue(baseEnv.NIP_LAKE_DIR) ? baseEnv.NIP_LAKE_DIR : profileNipLake, "NIP_LAKE_DIR");
   return {
     FINA_PROFILE: project.profile,
     FINA_ROOT: project.root,
     FINA_WORKSPACE_ROOT: project.root,
     FINA_DATA_ROOT: project.paths.data_root,
-    // Hosts may let a local .env replace this profile default, but never an
-    // explicit TAC_LAKE_DIR supplied by the caller.
-    FINA_PROFILE_TAC_LAKE_DIR: hasExplicitLake ? "" : project.paths.tac_lake,
+    // Local dotenv files may replace these injected defaults, but not explicit
+    // process values (including a value that happens to equal the default).
+    FINA_PROFILE_TAC_LAKE_DIR: hasExplicitTacLake ? "" : profileTacLake,
+    FINA_PROFILE_NIP_LAKE_DIR: hasExplicitNipLake ? "" : profileNipLake,
     FINA_RUST_TARGET_DIR: project.paths.rust_target,
     FINA_QLIB_ROOT: project.paths.qlib,
     CARGO_TARGET_DIR: baseEnv.CARGO_TARGET_DIR ?? project.paths.rust_target,
-    TAC_LAKE_DIR: baseEnv.TAC_LAKE_DIR ?? project.paths.tac_lake,
-    NIP_DATA_DIR: baseEnv.NIP_DATA_DIR ?? project.paths.nip_data,
-    NIP_LAKE_DIR: baseEnv.NIP_LAKE_DIR ?? project.paths.nip_lake,
+    TAC_LAKE_DIR: hasValue(baseEnv.TAC_LAKE_DIR) ? baseEnv.TAC_LAKE_DIR : project.paths.tac_lake,
+    NIP_DATA_DIR: join(nipLake, "_nip"),
+    NIP_LAKE_DIR: nipLake,
     TAC_ENGINE_BIN: baseEnv.TAC_ENGINE_BIN ?? join(releaseTarget, process.platform === "win32" ? "tac-engine.exe" : "tac-engine"),
     // fina-scraper sidecar (revamp F1): only forward an explicit override.
     // The launcher resolves an unset value at spawn time, after
@@ -254,10 +268,10 @@ async function capture(command, args, cwd) {
 }
 
 function printHelp() {
-  console.log(`Fina Builder control plane\n\nUsage:\n  fina [--profile <name>] <command> [options]\n\nControl-plane commands:\n  help                 Show this help\n  config [--json]      Print the resolved fina.toml configuration\n  doctor [--json]      Check the checkout and required development tools\n  run <name> [args...] Run a command declared in fina.toml\n\nProfiles:\n  development          Local checkout and ignored .fina/data root (default)\n  ci                   CI paths and release Rust build policy\n  packaged             Immutable-install layout with external data root\n\nConfigured command aliases:\n  dev, web, dev_http, desktop, build, test, lint, runtime_prepare, package`);
+  console.log(`Fina Builder control plane\n\nUsage:\n  fina [--profile <name>] <command> [options]\n\nControl-plane commands:\n  help                 Show this help\n  config [--json]      Print the resolved fina.toml configuration\n  doctor [--json]      Check the checkout and required development tools\n  run <name> [args...] Run a command declared in fina.toml\n\nProfiles:\n  development          Local checkout and ignored .fina/data root (default)\n  ci                   CI paths and release Rust build policy\n  packaged             Immutable-install layout with NIP data in Tauri app data\n\nConfigured command aliases:\n  dev, web, dev_http, desktop, build, test, lint, runtime_prepare, package`);
 }
 
-function printConfig(project, json) {
+function printConfig(project, json, runtimeEnv) {
   const output = {
     ...project.config,
     _resolved: {
@@ -267,6 +281,11 @@ function printConfig(project, json) {
       profile_config: project.profile_config,
       workspace_root: project.root,
       ...project.paths,
+      NIP_LAKE_DIR: runtimeEnv.NIP_LAKE_DIR,
+      NIP_DATA_DIR: runtimeEnv.NIP_DATA_DIR,
+      TAC_LAKE_DIR: runtimeEnv.TAC_LAKE_DIR,
+      nip_lake: runtimeEnv.NIP_LAKE_DIR,
+      nip_data: runtimeEnv.NIP_DATA_DIR,
     },
   };
   console.log(json ? JSON.stringify(output, null, 2) : JSON.stringify(output, null, 2));
@@ -320,9 +339,18 @@ export async function doctor(project, json) {
       ? `${nipLake}${process.env.NIP_LAKE_DIR ? " (host env or .env)" : " (profile default)"}`
       : "not set (set NIP_LAKE_DIR in the host env or .env, or rely on the profile default)",
   );
+  add("NIP_DATA_DIR", Boolean(runtimeEnv.NIP_DATA_DIR), runtimeEnv.NIP_DATA_DIR);
 
   const failed = checks.filter((check) => check.required && !check.ok);
-  if (json) console.log(JSON.stringify({ root: project.root, config: project.configPath, profile: project.profile, paths: project.paths, checks, ok: failed.length === 0 }, null, 2));
+  if (json) console.log(JSON.stringify({
+    root: project.root,
+    config: project.configPath,
+    profile: project.profile,
+    paths: { ...project.paths, nip_lake: runtimeEnv.NIP_LAKE_DIR, nip_data: runtimeEnv.NIP_DATA_DIR },
+    effective_environment: { NIP_LAKE_DIR: runtimeEnv.NIP_LAKE_DIR, NIP_DATA_DIR: runtimeEnv.NIP_DATA_DIR, TAC_LAKE_DIR: runtimeEnv.TAC_LAKE_DIR },
+    checks,
+    ok: failed.length === 0,
+  }, null, 2));
   else {
     console.log(`Fina doctor — ${project.root} (${project.profile})`);
     for (const check of checks) console.log(`${check.ok ? "PASS" : check.required ? "FAIL" : "WARN"}  ${check.name}: ${check.detail}`);
@@ -364,14 +392,15 @@ export async function main(argv = process.argv.slice(2), start = START_DIR) {
   // configured commands (and doctor) see the user's lake/database/provider
   // settings. Explicit shell exports still win; `loadLocalEnv` only lets a
   // local file replace the profile lake default it injected itself.
-  const loadedEnv = loadLocalEnv(project.root, process.env);
+  const loadedEnv = loadLocalEnv(project.root, process.env, { cwd: start });
+  const runtimeEnv = buildRuntimeEnvironment(project);
   const command = requested === "run" ? args.shift() : requested;
   if (!command || command === "help" || command === "--help" || command === "-h") {
     printHelp();
     return 0;
   }
   if (command === "config") {
-    printConfig(project, args.includes("--json"));
+    printConfig(project, args.includes("--json"), runtimeEnv);
     return 0;
   }
   if (command === "doctor") return doctor(project, args.includes("--json"));

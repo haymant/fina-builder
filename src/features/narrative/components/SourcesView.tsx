@@ -5,7 +5,7 @@ import { PanelCard } from '../../shared/components/PanelCard'
 import { narrativeApi } from '../api'
 import { scraperApi } from '../scraperApi'
 import type { NipPodcastSubscription, NipEvent, NipSource, NipSourceKind } from '../types'
-import type { ScraperSchedule } from '../scraperTypes'
+import type { ScraperSchedule, ScraperSiteInventory, ScraperStorage } from '../scraperTypes'
 import { AddSourceForm, EditSourceForm, KIND_LABELS, kindLabel } from './SourceRegistry'
 
 const FAVOURITES_KEY = 'fina.nip.source-favourites.v1'
@@ -59,17 +59,25 @@ function formatDate(value: string | null | undefined): string {
   return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
+function inventoryStatus(value: string | null | undefined): string {
+  return value ? value.replaceAll('_', ' ') : 'not reported'
+}
+
 export function SourcesView({
   sources,
   subscriptions,
   events,
   scraperSchedules,
+  siteInventory = [],
+  storage = null,
   onChanged,
 }: {
   sources: NipSource[]
   subscriptions: NipPodcastSubscription[]
   events: NipEvent[]
   scraperSchedules: ScraperSchedule[]
+  siteInventory?: ScraperSiteInventory[]
+  storage?: ScraperStorage | null
   onChanged: () => Promise<void>
 }) {
   const [search, setSearch] = useState('')
@@ -182,6 +190,7 @@ export function SourcesView({
   return (
     <div className="space-y-3" data-testid="sources-view">
       <PanelCard title="Sources" subtitle="Two registries, one view · fina-scraper owns scraper kinds, nip-engine owns local kinds · rights gate unchanged" collapsible={false} bodyClassName="narrative-card-body" actions={<Button size="sm" onClick={() => setAddOpen(true)} data-testid="add-source-open">Add source</Button>}>
+        <p className="mb-2 text-[10px] text-muted" data-testid="narrative-storage-paths">NIP_LAKE_DIR: <code>{storage?.lake_dir ?? 'loading'}</code> · derived NIP_DATA_DIR: <code>{storage?.data_dir ?? 'loading'}</code> · DuckDB and scraper Parquet remain separate stores; rows are not auto-imported.</p>
         <div className="flex flex-wrap items-center gap-2">
           <label className="flex min-w-52 flex-1 items-center gap-2 text-[11px] text-muted"><Search size={13} /><input type="search" aria-label="Search sources" placeholder="Search name, locator, topics…" value={search} onChange={(event) => setSearch(event.target.value)} data-testid="sources-search" className="min-w-0 flex-1" /></label>
           <label className="text-[11px] text-muted">Sort <select aria-label="Sort sources" value={sort} onChange={(event) => setSort(event.target.value as SourceSort)} data-testid="sources-sort"><option value="name">Name</option><option value="last-checked">Last checked</option><option value="errors">Error count</option></select></label>
@@ -243,6 +252,30 @@ export function SourcesView({
             )}
           </section>
         )) : <p className="mt-3 text-[11px] text-muted">No sources match the current search or filter.</p>}
+      </PanelCard>
+      <PanelCard title="Scraper YAML site inventory" subtitle="Configuration inventory only · separate from NIP sources and recorded schedules" collapsible={false} bodyClassName="narrative-card-body">
+        <p className="text-[10px] text-muted">Every configured site is listed, including disabled entries. Inventory does not create a NIP source, satisfy source-rights checks, or imply that a site is probeable. Podcast feeds remain scraper-YAML-owned for scraper ingestion; NIP DuckDB subscriptions are not imported from Parquet.</p>
+        {siteInventory.length ? (
+          <div className="mt-2 overflow-x-auto">
+            <table className="narrative-table" data-testid="scraper-site-inventory">
+              <thead><tr><th>Site</th><th>Kind</th><th>State</th><th>Interval</th><th>Feed URL</th><th>Source seed</th><th>Schedule seed</th><th>Credentials</th></tr></thead>
+              <tbody>
+                {siteInventory.map((site) => (
+                  <tr key={site.site_id} data-testid={`scraper-inventory-row-${site.site_id}`}>
+                    <td><strong className="text-xs text-main">{site.display_name}</strong><span className="block text-[10px] text-muted">{site.site_id}</span></td>
+                    <td>{site.kind}</td>
+                    <td><span className="narrative-chip" data-testid={`scraper-inventory-enabled-${site.site_id}`}>{site.enabled ? 'enabled' : 'disabled'}</span></td>
+                    <td>{site.poll_interval_min} min</td>
+                    <td className="max-w-56 break-all">{site.feed_url || '—'}</td>
+                    <td>{inventoryStatus(site.source_seed_status)}</td>
+                    <td>{inventoryStatus(site.schedule_seed_status)}</td>
+                    <td>{inventoryStatus(site.credential_status)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <p className="mt-2 text-[11px] text-muted" data-testid="scraper-inventory-empty">No YAML site inventory was reported by this status response (it may be loading, unavailable, or from an older sidecar).</p>}
       </PanelCard>
       {addOpen ? (
         <div className="narrative-dialog-backdrop" data-testid="add-source-dialog" onMouseDown={() => setAddOpen(false)}>

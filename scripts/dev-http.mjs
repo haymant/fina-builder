@@ -7,6 +7,7 @@ import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { loadLocalEnv } from './lib/local-env.mjs'
+import { applyRuntimeEnvironment } from './lib/runtime-env.mjs'
 
 export { loadLocalEnv }
 
@@ -232,7 +233,8 @@ async function main() {
     usage()
     return
   }
-  const envFiles = loadLocalEnv()
+  const { project, loaded: envFiles } = applyRuntimeEnvironment(root, process.env)
+  if (!project) throw new Error('Could not load fina.toml; run dev:http from a Fina Builder checkout.')
   if (envFiles.length > 0) console.log(`[dev:http] Loaded local environment from ${envFiles.join(', ')}.`)
   const cargoBin = resolve(process.env.CARGO_HOME || resolve(homedir(), '.cargo'), 'bin')
   process.env.CARGO_TARGET_DIR ??= resolve(root, 'modules/target')

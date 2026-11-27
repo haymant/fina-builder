@@ -177,6 +177,8 @@ pub enum NipError {
     SubscriptionInactive,
     #[error("podcast feed is not yet due for refresh")]
     RefreshNotDue,
+    #[error("podcast feed is owned by fina-scraper; NIP will not fetch the same feed twice")]
+    ScraperOwnsPodcastFeed,
     #[error("podcast feed could not be fetched or parsed; retry is scheduled")]
     FeedUnavailable,
     #[error("local transcription is unavailable; retry is possible")]
@@ -669,6 +671,9 @@ impl NipService {
             return Err(NipError::RightsConfirmationRequired);
         }
         let feed_url = validate_feed_url(&request.feed_url).map_err(map_feed_url_error)?;
+        if self.config.scraper_owns_podcast_feed(feed_url.as_str()) {
+            return Err(NipError::ScraperOwnsPodcastFeed);
+        }
         if request.show_name.trim().is_empty() || request.rights_statement.trim().is_empty() {
             return Err(NipError::InvalidSubscriptionDetails);
         }
@@ -729,6 +734,9 @@ impl NipService {
             .store
             .subscription(source_id)?
             .ok_or(NipError::SubscriptionNotFound)?;
+        if self.config.scraper_owns_podcast_feed(&subscription.feed_url) {
+            return Err(NipError::ScraperOwnsPodcastFeed);
+        }
         if subscription.state != PodcastSubscriptionState::Active {
             return Err(NipError::SubscriptionInactive);
         }
@@ -855,6 +863,7 @@ impl NipService {
             .into_iter()
             .filter(|subscription| {
                 subscription.state == PodcastSubscriptionState::Active
+                    && !self.config.scraper_owns_podcast_feed(&subscription.feed_url)
                     && subscription.next_poll_at.is_none_or(|next| now >= next)
             })
             .map(|subscription| subscription.source_id)
@@ -877,7 +886,10 @@ impl NipService {
             .store
             .subscriptions()?
             .into_iter()
-            .filter(|subscription| subscription.state == PodcastSubscriptionState::Active)
+            .filter(|subscription| {
+                subscription.state == PodcastSubscriptionState::Active
+                    && !self.config.scraper_owns_podcast_feed(&subscription.feed_url)
+            })
             .map(|subscription| subscription.source_id)
             .collect::<Vec<_>>();
         Ok(active_source_ids
@@ -2740,8 +2752,8 @@ mod tests {
         let root = temp.path();
         let config = NipConfig::resolve(
             &BTreeMap::from([(
-                "NIP_DATA_DIR".to_owned(),
-                root.join("data").to_string_lossy().into_owned(),
+                "NIP_LAKE_DIR".to_owned(),
+                root.join("lake").to_string_lossy().into_owned(),
             )]),
             root,
             None,
@@ -2768,13 +2780,14 @@ mod tests {
     fn service_initialization_creates_only_nip_database_directory() {
         let temp = tempdir().unwrap();
         let root = temp.path();
-        let data_dir = root.join(".nip-data");
+        let lake_dir = root.join("narrative-lake");
+        let data_dir = lake_dir.join("_nip");
         let tac_dir = root.join(".lake");
         let config = NipConfig::resolve(
             &BTreeMap::from([
                 (
-                    "NIP_DATA_DIR".to_owned(),
-                    data_dir.to_string_lossy().into_owned(),
+                    "NIP_LAKE_DIR".to_owned(),
+                    lake_dir.to_string_lossy().into_owned(),
                 ),
                 (
                     "TAC_LAKE_DIR".to_owned(),
@@ -2789,7 +2802,7 @@ mod tests {
         let service = NipService::open(config).unwrap();
         assert!(data_dir.join("nip.duckdb").is_file());
         assert!(!tac_dir.exists());
-        assert_eq!(service.config().lake_dir(), tac_dir.join("nip"));
+        assert_eq!(service.config().lake_dir(), lake_dir);
     }
 
     #[derive(Default)]
@@ -2828,8 +2841,8 @@ mod tests {
     fn service_at(root: &std::path::Path) -> NipService {
         let config = NipConfig::resolve(
             &BTreeMap::from([(
-                "NIP_DATA_DIR".to_owned(),
-                root.join("data").to_string_lossy().into_owned(),
+                "NIP_LAKE_DIR".to_owned(),
+                root.join("lake").to_string_lossy().into_owned(),
             )]),
             root,
             None,
@@ -3507,8 +3520,8 @@ mod tests {
         let config = NipConfig::resolve(
             &BTreeMap::from([
                 (
-                    "NIP_DATA_DIR".to_owned(),
-                    root.join("data").to_string_lossy().into_owned(),
+                    "NIP_LAKE_DIR".to_owned(),
+                    root.join("lake").to_string_lossy().into_owned(),
                 ),
                 ("NIP_RIGA_BRIDGE_URL".to_owned(), bridge_url.to_owned()),
                 ("NIP_RIGA_BRIDGE_TOKEN".to_owned(), token.to_owned()),
@@ -3553,8 +3566,8 @@ mod tests {
         let config = NipConfig::resolve(
             &BTreeMap::from([
                 (
-                    "NIP_DATA_DIR".to_owned(),
-                    temp.path().join("data").to_string_lossy().into_owned(),
+                    "NIP_LAKE_DIR".to_owned(),
+                    temp.path().join("lake").to_string_lossy().into_owned(),
                 ),
                 ("NIP_CLAIM_PROVIDER".into(), "direct_local".into()),
                 (

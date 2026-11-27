@@ -11,6 +11,12 @@ function formatDate(value: string | null | undefined): string {
   return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
+function derivedNipPath(lakeDir: string | undefined): string {
+  if (!lakeDir) return 'Not reported'
+  const separator = lakeDir.includes('\\') && !lakeDir.includes('/') ? '\\' : '/'
+  return `${lakeDir.replace(/[\\/]+$/, '')}${separator}_nip`
+}
+
 function runSummary(run: NonNullable<import('../scraperTypes').ScraperSchedule['last_run']>): string {
   const summary = run.summary as Record<string, unknown> | null
   const counts = summary ? Object.entries(summary).map(([key, value]) => `${key} ${String(value)}`).join(' · ') : ''
@@ -66,6 +72,10 @@ export function SchedulesView({
   const [backloadBusy, setBackloadBusy] = useState(false)
 
   const schedules = status?.schedules ?? []
+  const storage = status?.storage
+  const storageUnavailable = !storage
+    ? sidecarError ? 'Unavailable — scraper sidecar did not respond.' : status ? 'Not reported by this legacy status response.' : 'Waiting for scraper status…'
+    : null
 
   const submitSchedule = async (event: FormEvent) => {
     event.preventDefault()
@@ -196,6 +206,20 @@ export function SchedulesView({
           </div>
         ) : <p className="mt-3 text-[11px] text-muted">No schedules recorded yet. Create one below — the first schedule makes its source scraper-managed in the Sources view.</p>}
         {message ? <p className={`mt-2 text-[10px] ${messageIsError ? 'text-red-600' : 'text-muted'}`} role={messageIsError ? 'alert' : 'status'}>{message}</p> : null}
+      </PanelCard>
+
+      <PanelCard title="Scraper storage / initialization" subtitle="Read-only paths reported by fina-scraper" collapsible={false} bodyClassName="narrative-card-body">
+        {storage ? <dl className="narrative-provenance" data-testid="scraper-storage-details">
+          <div><dt>Lake root</dt><dd data-testid="scraper-storage-lake-dir">{storage.lake_dir || 'Not reported'}</dd></div>
+          <div><dt>Derived _nip path</dt><dd data-testid="scraper-storage-nip-path">{derivedNipPath(storage.lake_dir)}</dd></div>
+          <div><dt>Data directory</dt><dd>{storage.data_dir || 'Not reported'}</dd></div>
+          <div><dt>Config directory</dt><dd>{storage.config_dir || 'Not reported'}</dd></div>
+          <div><dt>Schedules directory</dt><dd>{storage.schedules_dir || 'Not reported'}</dd></div>
+          <div><dt>State path</dt><dd>{storage.state_path || 'Not reported'}</dd></div>
+          <div><dt>Output directory</dt><dd>{storage.output_dir || 'Not reported'}</dd></div>
+          <div><dt>Initialization marker / status</dt><dd data-testid="scraper-storage-initialized">{storage.initialization_status ?? (storage.initialized ? 'initialized' : 'not initialized')} · schema {storage.schema_version ? `v${storage.schema_version}` : 'unknown'}</dd></div>
+        </dl> : <p className="text-[11px] text-muted" data-testid="scraper-storage-unavailable">{storageUnavailable}</p>}
+        <p className="mt-2 text-[10px] text-muted">Lake Parquet data is not imported as NIP DuckDB event rows.</p>
       </PanelCard>
 
       <PanelCard title={editingSite ? `Edit schedule — ${editingSite}` : 'Create schedule'} subtitle="Interval presets follow the plan's tiers · budgets default to 15 LLM deep-dives and 3 theses per day" collapsible={false} bodyClassName="narrative-card-body">

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -15,7 +15,7 @@ pub enum ConfigError {
     InvalidTestMode,
     #[error("{0} must not be empty when explicitly set")]
     EmptyPath(&'static str),
-    #[error("NIP_TEST_MODE requires NIP_DATA_DIR beneath playwright/.data/nip")]
+    #[error("NIP_TEST_MODE requires the derived NIP_DATA_DIR beneath playwright/.data")]
     UnsafeTestDataDirectory,
     #[error("NIP_TEST_MODE requires NIP_LAKE_DIR beneath playwright/.data")]
     UnsafeTestLakeDirectory,
@@ -23,8 +23,8 @@ pub enum ConfigError {
     DataDirectoryAliasesTac,
     #[error("NIP_LAKE_DIR must not resolve to TAC_LAKE_DIR")]
     LakeDirectoryAliasesTac,
-    #[error("NIP_DATA_DIR and NIP_LAKE_DIR must be different directories")]
-    DataDirectoryAliasesLake,
+    #[error("NIP_DATA_DIR is derived and must equal NIP_LAKE_DIR/_nip")]
+    DataDirectoryMustBeDerived,
     #[error("the operating system application-data directory could not be resolved")]
     AppDataUnavailable,
     #[error("NIP_COMFYUI_URL must be an HTTP(S) loopback URL without credentials")]
@@ -45,6 +45,8 @@ pub enum ConfigError {
     InvalidLocalLlmModel,
     #[error("NIP_LOCAL_LLM_URL and NIP_LOCAL_LLM_MODEL must be configured together")]
     IncompleteLocalLlmConfig,
+    #[error("NIP_SCRAPER_OWNED_PODCAST_FEEDS must be a JSON array of feed URLs")]
+    InvalidScraperPodcastFeeds,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +147,7 @@ pub struct NipConfig {
     riga_bridge: Option<RigaBridgeConfig>,
     claim_provider_mode: ClaimProviderMode,
     local_llm: Option<LocalLlmConfig>,
+    scraper_owned_podcast_feeds: BTreeSet<String>,
 }
 
 impl NipConfig {
@@ -156,6 +159,8 @@ impl NipConfig {
             "NIP_LAKE_DIR",
             "TAC_LAKE_DIR",
             "NIP_TEST_MODE",
+            "FINA_PROFILE",
+            "FINA_PROFILE_NIP_LAKE_DIR",
             "NIP_COMFYUI_URL",
             "NIP_COMFY_DIR",
             "NIP_COMFY_REPO",
@@ -167,6 +172,7 @@ impl NipConfig {
             "NIP_CLAIM_PROVIDER",
             "NIP_LOCAL_LLM_URL",
             "NIP_LOCAL_LLM_MODEL",
+            "NIP_SCRAPER_OWNED_PODCAST_FEEDS",
         ]
         .into_iter()
         .filter_map(|key| env::var(key).ok().map(|value| (key.to_owned(), value)))
@@ -206,25 +212,59 @@ impl NipConfig {
         let riga_bridge = resolve_riga_bridge(values)?;
         let claim_provider_mode = resolve_claim_provider_mode(values)?;
         let local_llm = resolve_local_llm(values)?;
+        let scraper_owned_podcast_feeds = values
+            .get("NIP_SCRAPER_OWNED_PODCAST_FEEDS")
+            .map(|raw| {
+                let feeds: Vec<String> = serde_json::from_str(raw)
+                    .map_err(|_| ConfigError::InvalidScraperPodcastFeeds)?;
+                feeds
+                    .iter()
+                    .map(|feed| canonical_feed_url(feed).ok_or(ConfigError::InvalidScraperPodcastFeeds))
+                    .collect::<Result<BTreeSet<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
 
-        let configured_data = configured_path(values, "NIP_DATA_DIR")?;
-        if test_mode && configured_data.is_none() {
-            return Err(ConfigError::UnsafeTestDataDirectory);
-        }
-        let data_dir = if let Some(path) = configured_data {
+        let tac_lake_dir = configured_path(values, "TAC_LAKE_DIR")?
+            .map(|path| normalize_absolute(&path, &repo_root));
+        let configured_lake = configured_path(values, "NIP_LAKE_DIR")?;
+        let lake_dir = if let Some(path) = configured_lake {
             normalize_absolute(&path, &repo_root)
+        } else if let Some(path) = values
+            .get("FINA_PROFILE_NIP_LAKE_DIR")
+            .filter(|value| !value.trim().is_empty() && !value.starts_with("${"))
+        {
+            normalize_absolute(Path::new(path), &repo_root)
+        } else if values.get("FINA_PROFILE").map(String::as_str) == Some("ci") {
+            repo_root.join(".fina/ci-data/nip/lake")
         } else if debug_build {
-            repo_root.join(".nip-data")
+            repo_root.join(".fina/data/nip/lake")
         } else {
             app_data_root
                 .map(|root| normalize_absolute(root, Path::new("/")))
                 .ok_or(ConfigError::AppDataUnavailable)?
-                .join("fina-builder")
-                .join("NIP")
+                .join("com.fina.payoffexplorer")
+                .join("NIPLake")
         };
+        let data_dir = lake_dir.join("_nip");
 
-        let tac_lake_dir = configured_path(values, "TAC_LAKE_DIR")?
-            .map(|path| normalize_absolute(&path, &repo_root));
+        if test_mode {
+            let allowed_lake = repo_root.join("playwright/.data");
+            if !is_within(&lake_dir, &allowed_lake) {
+                return Err(ConfigError::UnsafeTestLakeDirectory);
+            }
+        }
+
+        if configured_path(values, "NIP_DATA_DIR")?.is_some_and(|path| {
+            !same_resolved_path(&normalize_absolute(&path, &repo_root), &data_dir)
+        }) {
+            return Err(ConfigError::DataDirectoryMustBeDerived);
+        }
+
+        if test_mode && !is_within(&data_dir, &repo_root.join("playwright/.data")) {
+            return Err(ConfigError::UnsafeTestDataDirectory);
+        }
+
         if tac_lake_dir
             .as_ref()
             .is_some_and(|tac| same_resolved_path(&data_dir, tac))
@@ -232,38 +272,12 @@ impl NipConfig {
             return Err(ConfigError::DataDirectoryAliasesTac);
         }
 
-        let configured_lake = configured_path(values, "NIP_LAKE_DIR")?;
-        let lake_dir = if let Some(path) = configured_lake {
-            normalize_absolute(&path, &repo_root)
-        } else if let Some(tac) = &tac_lake_dir {
-            tac.join("nip")
-        } else if debug_build {
-            repo_root.join(".lake/nip")
-        } else {
-            data_dir.join("lake")
-        };
-
         if tac_lake_dir
             .as_ref()
             .is_some_and(|tac| same_resolved_path(&lake_dir, tac))
         {
             return Err(ConfigError::LakeDirectoryAliasesTac);
         }
-        if same_resolved_path(&data_dir, &lake_dir) {
-            return Err(ConfigError::DataDirectoryAliasesLake);
-        }
-
-        if test_mode {
-            let allowed_data = repo_root.join("playwright/.data/nip");
-            if !is_within(&data_dir, &allowed_data) {
-                return Err(ConfigError::UnsafeTestDataDirectory);
-            }
-            let allowed_lake = repo_root.join("playwright/.data");
-            if !is_within(&lake_dir, &allowed_lake) {
-                return Err(ConfigError::UnsafeTestLakeDirectory);
-            }
-        }
-
         Ok(Self {
             data_dir,
             lake_dir,
@@ -274,6 +288,7 @@ impl NipConfig {
             riga_bridge,
             claim_provider_mode,
             local_llm,
+            scraper_owned_podcast_feeds,
         })
     }
 
@@ -283,6 +298,11 @@ impl NipConfig {
 
     pub fn lake_dir(&self) -> &Path {
         &self.lake_dir
+    }
+
+    pub fn scraper_owns_podcast_feed(&self, feed_url: &str) -> bool {
+        canonical_feed_url(feed_url)
+            .is_some_and(|canonical| self.scraper_owned_podcast_feeds.contains(&canonical))
     }
 
     pub fn database_path(&self) -> PathBuf {
@@ -387,8 +407,9 @@ fn resolve_comfy_workspace(
         None => app_data_root
             .map(|root| normalize_absolute(root, Path::new("/")))
             .ok_or(ConfigError::AppDataUnavailable)?
-            .join("fina-builder")
-            .join("NIP")
+            .join("com.fina.payoffexplorer")
+            .join("NIPLake")
+            .join("_nip")
             .join("comfy"),
     };
     let render_script = match configured_path(values, "NIP_COMFY_RENDER")? {
@@ -438,8 +459,9 @@ fn resolve_linkzag_dir(
     Ok(app_data_root
         .map(|root| normalize_absolute(root, Path::new("/")))
         .ok_or(ConfigError::AppDataUnavailable)?
-        .join("fina-builder")
-        .join("NIP")
+        .join("com.fina.payoffexplorer")
+        .join("NIPLake")
+        .join("_nip")
         .join("linkZagShow"))
 }
 
@@ -533,6 +555,15 @@ fn configured_path(
     }
 }
 
+fn canonical_feed_url(value: &str) -> Option<String> {
+    let mut url = Url::parse(value).ok()?;
+    if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
+        return None;
+    }
+    url.set_fragment(None);
+    Some(url.to_string())
+}
+
 fn parse_test_mode(value: Option<&String>) -> Result<bool, ConfigError> {
     match value.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
         None | Some("0") | Some("false") => Ok(false),
@@ -617,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn debug_default_is_ignored_dev_data_and_tac_gets_nip_child_lake() {
+    fn debug_default_uses_profile_lake_and_derives_data_without_aliasing_tac() {
         let temp = tempdir().unwrap();
         let root = temp.path();
         let tac = root.join(".lake");
@@ -629,8 +660,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(config.data_dir(), root.join(".nip-data"));
-        assert_eq!(config.lake_dir(), tac.join("nip"));
+        assert_eq!(config.data_dir(), root.join(".fina/data/nip/lake/_nip"));
+        assert_eq!(config.lake_dir(), root.join(".fina/data/nip/lake"));
         assert_ne!(config.lake_dir(), tac);
         assert!(!config.test_mode());
     }
@@ -641,28 +672,40 @@ mod tests {
         let root = temp.path();
         let config = NipConfig::resolve(&env(&[]), root, None, true).unwrap();
 
-        assert_eq!(config.data_dir(), root.join(".nip-data"));
-        assert_eq!(config.lake_dir(), root.join(".lake/nip"));
+        assert_eq!(config.data_dir(), root.join(".fina/data/nip/lake/_nip"));
+        assert_eq!(config.lake_dir(), root.join(".fina/data/nip/lake"));
     }
 
     #[test]
-    fn explicit_relative_data_and_lake_paths_are_rooted_at_repository() {
+    fn explicit_relative_lake_path_is_rooted_at_repository_and_data_is_derived() {
         let temp = tempdir().unwrap();
         let root = temp.path();
-        let config = NipConfig::resolve(
+        let config =
+            NipConfig::resolve(&env(&[("NIP_LAKE_DIR", ".data/exports")]), root, None, true)
+                .unwrap();
+
+        assert_eq!(config.data_dir(), root.join(".data/exports/_nip"));
+        assert_eq!(
+            config.database_path(),
+            root.join(".data/exports/_nip/nip.duckdb")
+        );
+        assert_eq!(config.lake_dir(), root.join(".data/exports"));
+    }
+
+    #[test]
+    fn independently_configured_data_directory_must_match_the_derived_path() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let result = NipConfig::resolve(
             &env(&[
-                ("NIP_DATA_DIR", ".data/nip"),
-                ("NIP_LAKE_DIR", ".data/exports"),
+                ("NIP_LAKE_DIR", ".data/lake"),
+                ("NIP_DATA_DIR", ".data/other"),
             ]),
             root,
             None,
             true,
-        )
-        .unwrap();
-
-        assert_eq!(config.data_dir(), root.join(".data/nip"));
-        assert_eq!(config.database_path(), root.join(".data/nip/nip.duckdb"));
-        assert_eq!(config.lake_dir(), root.join(".data/exports"));
+        );
+        assert_eq!(result.unwrap_err(), ConfigError::DataDirectoryMustBeDerived);
     }
 
     #[test]
@@ -672,20 +715,29 @@ mod tests {
         let values = env(&[("DATABASE_URL", "postgres://must-not-be-read")]);
         let config = NipConfig::resolve(&values, temp.path(), Some(&app_data), false).unwrap();
 
-        assert_eq!(config.data_dir(), app_data.join("fina-builder/NIP"));
-        assert_eq!(config.lake_dir(), app_data.join("fina-builder/NIP/lake"));
+        assert_eq!(
+            config.data_dir(),
+            app_data.join("com.fina.payoffexplorer/NIPLake/_nip")
+        );
+        assert_eq!(
+            config.lake_dir(),
+            app_data.join("com.fina.payoffexplorer/NIPLake")
+        );
         assert!(!config.test_mode());
     }
 
     #[test]
-    fn rejects_lake_or_data_aliasing_the_tac_root() {
+    fn rejects_lake_or_derived_data_aliasing_the_tac_root() {
         let temp = tempdir().unwrap();
         let root = temp.path();
         let tac = root.join(".lake");
         let data_alias = NipConfig::resolve(
             &env(&[
-                ("NIP_DATA_DIR", tac.to_str().unwrap()),
-                ("TAC_LAKE_DIR", tac.to_str().unwrap()),
+                ("NIP_LAKE_DIR", root.join(".data/lake").to_str().unwrap()),
+                (
+                    "TAC_LAKE_DIR",
+                    root.join(".data/lake/_nip").to_str().unwrap(),
+                ),
             ]),
             root,
             None,
@@ -715,14 +767,14 @@ mod tests {
     fn test_mode_requires_disposable_paths_beneath_playwright_data() {
         let temp = tempdir().unwrap();
         let root = temp.path();
-        let bad = env(&[("NIP_TEST_MODE", "1"), ("NIP_DATA_DIR", ".nip-data")]);
+        let bad = env(&[("NIP_TEST_MODE", "1")]);
         assert_eq!(
             NipConfig::resolve(&bad, root, None, true).unwrap_err(),
-            ConfigError::UnsafeTestDataDirectory
+            ConfigError::UnsafeTestLakeDirectory
         );
 
-        let data = root.join("playwright/.data/nip/run-1");
-        let lake = root.join("playwright/.data/nip-lake/run-1");
+        let lake = root.join("playwright/.data/nip/run-1");
+        let data = lake.join("_nip");
         let good = env(&[
             ("NIP_TEST_MODE", "1"),
             ("NIP_DATA_DIR", data.to_str().unwrap()),
@@ -730,7 +782,7 @@ mod tests {
         ]);
         let config = NipConfig::resolve(&good, root, None, true).unwrap();
         assert!(config.test_mode());
-        assert!(is_within(config.data_dir(), &root.join("playwright/.data")));
+        assert_eq!(config.data_dir(), data);
         assert!(is_within(config.lake_dir(), &root.join("playwright/.data")));
     }
 
@@ -738,7 +790,7 @@ mod tests {
     fn refuses_an_unsafe_test_lake_and_invalid_test_mode_values() {
         let temp = tempdir().unwrap();
         let root = temp.path();
-        let data = root.join("playwright/.data/nip/run-2");
+        let data = root.join("playwright/.data/nip/run-2/_nip");
         let bad_lake = env(&[
             ("NIP_TEST_MODE", "true"),
             ("NIP_DATA_DIR", data.to_str().unwrap()),
@@ -858,7 +910,7 @@ mod tests {
         let config = NipConfig::resolve(&env(&[]), temp.path(), Some(&app_data), false).unwrap();
         assert_eq!(
             config.comfy().workspace(),
-            app_data.join("fina-builder/NIP/comfy")
+            app_data.join("com.fina.payoffexplorer/NIPLake/_nip/comfy")
         );
     }
 
@@ -1046,5 +1098,22 @@ mod tests {
             .unwrap_err(),
             ConfigError::RigaBridgeTokenWithoutUrl
         );
+    }
+
+    #[test]
+    fn canonical_scraper_owned_feed_urls_match_without_fragments() {
+        let temp = tempdir().unwrap();
+        let config = NipConfig::resolve(
+            &env(&[(
+                "NIP_SCRAPER_OWNED_PODCAST_FEEDS",
+                r#"["https://Example.com:443/feed.xml#template"]"#,
+            )]),
+            temp.path(),
+            None,
+            true,
+        )
+        .unwrap();
+        assert!(config.scraper_owns_podcast_feed("https://example.com/feed.xml"));
+        assert!(!config.scraper_owns_podcast_feed("https://example.com/other.xml"));
     }
 }

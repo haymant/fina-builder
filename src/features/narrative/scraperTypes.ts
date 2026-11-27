@@ -34,6 +34,31 @@ export interface ScraperBudgets {
   theses_today: number
 }
 
+export interface ScraperStorage {
+  lake_dir: string
+  data_dir: string
+  config_dir: string
+  schedules_dir: string
+  state_path: string
+  output_dir: string
+  initialized: boolean
+  initialization_status?: string
+  schema_version?: string | null
+}
+
+/** One YAML-configured site; this inventory is separate from NIP sources and schedules. */
+export interface ScraperSiteInventory {
+  site_id: string
+  display_name: string
+  kind: string
+  enabled: boolean
+  poll_interval_min: number
+  feed_url: string | null
+  source_seed_status: string
+  schedule_seed_status: string
+  credential_status: string
+}
+
 export interface ScraperStatus {
   last_run: Record<string, unknown> | null
   lake: {
@@ -47,6 +72,10 @@ export interface ScraperStatus {
   }
   schedules: ScraperSchedule[]
   budgets: ScraperBudgets
+  /** Optional on older sidecar responses. */
+  storage?: ScraperStorage
+  /** YAML inventory only; does not imply a source row or that the site is probeable. */
+  site_inventory?: ScraperSiteInventory[]
 }
 
 export interface ScraperScheduleRecord {

@@ -172,18 +172,20 @@ pub fn get_nip_engine_path(app: AppHandle) -> Result<String, String> {
 /// are attached to the `nip` server only; RIGA and TAC children never receive
 /// the token.
 pub fn nip_engine_env(app: &AppHandle, bridge: &NipBridgeInfo) -> Vec<(String, String)> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map(|dir| dir.join("NIP"))
-        .unwrap_or_else(|_| std::path::PathBuf::from(".nip-data"));
-    nip_engine_env_values(&data_dir, bridge)
+    let lake_dir = resolve_nip_lake_dir(app).unwrap_or_else(|_| {
+        app.path()
+            .app_data_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join("NIPLake")
+    });
+    nip_engine_env_values(&lake_dir, bridge)
 }
 
 pub fn nip_engine_env_values(
-    data_dir: &std::path::Path,
+    lake_dir: &std::path::Path,
     bridge: &NipBridgeInfo,
 ) -> Vec<(String, String)> {
+    let data_dir = lake_dir.join("_nip");
     vec![
         (
             "NIP_DATA_DIR".to_string(),
@@ -191,7 +193,7 @@ pub fn nip_engine_env_values(
         ),
         (
             "NIP_LAKE_DIR".to_string(),
-            data_dir.join("lake").to_string_lossy().into_owned(),
+            lake_dir.to_string_lossy().into_owned(),
         ),
         ("NIP_RIGA_BRIDGE_URL".to_string(), bridge.url.clone()),
         ("NIP_RIGA_BRIDGE_TOKEN".to_string(), bridge.token.clone()),
@@ -233,8 +235,60 @@ fn process_env_overrides_dotenv(
     profile_lake_default: Option<&str>,
 ) -> bool {
     process_value.is_some_and(|value| {
-        !(key == "TAC_LAKE_DIR" && profile_lake_default == Some(value))
+        !((key == "TAC_LAKE_DIR" || key == "NIP_LAKE_DIR") && profile_lake_default == Some(value))
     })
+}
+
+fn normalized_workspace_path(workspace: &std::path::Path, path: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workspace.join(path)
+    }
+}
+
+fn default_nip_lake_dir(
+    workspace: &std::path::Path,
+    app_data: Option<&std::path::Path>,
+    profile: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    match profile {
+        Some("packaged") => app_data.map(|path| path.join("NIPLake")),
+        Some("ci") => Some(workspace.join(".fina/ci-data/nip/lake")),
+        _ if cfg!(debug_assertions) => Some(workspace.join(".fina/data/nip/lake")),
+        _ => app_data.map(|path| path.join("NIPLake")),
+    }
+}
+
+/// Resolve the same narrative root used by the child NIP engine. Explicit
+/// process values win; profile defaults may be replaced by ordered dotenv.
+pub fn resolve_nip_lake_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace = manifest.join("..");
+    let profile = std::env::var("FINA_PROFILE").ok();
+    let app_data = app.path().app_data_dir().ok();
+    let profile_default = std::env::var("FINA_PROFILE_NIP_LAKE_DIR")
+        .ok()
+        .filter(|value| !value.is_empty());
+    let current = std::env::var("NIP_LAKE_DIR")
+        .ok()
+        .filter(|value| !value.trim().is_empty() && !value.starts_with("${"));
+    if let Some(value) = current
+        .as_ref()
+        .filter(|value| profile_default.as_deref() != Some(value.as_str()))
+    {
+        return Ok(normalized_workspace_path(&workspace, value));
+    }
+    let dotenv = engine_env(app);
+    if let Some((_, value)) = dotenv.iter().find(|(key, _)| key == "NIP_LAKE_DIR") {
+        return Ok(normalized_workspace_path(&workspace, value));
+    }
+    if let Some(value) = current {
+        return Ok(normalized_workspace_path(&workspace, &value));
+    }
+    default_nip_lake_dir(&workspace, app_data.as_deref(), profile.as_deref())
+        .ok_or_else(|| "Could not resolve NIP_LAKE_DIR or the Tauri app-data directory".to_owned())
 }
 
 fn engine_env_candidates(
@@ -272,7 +326,10 @@ pub fn engine_env(app: &AppHandle) -> Vec<(String, String)> {
 
     let mut collected: Vec<(String, String)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let profile_lake_default = std::env::var("FINA_PROFILE_TAC_LAKE_DIR")
+    let profile_tac_default = std::env::var("FINA_PROFILE_TAC_LAKE_DIR")
+        .ok()
+        .filter(|value| !value.is_empty());
+    let profile_nip_default = std::env::var("FINA_PROFILE_NIP_LAKE_DIR")
         .ok()
         .filter(|value| !value.is_empty());
     for path in candidates {
@@ -280,9 +337,14 @@ pub fn engine_env(app: &AppHandle) -> Vec<(String, String)> {
             continue;
         };
         for (key, value) in parse_dotenv(&contents) {
+            if key == "NIP_DATA_DIR" {
+                continue;
+            }
             let process_value = std::env::var(&key).ok();
             let profile_default = if key == "TAC_LAKE_DIR" {
-                profile_lake_default.as_deref()
+                profile_tac_default.as_deref()
+            } else if key == "NIP_LAKE_DIR" {
+                profile_nip_default.as_deref()
             } else {
                 None
             };
@@ -306,6 +368,20 @@ pub fn engine_env(app: &AppHandle) -> Vec<(String, String)> {
             "TAC_LAKE_DIR".to_string(),
             workspace.join(".lake").to_string_lossy().into_owned(),
         ));
+    }
+    let process_nip_default = std::env::var("NIP_LAKE_DIR").ok().map_or(true, |value| {
+        profile_nip_default.as_deref() == Some(value.as_str()) || value.trim().is_empty()
+    });
+    if process_nip_default && !collected.iter().any(|(key, _)| key == "NIP_LAKE_DIR") {
+        let profile = std::env::var("FINA_PROFILE").ok();
+        if let Some(default) =
+            default_nip_lake_dir(&workspace, app_data.as_deref(), profile.as_deref())
+        {
+            collected.push((
+                "NIP_LAKE_DIR".to_string(),
+                default.to_string_lossy().into_owned(),
+            ));
+        }
     }
     collected
 }
@@ -525,16 +601,36 @@ pub fn validate_rd_tool_call(name: &str, arguments: &Value) -> Result<(), String
     let allowed: &[&str] = match name {
         "rd_status" => &["market"],
         "rd_dataset" => &[
-            "market", "universe", "start_time", "end_time", "fit_start_time", "fit_end_time",
-            "freq", "features", "label", "train_start", "train_end", "valid_start",
-            "valid_end", "test_start", "test_end",
+            "market",
+            "universe",
+            "start_time",
+            "end_time",
+            "fit_start_time",
+            "fit_end_time",
+            "freq",
+            "features",
+            "label",
+            "train_start",
+            "train_end",
+            "valid_start",
+            "valid_end",
+            "test_start",
+            "test_end",
         ],
         "rd_exp_list" => &[],
         "rd_exp_get_experiment" => &["experiment_id"],
-        "rd_exp_get_run" | "rd_exp_input" | "rd_exp_result" | "rd_exp_model" | "rd_exp_blotter" | "rd_exp_lineage" => {
-            &["run_id", "experiment_id"]
-        }
-        "rd_exp_dataset" => &["run_id", "experiment_id", "group", "instrument", "page", "page_size", "sort", "representation"],
+        "rd_exp_get_run" | "rd_exp_input" | "rd_exp_result" | "rd_exp_model" | "rd_exp_blotter"
+        | "rd_exp_lineage" => &["run_id", "experiment_id"],
+        "rd_exp_dataset" => &[
+            "run_id",
+            "experiment_id",
+            "group",
+            "instrument",
+            "page",
+            "page_size",
+            "sort",
+            "representation",
+        ],
         "rd_trace_start" => &["rational", "details", "experiment_name", "evolved_from"],
         "rd_trace_get" => &["experiment_id"],
         "rd_trace_list" => &["limit"],
@@ -584,20 +680,62 @@ pub fn validate_rd_tool_call(name: &str, arguments: &Value) -> Result<(), String
         return Err(format!("R&D argument is not allowed: {key}"));
     }
     if name == "rd_exp_dataset" {
-        let run_id = object.get("run_id").and_then(Value::as_str).ok_or_else(|| "R&D run_id must be a string".to_string())?;
-        if run_id.is_empty() || run_id.len() > 128 || !run_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') { return Err("R&D run_id is invalid".into()); }
-        let group = object.get("group").and_then(Value::as_str).ok_or_else(|| "R&D dataset group must be a string".to_string())?;
-        if !matches!(group, "train" | "valid" | "test" | "backtest") { return Err("R&D dataset group is invalid".into()); }
-        let instrument = object.get("instrument").and_then(Value::as_str).ok_or_else(|| "R&D dataset instrument must be a string".to_string())?;
-        if instrument.is_empty() || instrument.len() > 16 || !instrument.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-') { return Err("R&D dataset instrument is invalid".into()); }
-        let page = object.get("page").and_then(Value::as_u64).ok_or_else(|| "R&D dataset page must be an integer".to_string())?;
-        let page_size = object.get("page_size").and_then(Value::as_u64).ok_or_else(|| "R&D dataset page_size must be an integer".to_string())?;
-        if !(1..=100000).contains(&page) || !(1..=200).contains(&page_size) { return Err("R&D dataset pagination is invalid".into()); }
-        let sort = object.get("sort").and_then(Value::as_str).ok_or_else(|| "R&D dataset sort must be a string".to_string())?;
-        if !matches!(sort, "asc" | "desc") { return Err("R&D dataset sort is invalid".into()); }
+        let run_id = object
+            .get("run_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "R&D run_id must be a string".to_string())?;
+        if run_id.is_empty()
+            || run_id.len() > 128
+            || !run_id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err("R&D run_id is invalid".into());
+        }
+        let group = object
+            .get("group")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "R&D dataset group must be a string".to_string())?;
+        if !matches!(group, "train" | "valid" | "test" | "backtest") {
+            return Err("R&D dataset group is invalid".into());
+        }
+        let instrument = object
+            .get("instrument")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "R&D dataset instrument must be a string".to_string())?;
+        if instrument.is_empty()
+            || instrument.len() > 16
+            || !instrument
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+        {
+            return Err("R&D dataset instrument is invalid".into());
+        }
+        let page = object
+            .get("page")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "R&D dataset page must be an integer".to_string())?;
+        let page_size = object
+            .get("page_size")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "R&D dataset page_size must be an integer".to_string())?;
+        if !(1..=100000).contains(&page) || !(1..=200).contains(&page_size) {
+            return Err("R&D dataset pagination is invalid".into());
+        }
+        let sort = object
+            .get("sort")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "R&D dataset sort must be a string".to_string())?;
+        if !matches!(sort, "asc" | "desc") {
+            return Err("R&D dataset sort is invalid".into());
+        }
         if let Some(representation) = object.get("representation") {
-            let representation = representation.as_str().ok_or_else(|| "R&D dataset representation must be a string".to_string())?;
-            if !matches!(representation, "raw" | "inference") { return Err("R&D dataset representation is invalid".into()); }
+            let representation = representation
+                .as_str()
+                .ok_or_else(|| "R&D dataset representation must be a string".to_string())?;
+            if !matches!(representation, "raw" | "inference") {
+                return Err("R&D dataset representation is invalid".into());
+            }
         }
     }
     if name == "rd_validate_workflow" || name == "rd_run_workflow" {
@@ -837,12 +975,12 @@ mod tests {
             url: "http://127.0.0.1:49152".into(),
             token: "fixture-bridge-token".into(),
         };
-        let env = nip_engine_env_values(std::path::Path::new("/tmp/nip-data"), &bridge);
+        let env = nip_engine_env_values(std::path::Path::new("/tmp/nip-lake"), &bridge);
         assert_eq!(
             env,
             vec![
-                ("NIP_DATA_DIR".into(), "/tmp/nip-data".into()),
-                ("NIP_LAKE_DIR".into(), "/tmp/nip-data/lake".into()),
+                ("NIP_DATA_DIR".into(), "/tmp/nip-lake/_nip".into()),
+                ("NIP_LAKE_DIR".into(), "/tmp/nip-lake".into()),
                 ("NIP_RIGA_BRIDGE_URL".into(), bridge.url.clone()),
                 ("NIP_RIGA_BRIDGE_TOKEN".into(), bridge.token.clone()),
             ]
@@ -871,6 +1009,11 @@ mod tests {
             "TAC_LAKE_DIR",
             Some("/workspace/.fina/data/lake"),
             Some("/workspace/.fina/data/lake"),
+        ));
+        assert!(!process_env_overrides_dotenv(
+            "NIP_LAKE_DIR",
+            Some("/workspace/.fina/data/nip/lake"),
+            Some("/workspace/.fina/data/nip/lake"),
         ));
         assert!(process_env_overrides_dotenv(
             "TAC_LAKE_DIR",
@@ -992,11 +1135,9 @@ mod tests {
     #[test]
     fn rd_workflow_yaml_calls_are_bounded_and_pathless() {
         let yaml = "experiment_name: alpha\ntask: {}";
-        assert!(validate_rd_tool_call(
-            "rd_validate_workflow",
-            &json!({"config_yaml": yaml})
-        )
-        .is_ok());
+        assert!(
+            validate_rd_tool_call("rd_validate_workflow", &json!({"config_yaml": yaml})).is_ok()
+        );
         assert!(validate_rd_tool_call(
             "rd_run_workflow",
             &json!({"config_yaml": yaml, "experiment_name": "alpha"})

@@ -32,11 +32,13 @@ manifest = ".mcp.json"
 use_source_modules = true
 build_mode = "debug"
 data_root = ".fina/data"
+nip_lake = ".fina/data/nip/lake"
 
 [profiles.ci]
 use_source_modules = true
 build_mode = "release"
 data_root = ".fina/ci-data"
+nip_lake = ".fina/ci-data/nip/lake"
 
 [profiles.packaged]
 use_source_modules = false

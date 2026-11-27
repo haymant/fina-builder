@@ -9,20 +9,35 @@
  * pre-populated lake without requiring manual exports.
  */
 import { existsSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 
-export function localEnvCandidates(projectRoot) {
-  return [
+const TAURI_APP_ID = 'com.fina.payoffexplorer'
+
+/** Match Tauri's platform-specific application support/data directory. */
+export function tauriAppDataDir(platform = process.platform, env = process.env, home = homedir()) {
+  if (platform === 'darwin') return join(home, 'Library', 'Application Support', TAURI_APP_ID)
+  if (platform === 'win32') return join(env.APPDATA || join(home, 'AppData', 'Roaming'), TAURI_APP_ID)
+  return join(env.XDG_DATA_HOME || join(home, '.local', 'share'), TAURI_APP_ID)
+}
+
+export function localEnvCandidates(projectRoot, options = {}) {
+  const cwd = options.cwd ?? process.cwd()
+  const appDataDir = options.appDataDir ?? tauriAppDataDir()
+  return [...new Set([
+    resolve(cwd, '.env'),
+    resolve(appDataDir, '.env'),
     resolve(projectRoot, '.env'),
     resolve(projectRoot, 'modules/tac-engine/.env'),
     resolve(projectRoot, 'modules/riga-flow/.env'),
-  ]
+  ])]
 }
 
-export function loadLocalEnv(projectRoot, env = process.env) {
+export function loadLocalEnv(projectRoot, env = process.env, options = {}) {
   const loaded = []
   const seen = new Set()
-  for (const file of localEnvCandidates(projectRoot)) {
+  let warnedAboutLegacyDataDir = false
+  for (const file of localEnvCandidates(projectRoot, options)) {
     if (!existsSync(file)) continue
     for (const raw of readFileSync(file, 'utf8').split(/\r?\n/)) {
       const line = raw.trim()
@@ -32,19 +47,29 @@ export function loadLocalEnv(projectRoot, env = process.env) {
       if (equals <= 0) continue
       const key = entry.slice(0, equals).trim()
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || seen.has(key)) continue
-      seen.add(key)
       let value = entry.slice(equals + 1).trim()
       if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
         value = value.slice(1, -1)
       } else {
         value = value.replace(/\s+#.*$/, '').trim()
       }
-      const profileLake = key === 'TAC_LAKE_DIR'
-        ? env.FINA_PROFILE_TAC_LAKE_DIR !== undefined
-          ? env.FINA_PROFILE_TAC_LAKE_DIR || null
-          : env.FINA_DATA_ROOT ? resolve(env.FINA_DATA_ROOT, 'lake') : null
-        : null
-      if (env[key] !== undefined && env[key] !== profileLake && !isEnvPlaceholder(env[key])) continue
+      if (isEnvPlaceholder(value)) continue
+      if (key === 'NIP_DATA_DIR') {
+        if (!warnedAboutLegacyDataDir) {
+          console.warn('Ignoring NIP_DATA_DIR from local environment; it is derived from NIP_LAKE_DIR.')
+          warnedAboutLegacyDataDir = true
+        }
+        seen.add(key)
+        continue
+      }
+      const profileValue = key === 'TAC_LAKE_DIR'
+        ? env.FINA_PROFILE_TAC_LAKE_DIR
+        : key === 'NIP_LAKE_DIR'
+          ? env.FINA_PROFILE_NIP_LAKE_DIR
+          : undefined
+      const isInjectedProfileValue = Boolean(profileValue && env[key] === profileValue)
+      seen.add(key)
+      if (env[key] !== undefined && env[key] !== '' && !isEnvPlaceholder(env[key]) && !isInjectedProfileValue) continue
       env[key] = value
     }
     loaded.push(file.slice(projectRoot.length + 1))
