@@ -151,6 +151,7 @@ pub struct NipConfig {
     local_llm: Option<LocalLlmConfig>,
     scraper_owned_podcast_feeds: BTreeSet<String>,
     scraper_owned_site_ids: BTreeSet<String>,
+    acquisition_sites: Vec<crate::acquisition::AcquisitionSiteProfile>,
 }
 
 impl NipConfig {
@@ -280,6 +281,7 @@ impl NipConfig {
             local_llm,
             scraper_owned_podcast_feeds: BTreeSet::new(),
             scraper_owned_site_ids: BTreeSet::new(),
+            acquisition_sites: Vec::new(),
         })
     }
 
@@ -298,6 +300,10 @@ impl NipConfig {
 
     pub fn scraper_owns_site_id(&self, site_id: &str) -> bool {
         self.scraper_owned_site_ids.contains(site_id)
+    }
+
+    pub fn acquisition_sites(&self) -> &[crate::acquisition::AcquisitionSiteProfile] {
+        &self.acquisition_sites
     }
 
     /// Set ownership from the sources discovered by NIP's acquisition adapter.
@@ -324,6 +330,23 @@ impl NipConfig {
             .collect::<Result<BTreeSet<_>, _>>()?;
         self.scraper_owned_podcast_feeds = feeds;
         self.scraper_owned_site_ids = sites;
+        Ok(())
+    }
+
+    pub fn set_acquisition_site_profiles(
+        &mut self,
+        profiles: Vec<crate::acquisition::AcquisitionSiteProfile>,
+    ) -> Result<(), ConfigError> {
+        let feed_urls = profiles
+            .iter()
+            .filter_map(|profile| profile.feed_url.clone())
+            .collect::<Vec<_>>();
+        let site_ids = profiles
+            .iter()
+            .map(|profile| profile.site_id.clone())
+            .collect::<Vec<_>>();
+        self.set_acquisition_inventory(&feed_urls, &site_ids)?;
+        self.acquisition_sites = profiles;
         Ok(())
     }
 

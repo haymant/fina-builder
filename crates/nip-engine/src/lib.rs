@@ -47,6 +47,7 @@ use std::{
 use thiserror::Error;
 
 use asr::{AsrError, AsrProvider, AsrRequest, AsrResult};
+use acquisition::{resolve_source_bindings, AcquisitionSourceBinding};
 use config::ClaimProviderMode;
 pub use config::{ConfigError, NipConfig};
 use local_model::{LocalModelError, LocalOpenAiClaimProvider};
@@ -995,6 +996,13 @@ impl NipService {
 
     pub fn sources(&self, include_removed: bool) -> Result<Vec<NarrativeSource>, NipError> {
         Ok(self.store.sources(include_removed)?)
+    }
+
+    /// Report explicit worker-to-NIP source matches. This is deliberately
+    /// read-only: a worker profile never creates a NIP source or infers rights.
+    pub fn acquisition_source_bindings(&self) -> Result<Vec<AcquisitionSourceBinding>, NipError> {
+        let sources = self.store.sources(true)?;
+        Ok(resolve_source_bindings(self.config.acquisition_sites(), &sources))
     }
 
     pub fn source(&self, source_id: &SourceId) -> Result<NarrativeSource, NipError> {

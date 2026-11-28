@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use nip_domain::{NarrativeSource, SourceKind};
 use std::{
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
@@ -19,10 +20,106 @@ use std::{
 };
 
 /// The acquisition sources configured in the shared lake, as observed by NIP.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcquisitionSiteProfile {
+    pub site_id: String,
+    pub display_name: String,
+    pub kind: String,
+    pub enabled: bool,
+    pub poll_interval_min: u32,
+    pub feed_url: Option<String>,
+    pub source_seed_status: String,
+    pub schedule_seed_status: String,
+    pub credential_status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AcquisitionInventory {
+    pub sites: Vec<AcquisitionSiteProfile>,
     pub podcast_feed_urls: Vec<String>,
     pub site_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AcquisitionSourceBinding {
+    pub worker_site_id: String,
+    pub worker_kind: String,
+    pub worker_locator: Option<String>,
+    pub source_id: Option<String>,
+    pub state: String,
+    pub match_basis: Option<String>,
+    pub detail: String,
+}
+
+/// Resolve worker profiles against NIP sources without creating sources or
+/// treating a worker site ID as canonical identity. Only an exact locator plus
+/// compatible source kind is sufficient for an automatic read-only binding.
+pub fn resolve_source_bindings(
+    sites: &[AcquisitionSiteProfile],
+    sources: &[NarrativeSource],
+) -> Vec<AcquisitionSourceBinding> {
+    sites
+        .iter()
+        .map(|site| {
+            let candidates = site
+                .feed_url
+                .as_deref()
+                .map(canonical_locator)
+                .map(|locator| {
+                    sources
+                        .iter()
+                        .filter(|source| {
+                            source.kind == SourceKind::Podcast
+                                && source
+                                    .locator
+                                    .as_deref()
+                                    .map(canonical_locator)
+                                    .is_some_and(|candidate| candidate == locator)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let (source_id, state, match_basis, detail) = match candidates.as_slice() {
+                [source] => (
+                    Some(source.source_id.as_str().to_owned()),
+                    "bound".to_owned(),
+                    Some("exact_feed_url_and_source_kind".to_owned()),
+                    "worker profile matches one NIP podcast source by exact feed URL".to_owned(),
+                ),
+                [] if site.feed_url.is_some() => (
+                    None,
+                    "unresolved".to_owned(),
+                    None,
+                    "no NIP source matches the worker feed URL; no source was created".to_owned(),
+                ),
+                [] => (
+                    None,
+                    "unresolved".to_owned(),
+                    None,
+                    "worker profile has no canonical locator; no source was created".to_owned(),
+                ),
+                _ => (
+                    None,
+                    "ambiguous".to_owned(),
+                    None,
+                    "multiple NIP sources match the worker feed URL".to_owned(),
+                ),
+            };
+            AcquisitionSourceBinding {
+                worker_site_id: site.site_id.clone(),
+                worker_kind: site.kind.clone(),
+                worker_locator: site.feed_url.clone(),
+                source_id,
+                state,
+                match_basis,
+                detail,
+            }
+        })
+        .collect()
+}
+
+fn canonical_locator(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_ascii_lowercase()
 }
 
 #[derive(Debug, Deserialize)]
@@ -33,8 +130,14 @@ struct InitResponse {
 #[derive(Debug, Deserialize)]
 struct SiteInventoryEntry {
     site_id: String,
+    display_name: String,
     kind: String,
+    enabled: bool,
+    poll_interval_min: u32,
     feed_url: Option<String>,
+    source_seed_status: String,
+    schedule_seed_status: String,
+    credential_status: String,
 }
 
 /// Initialize the existing acquisition layout through its CLI and return its
@@ -77,6 +180,7 @@ fn initialize_storage_with_binary(
         )
     })?;
     let mut inventory = AcquisitionInventory {
+        sites: Vec::with_capacity(response.site_inventory.len()),
         podcast_feed_urls: Vec::new(),
         site_ids: Vec::with_capacity(response.site_inventory.len()),
     };
@@ -88,10 +192,21 @@ fn initialize_storage_with_binary(
             return Err("acquisition initializer returned an invalid site ID".to_owned());
         }
         if site.kind == "podcast" {
-            if let Some(feed_url) = site.feed_url {
+            if let Some(feed_url) = site.feed_url.as_ref() {
                 inventory.podcast_feed_urls.push(feed_url);
             }
         }
+        inventory.sites.push(AcquisitionSiteProfile {
+            site_id: site.site_id.clone(),
+            display_name: site.display_name,
+            kind: site.kind,
+            enabled: site.enabled,
+            poll_interval_min: site.poll_interval_min,
+            feed_url: site.feed_url,
+            source_seed_status: site.source_seed_status,
+            schedule_seed_status: site.schedule_seed_status,
+            credential_status: site.credential_status,
+        });
         inventory.site_ids.push(site.site_id);
     }
     Ok(inventory)
@@ -323,7 +438,12 @@ impl ExitSignalName for std::process::ExitStatus {}
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{initialize_storage_with_binary, AcquisitionInventory, AcquisitionSupervisor};
+    use super::{
+        initialize_storage_with_binary, resolve_source_bindings, AcquisitionInventory,
+        AcquisitionSiteProfile, AcquisitionSupervisor,
+    };
+    use chrono::Utc;
+    use nip_domain::{NarrativeSource, SourceId, SourceKind, SourceState};
     use std::{fs, os::unix::fs::PermissionsExt, thread, time::Duration};
     use tempfile::tempdir;
 
@@ -341,16 +461,93 @@ mod tests {
         let temp = tempdir().unwrap();
         let binary = executable(
             temp.path(),
-            "#!/bin/sh\n[ \"$1\" = \"init\" ] || exit 2\n[ -n \"$NIP_LAKE_DIR\" ] || exit 3\nprintf '%s\\n' '{\"site_inventory\":[{\"site_id\":\"podcast-main\",\"kind\":\"podcast\",\"feed_url\":\"https://example.test/feed.xml\"},{\"site_id\":\"news-main\",\"kind\":\"website\",\"feed_url\":null}]}'\n",
+            "#!/bin/sh\n[ \"$1\" = \"init\" ] || exit 2\n[ -n \"$NIP_LAKE_DIR\" ] || exit 3\nprintf '%s\\n' '{\"site_inventory\":[{\"site_id\":\"podcast-main\",\"display_name\":\"Podcast\",\"kind\":\"podcast\",\"enabled\":true,\"poll_interval_min\":360,\"feed_url\":\"https://example.test/feed.xml\",\"source_seed_status\":\"already_present\",\"schedule_seed_status\":\"already_present\",\"credential_status\":\"not_required\"},{\"site_id\":\"news-main\",\"display_name\":\"News\",\"kind\":\"website\",\"enabled\":true,\"poll_interval_min\":60,\"feed_url\":null,\"source_seed_status\":\"already_present\",\"schedule_seed_status\":\"already_present\",\"credential_status\":\"not_required\"}]}'\n",
         );
         let inventory = initialize_storage_with_binary(&binary, temp.path()).unwrap();
         assert_eq!(
             inventory,
             AcquisitionInventory {
+                sites: vec![
+                    AcquisitionSiteProfile {
+                        site_id: "podcast-main".to_owned(),
+                        display_name: "Podcast".to_owned(),
+                        kind: "podcast".to_owned(),
+                        enabled: true,
+                        poll_interval_min: 360,
+                        feed_url: Some("https://example.test/feed.xml".to_owned()),
+                        source_seed_status: "already_present".to_owned(),
+                        schedule_seed_status: "already_present".to_owned(),
+                        credential_status: "not_required".to_owned(),
+                    },
+                    AcquisitionSiteProfile {
+                        site_id: "news-main".to_owned(),
+                        display_name: "News".to_owned(),
+                        kind: "website".to_owned(),
+                        enabled: true,
+                        poll_interval_min: 60,
+                        feed_url: None,
+                        source_seed_status: "already_present".to_owned(),
+                        schedule_seed_status: "already_present".to_owned(),
+                        credential_status: "not_required".to_owned(),
+                    },
+                ],
                 podcast_feed_urls: vec!["https://example.test/feed.xml".to_owned()],
                 site_ids: vec!["podcast-main".to_owned(), "news-main".to_owned()],
             }
         );
+    }
+
+    #[test]
+    fn source_binding_requires_exact_feed_evidence_and_never_creates_sources() {
+        let site = AcquisitionSiteProfile {
+            site_id: "podcast-main".to_owned(),
+            display_name: "Podcast".to_owned(),
+            kind: "podcast".to_owned(),
+            enabled: true,
+            poll_interval_min: 360,
+            feed_url: Some("https://example.test/feed.xml".to_owned()),
+            source_seed_status: "already_present".to_owned(),
+            schedule_seed_status: "already_present".to_owned(),
+            credential_status: "not_required".to_owned(),
+        };
+        let source = NarrativeSource {
+            source_id: SourceId::new("nip-podcast").unwrap(),
+            kind: SourceKind::Podcast,
+            display_name: "Podcast".to_owned(),
+            locator: Some("https://example.test/feed.xml/".to_owned()),
+            rights_status: "approved".to_owned(),
+            rights_statement: Some("fixture rights".to_owned()),
+            topics: Vec::new(),
+            state: SourceState::Active,
+            poll_interval_minutes: 360,
+            per_scan_limit: 3,
+            notes: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            event_count: 0,
+            episode_count: 0,
+        };
+        let bindings = resolve_source_bindings(&[site], &[source]);
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].state, "bound");
+        assert_eq!(bindings[0].source_id.as_deref(), Some("nip-podcast"));
+
+        let unresolved = resolve_source_bindings(
+            &[AcquisitionSiteProfile {
+                site_id: "news-main".to_owned(),
+                display_name: "News".to_owned(),
+                kind: "website".to_owned(),
+                enabled: true,
+                poll_interval_min: 60,
+                feed_url: None,
+                source_seed_status: "already_present".to_owned(),
+                schedule_seed_status: "already_present".to_owned(),
+                credential_status: "not_required".to_owned(),
+            }],
+            &[],
+        );
+        assert_eq!(unresolved[0].state, "unresolved");
+        assert!(unresolved[0].source_id.is_none());
     }
 
     #[test]

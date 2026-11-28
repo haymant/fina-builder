@@ -2062,6 +2062,24 @@ impl NipMcp {
     }
 
     #[tool(
+        description = "Report read-only mappings from NIP-observed fina-scraper profiles to canonical NIP sources. Unresolved or ambiguous profiles are not auto-created or auto-approved."
+    )]
+    fn list_acquisition_source_bindings(&self) -> CallToolResult {
+        match self
+            .service
+            .lock()
+            .map_err(|_| "NIP service lock failed".to_owned())
+            .and_then(|service| {
+                service
+                    .acquisition_source_bindings()
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok(bindings) => structured_success(serde_json::to_value(bindings).unwrap()),
+            Err(error) => structured_error("storage_unavailable", error),
+        }
+    }
+
+    #[tool(
         description = "Register a source of any kind after explicit rights confirmation. A podcast additionally creates its RSS subscription and performs the initial sync."
     )]
     fn create_source(&self, Parameters(params): Parameters<CreateSourceParams>) -> CallToolResult {
@@ -4544,10 +4562,7 @@ async fn run() -> Result<(), String> {
         NipConfig::from_env().map_err(|_| "NIP configuration is invalid".to_owned())?;
     let acquisition_inventory = nip_engine::acquisition::initialize_storage(config.lake_dir())?;
     config
-        .set_acquisition_inventory(
-            &acquisition_inventory.podcast_feed_urls,
-            &acquisition_inventory.site_ids,
-        )
+        .set_acquisition_site_profiles(acquisition_inventory.sites.clone())
         .map_err(|error| format!("NIP acquisition inventory is invalid: {error}"))?;
     let scraper_binary = env::var_os("FINA_SCRAPER_BIN")
         .filter(|path| !path.is_empty())

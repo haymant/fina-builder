@@ -130,6 +130,26 @@ deleted.
 - Rights and consent gates are not inferred from scraped registration.
 - Existing DuckDB source/subscription rows and scraper YAML/schedules remain readable and unchanged; compatibility mapping is test-backed.
 
+**Status:** Phase 3 ownership plumbing is implemented in the working tree. NIP now retains the
+full worker profile inventory, exposes a read-only `list_acquisition_source_bindings` report,
+and resolves a binding only when one NIP source has the same canonical feed locator and
+compatible `podcast` kind. Worker site IDs never become NIP source IDs, worker profiles never
+create NIP sources, and missing/ambiguous matches remain explicitly unresolved. Source
+lifecycle, subscription state, poll interval, refresh, and manual trigger operations remain
+NIP APIs; the only process-lifetime scheduler is NIP's in-process scheduler, which reads NIP
+subscription state and never starts or mutates the scraper scheduler.
+
+**Data gate:** The implementation does not invent mappings for worker profiles that lack a
+canonical locator. The configured inventory must be reviewed and explicit NIP sources must be
+created and rights-approved before those profiles can become bound. Until that review is
+complete, the Phase 3 mapping criterion is intentionally reported as unresolved rather than
+silently inferred. Existing DuckDB rows and scraper YAML/schedules were not changed.
+
+**Focused verification:** Added temporary-root inventory coverage for worker profile and
+schedule metadata, plus binding tests for exact-feed binding and unresolved no-locator sites.
+`git diff --check` remains required; full Rust execution is subject to the sandbox Cargo
+1.75/edition-2024 limitation recorded under Phase 2B.
+
 ### Phase 4 — Canonical item/event/transcript ingestion
 
 **Work:** Add a scraper-specific NIP ingestion operation for one rights-approved NIP source and one worker item. NIP validates source binding, timestamps, hash, payload, and idempotency before committing the canonical NIP event/transcript. Keep worker site/item/run identity namespaced.
