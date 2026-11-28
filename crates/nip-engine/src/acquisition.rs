@@ -199,7 +199,7 @@ fn initialize_storage_with_binary(
         }
         if site.kind == "podcast" {
             if let Some(feed_url) = site.feed_url.as_ref() {
-                inventory.podcast_feed_urls.push(feed_url);
+                inventory.podcast_feed_urls.push(feed_url.clone());
             }
         }
         inventory.sites.push(AcquisitionSiteProfile {

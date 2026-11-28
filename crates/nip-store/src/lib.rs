@@ -483,7 +483,7 @@ impl Store {
              FROM nip_acquisition_bindings ORDER BY worker_site_id",
         )?;
         let rows = statement.query_map([], raw_acquisition_binding_from_row)?;
-        rows.collect()
+        rows.map(|row| row.map_err(StoreError::from)).collect()
     }
 
     pub fn acquisition_binding(
@@ -499,6 +499,7 @@ impl Store {
                 raw_acquisition_binding_from_row,
             )
             .optional()
+            .map_err(StoreError::from)
     }
 
     pub fn upsert_acquisition_binding(
