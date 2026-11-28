@@ -2388,7 +2388,8 @@ impl NipMcp {
         description = "Register a source of any kind after explicit rights confirmation. A podcast additionally creates its RSS subscription and performs the initial sync."
     )]
     fn create_source(&self, Parameters(params): Parameters<CreateSourceParams>) -> CallToolResult {
-        if params.user_confirmed_rights != Some(true) {
+        let user_confirmed_rights = params.user_confirmed_rights == Some(true);
+        if !user_confirmed_rights {
             return structured_error(
                 "rights_confirmation_required",
                 "pass user_confirmed_rights=true only after the access and retention rights are reviewed",
@@ -2420,10 +2421,12 @@ impl NipMcp {
         };
         let client = HttpFeedClient::default();
         match self.service.lock() {
-            Ok(mut service) => match service.create_source(draft, &client, Utc::now()) {
-                Ok(source) => structured_success(serde_json::to_value(source).unwrap()),
-                Err(error) => structured_error("create_failed", error.to_string()),
-            },
+            Ok(mut service) => {
+                match service.create_source(draft, user_confirmed_rights, &client, Utc::now()) {
+                    Ok(source) => structured_success(serde_json::to_value(source).unwrap()),
+                    Err(error) => structured_error("create_failed", error.to_string()),
+                }
+            }
             Err(_) => structured_error("internal", "NIP service lock failed"),
         }
     }

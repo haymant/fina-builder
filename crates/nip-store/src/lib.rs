@@ -695,11 +695,34 @@ impl Store {
         source_id: &str,
         worker_kind: &str,
         worker_locator: &str,
+        expected_source_locator: &str,
         reviewed_by: &str,
         review_note: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<AcquisitionBinding, StoreError> {
-        self.connection.execute(
+        if worker_kind != "podcast"
+            || worker_locator.trim().is_empty()
+            || expected_source_locator.trim().is_empty()
+            || canonical_acquisition_locator(worker_locator)
+                != canonical_acquisition_locator(expected_source_locator)
+        {
+            return Err(StoreError::InvalidAcquisitionBinding);
+        }
+        let transaction = self.connection.transaction()?;
+        let authorized: bool = transaction.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM nip_sources s
+                WHERE s.source_id = ? AND s.source_type = 'podcast'
+                  AND s.source_kind = 'podcast' AND s.rights_status = 'approved'
+                  AND s.state = 'active' AND s.locator = ?
+            )",
+            params![source_id, expected_source_locator],
+            |row| row.get(0),
+        )?;
+        if !authorized {
+            return Err(StoreError::AcquisitionBindingRejected);
+        }
+        transaction.execute(
             "INSERT INTO nip_acquisition_bindings
                 (worker_site_id, source_id, worker_kind, worker_locator, state,
                  reviewed_by, review_note, created_at, updated_at)
@@ -723,6 +746,7 @@ impl Store {
                 now,
             ],
         )?;
+        transaction.commit()?;
         self.acquisition_binding(worker_site_id)?
             .ok_or(StoreError::InvalidAcquisitionBinding)
     }
@@ -880,6 +904,18 @@ impl Store {
             return Ok(events.max(0) as u64);
         }
         let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "UPDATE nip_acquisition_bindings
+             SET state = 'unbound', reviewed_by = 'system:source-deletion',
+                 review_note = CASE
+                    WHEN review_note IS NULL OR trim(review_note) = ''
+                    THEN 'Source deleted; explicit rebinding required'
+                    ELSE review_note || '; source deleted; explicit rebinding required'
+                 END,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE source_id = ? AND state = 'bound'",
+            params![source_id.as_str()],
+        )?;
         transaction.execute(
             "DELETE FROM nip_podcast_transcripts
              WHERE episode_id IN (SELECT episode_id FROM nip_podcast_episodes WHERE source_id = ?)",
@@ -1196,6 +1232,11 @@ impl Store {
         if !matches!(parsed_url.scheme(), "http" | "https") || parsed_url.host_str().is_none() {
             return Err(StoreError::InvalidAcquisitionPayload);
         }
+        if canonical_acquisition_locator(expected_worker_locator)
+            != canonical_acquisition_locator(expected_source_locator)
+        {
+            return Err(StoreError::AcquisitionBindingRejected);
+        }
 
         let content_hash = normalized_text_sha256(&item.content_text);
         if !valid_content_sha256(&item.content_hash) || item.content_hash != content_hash {
@@ -1233,7 +1274,7 @@ impl Store {
                 WHERE b.worker_site_id = ? AND b.source_id = ?
                   AND b.worker_kind = ? AND b.worker_locator = ? AND b.state = 'bound'
                   AND s.source_type = 'podcast' AND s.source_kind = 'podcast'
-                  AND s.rights_status = 'approved' AND s.state <> 'removed'
+                  AND s.rights_status = 'approved' AND s.state = 'active'
                   AND s.locator = ?
             )",
             params![
@@ -1518,6 +1559,11 @@ impl Store {
         if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
             return Err(StoreError::InvalidAcquisitionPayload);
         }
+        if canonical_acquisition_locator(expected_worker_locator)
+            != canonical_acquisition_locator(expected_source_locator)
+        {
+            return Err(StoreError::AcquisitionBindingRejected);
+        }
         if !valid_content_sha256(&item.content_hash)
             || normalized_text_sha256(&item.content_text) != item.content_hash
         {
@@ -1562,7 +1608,7 @@ impl Store {
                 WHERE b.worker_site_id = ? AND b.source_id = ?
                   AND b.worker_kind = ? AND b.worker_locator = ? AND b.state = 'bound'
                   AND s.source_type = 'podcast' AND s.source_kind = 'podcast'
-                  AND s.rights_status = 'approved' AND s.state <> 'removed' AND s.locator = ?
+                  AND s.rights_status = 'approved' AND s.state = 'active' AND s.locator = ?
             )",
             params![
                 worker_site_id,
@@ -7407,6 +7453,11 @@ fn valid_content_sha256(value: &str) -> bool {
     let value = value.strip_prefix("sha256:").unwrap_or(value);
     value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
+
+fn canonical_acquisition_locator(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_ascii_lowercase()
+}
+
 fn valid_media_relative_path(value: &str) -> bool {
     let path = Path::new(value);
     !value.trim().is_empty()
@@ -9656,6 +9707,36 @@ mod tests {
         store.insert_source(&empty).unwrap();
         assert_eq!(store.delete_source(&empty.source_id).unwrap(), 0);
         assert!(store.source(&empty.source_id).unwrap().is_none());
+
+        let reusable = narrative_source("reusable-podcast", SourceKind::Podcast);
+        let locator = reusable.locator.as_deref().unwrap();
+        store.insert_source(&reusable).unwrap();
+        store
+            .upsert_acquisition_binding(
+                "reusable-site",
+                reusable.source_id.as_str(),
+                "podcast",
+                locator,
+                locator,
+                "reviewer",
+                Some("rights reviewed"),
+                "2026-11-17T13:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(store.delete_source(&reusable.source_id).unwrap(), 0);
+        let invalidated = store.acquisition_binding("reusable-site").unwrap().unwrap();
+        assert_eq!(invalidated.state, "unbound");
+        assert_eq!(invalidated.reviewed_by, "system:source-deletion");
+        store.insert_source(&reusable).unwrap();
+        assert_eq!(
+            store
+                .acquisition_binding("reusable-site")
+                .unwrap()
+                .unwrap()
+                .state,
+            "unbound",
+            "reusing a source ID must not resurrect its old binding"
+        );
     }
 
     #[test]
@@ -11215,11 +11296,36 @@ mod tests {
         let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
         assert_eq!(store.schema_version(), LATEST_SCHEMA_VERSION);
         let now = Utc::now();
+        store
+            .connection
+            .execute(
+                "INSERT INTO nip_sources
+                    (source_id, source_type, source_kind, display_name, locator,
+                     rights_status, rights_statement, state)
+                 VALUES ('source-main', 'podcast', 'podcast', 'Fixture podcast',
+                         'https://example.test/feed.xml', 'approved', 'fixture rights', 'active')",
+                [],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.upsert_acquisition_binding(
+                "wrong-locator-site",
+                "source-main",
+                "podcast",
+                "https://wrong.example/feed.xml",
+                "https://example.test/feed.xml",
+                "reviewer@example.test",
+                None,
+                now,
+            ),
+            Err(StoreError::InvalidAcquisitionBinding)
+        ));
         let binding = store
             .upsert_acquisition_binding(
                 "podcast-main",
                 "source-main",
                 "podcast",
+                "https://example.test/feed.xml",
                 "https://example.test/feed.xml",
                 "reviewer@example.test",
                 Some("approved feed and rights reviewed"),
@@ -11264,6 +11370,7 @@ mod tests {
                 "fixture-site",
                 "fixture-source",
                 "podcast",
+                "https://fixture.test/feed.xml",
                 "https://fixture.test/feed.xml",
                 "fixture-reviewer",
                 Some("explicit fixture binding"),
@@ -11760,10 +11867,22 @@ mod tests {
     #[test]
     fn unbound_or_rights_unapproved_source_cannot_persist_worker_items() {
         let (_temp, mut store, now) = acquisition_fixture_store();
+        let batch = acquisition_fixture_batch(now, "Episode notes.");
+        assert!(matches!(
+            store.ingest_acquisition_item(
+                &batch,
+                "fixture-site",
+                "fixture-source",
+                "podcast",
+                "https://worker-changed.test/feed.xml",
+                "https://fixture.test/feed.xml",
+                now,
+            ),
+            Err(StoreError::AcquisitionBindingRejected)
+        ));
         store
             .unbind_acquisition_binding("fixture-site", "reviewer", None, now)
             .unwrap();
-        let batch = acquisition_fixture_batch(now, "Episode notes.");
         assert!(matches!(
             ingest_fixture(&mut store, &batch, now),
             Err(StoreError::AcquisitionBindingRejected)
@@ -11773,6 +11892,7 @@ mod tests {
                 "fixture-site",
                 "fixture-source",
                 "podcast",
+                "https://fixture.test/feed.xml",
                 "https://fixture.test/feed.xml",
                 "fixture-reviewer",
                 None,
@@ -11786,6 +11906,34 @@ mod tests {
                 [],
             )
             .unwrap();
+        assert!(matches!(
+            ingest_fixture(&mut store, &batch, now),
+            Err(StoreError::AcquisitionBindingRejected)
+        ));
+        assert_eq!(table_count(&store, "nip_events"), 0);
+        assert_eq!(table_count(&store, "nip_acquisition_items"), 0);
+        assert_eq!(table_count(&store, "nip_ingestion_runs"), 0);
+
+        store
+            .connection
+            .execute(
+                "UPDATE nip_sources SET rights_status = 'approved', state = 'paused' WHERE source_id = 'fixture-source'",
+                [],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.upsert_acquisition_binding(
+                "fixture-site",
+                "fixture-source",
+                "podcast",
+                "https://fixture.test/feed.xml",
+                "https://fixture.test/feed.xml",
+                "fixture-reviewer",
+                None,
+                now,
+            ),
+            Err(StoreError::AcquisitionBindingRejected)
+        ));
         assert!(matches!(
             ingest_fixture(&mut store, &batch, now),
             Err(StoreError::AcquisitionBindingRejected)
@@ -11906,6 +12054,36 @@ mod tests {
         let base = acquisition_fixture_batch(now, "Episode notes.\n\nA fixture summary.");
         ingest_fixture(&mut store, &base, now).unwrap();
         let mut batch = phase5_v2_fixture_batch(now, "phase5-run-1", "Apex", "guidance");
+        store
+            .set_source_state(
+                &SourceId::new("fixture-source").unwrap(),
+                SourceState::Paused,
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            derive_fixture(&mut store, &batch, now),
+            Err(StoreError::AcquisitionBindingRejected)
+        ));
+        store
+            .set_source_state(
+                &SourceId::new("fixture-source").unwrap(),
+                SourceState::Active,
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            store.derive_acquisition_item(
+                &batch,
+                "fixture-site",
+                "fixture-source",
+                "podcast",
+                "https://worker-changed.test/feed.xml",
+                "https://fixture.test/feed.xml",
+                now,
+            ),
+            Err(StoreError::AcquisitionBindingRejected)
+        ));
         let first = derive_fixture(&mut store, &batch, now).unwrap();
         assert!(!first.replay);
         assert!(derive_fixture(&mut store, &batch, now).unwrap().replay);

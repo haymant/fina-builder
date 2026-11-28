@@ -1,6 +1,6 @@
 # Main-Branch Design, Implementation, and Test Plan
 
-**Status:** Plan approved for execution by the user on 2026-11-28. Based on the read-only review of `main` at `fd1a9f7`. Phase 1 implementation and focused test gates have passed; remaining phases have not started. Each phase ends with recorded evidence, a commit, a push, and a handoff before the next phase begins.
+**Status:** Plan approved for execution by the user on 2026-11-28. Based on the read-only review of `main` at `fd1a9f7`. Phases 1 and 2 implementation and focused test gates have passed; phases 3–8 have not started. Each phase ends with recorded evidence, a commit, a push, and a handoff before the next phase begins.
 
 ## Goals
 
@@ -103,3 +103,22 @@ Each phase must:
 - Cargo emitted existing unused-import warnings in `crates/nip-engine/src/lib.rs` and an existing dead-code warning for `WorkerState::Starting` in `acquisition.rs`; they are outside this phase's change.
 - After the focused Cargo build, sandbox disk headroom fell to about 277 MB (100% used). Do not run further builds until safe disk headroom is available; do not remove existing build outputs without establishing that they are inactive and expendable.
 - Data-safety result: no database, legacy data, or schema was changed.
+
+### Phase 2 — Acquisition authorization and source-lifecycle integrity
+
+- Acquisition resolution now requires an enabled podcast profile whose current locator matches the bound source; inactive, disabled, changed, or non-podcast profiles do not authorize ingestion. Service-level bind, ingest, and derivation checks also require an active source and a current matching profile.
+- The store transaction independently validates approved podcast rights, active source state, and source locator when binding; ingestion and derivation transaction predicates now require `state = 'active'`. Store entry points also reject normalized worker/source locator mismatches, including direct calls that bypass service validation.
+- Source deletion transactionally invalidates associated bindings and records an audit note, so reusing the source ID cannot silently restore authorization. `NipService::create_source` requires explicit rights confirmation; the MCP handler forwards its validated confirmation value.
+- Focused engine tests passed serially and offline (1 passed each):
+  - `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test --offline -p nip-engine --lib explicit_acquisition_binding_is_confirmed_audited_and_stale_safe -- --test-threads=1`
+  - `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test --offline -p nip-engine --lib typed_worker_ingest_requires_explicit_binding_and_rejects_changed_or_stale_items -- --test-threads=1`
+  - `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test --offline -p nip-engine --lib scraper_site_id_collision_is_rejected_before_nip_source_creation -- --test-threads=1`
+  - `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test --offline -p nip-engine --lib source_binding_requires_exact_feed_evidence_and_never_creates_sources -- --test-threads=1`
+- Focused store tests passed serially and offline (1 passed each):
+  - `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test --offline -p nip-store --lib acquisition_binding_records -- --test-threads=1`
+  - `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test --offline -p nip-store --lib unbound_or_rights_unapproved_source_cannot_persist_worker_items -- --test-threads=1`
+  - `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test --offline -p nip-store --lib deleting_a_source_is_refused_while_events_reference_it -- --test-threads=1` (also exercises binding invalidation and source-ID reuse)
+  - `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test --offline -p nip-store --lib derivation_only_replay_fingerprints_manifest_and_producer_metadata -- --test-threads=1`
+- `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test --offline -p nip-engine --bin nip-engine --no-run` compiled the updated MCP binary. Targeted `rustfmt --check --edition 2021 --config skip_children=true` across all four changed Rust files and `git diff --check` passed. Workspace-wide formatting is not claimed because unrelated baseline formatting differences were previously observed.
+- Existing warnings remain: unused imports in `nip-engine/src/lib.rs` during binary compilation and the pre-existing unconstructed `WorkerState::Starting` variant. A separate `cargo check --offline -p nip-engine --bin nip-engine` triggered a long DuckDB C++ check-profile rebuild and was stopped to protect disk space; the partial generated check-profile output was removed. Final observed free space was about 1.5 GB.
+- Data-safety result: no migration, backfill, legacy-data rewrite, or TradeAC data operation was performed. Changes are code-only; regression tests used temporary fixture databases. No production database was opened or modified.

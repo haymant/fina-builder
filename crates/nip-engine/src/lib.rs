@@ -1016,7 +1016,8 @@ impl NipService {
     /// read-only: a worker profile never creates a NIP source or infers rights.
     pub fn acquisition_source_bindings(&self) -> Result<Vec<AcquisitionSourceBinding>, NipError> {
         let sources = self.store.sources(true)?;
-        let mut bindings = resolve_source_bindings(self.config.acquisition_sites(), &sources);
+        let sites = self.config.acquisition_sites();
+        let mut bindings = resolve_source_bindings(&sites, &sources);
         for record in self.store.acquisition_bindings()? {
             if let Some(binding) = bindings
                 .iter_mut()
@@ -1033,15 +1034,25 @@ impl NipService {
                         "explicit NIP review left this worker profile unbound".to_owned();
                     continue;
                 }
+                let current_profile_matches = sites.iter().any(|site| {
+                    site.site_id == record.worker_site_id
+                        && site.enabled
+                        && site.kind == record.worker_kind
+                        && site.kind == "podcast"
+                        && site.feed_url.as_deref().is_some_and(|locator| {
+                            canonical_locator(locator) == record.worker_locator
+                        })
+                });
                 let evidence_matches = sources.iter().find(|source| {
                     source.source_id.as_str() == record.source_id
                         && source.kind == SourceKind::Podcast
                         && source.rights_status == "approved"
-                        && source.state != SourceState::Removed
+                        && source.state == SourceState::Active
                         && source.locator.as_deref().is_some_and(|locator| {
                             canonical_locator(locator) == record.worker_locator
                         })
                         && record.worker_kind == "podcast"
+                        && current_profile_matches
                 });
                 if evidence_matches.is_some() {
                     binding.source_id = Some(record.source_id.clone());
@@ -1118,7 +1129,7 @@ impl NipService {
         if source.rights_status != "approved" {
             return Err(NipError::AcquisitionBindingRightsRequired);
         }
-        if source.kind != SourceKind::Podcast || source.state == SourceState::Removed {
+        if source.kind != SourceKind::Podcast || source.state != SourceState::Active {
             return Err(NipError::AcquisitionBindingEvidenceMismatch);
         }
         let worker_locator = binding
@@ -1189,7 +1200,7 @@ impl NipService {
         if source.rights_status != "approved" {
             return Err(NipError::AcquisitionBindingRightsRequired);
         }
-        if source.kind != SourceKind::Podcast || source.state == SourceState::Removed {
+        if source.kind != SourceKind::Podcast || source.state != SourceState::Active {
             return Err(NipError::AcquisitionBindingEvidenceMismatch);
         }
         let worker_locator = binding
@@ -1378,6 +1389,9 @@ impl NipService {
             .into_iter()
             .find(|site| site.site_id == worker_site_id)
             .ok_or(NipError::AcquisitionProfileNotFound)?;
+        if !site.enabled || site.kind != "podcast" {
+            return Err(NipError::AcquisitionBindingEvidenceMismatch);
+        }
         let locator = site
             .feed_url
             .as_deref()
@@ -1391,7 +1405,7 @@ impl NipService {
         if source.kind != SourceKind::Podcast
             || site.kind != "podcast"
             || source.rights_status != "approved"
-            || source.state == SourceState::Removed
+            || source.state != SourceState::Active
             || source.locator.as_deref().map(canonical_locator) != Some(locator.clone())
         {
             return Err(if source.rights_status != "approved" {
@@ -1405,6 +1419,10 @@ impl NipService {
             source_id.as_str(),
             &site.kind,
             &locator,
+            source
+                .locator
+                .as_deref()
+                .ok_or(NipError::AcquisitionBindingEvidenceMismatch)?,
             reviewed_by.trim(),
             review_note.map(str::trim).filter(|note| !note.is_empty()),
             Utc::now(),
@@ -1444,9 +1462,13 @@ impl NipService {
     pub fn create_source(
         &mut self,
         draft: SourceDraft,
+        user_confirmed_rights: bool,
         client: &dyn FeedClient,
         now: DateTime<Utc>,
     ) -> Result<NarrativeSource, NipError> {
+        if !user_confirmed_rights {
+            return Err(NipError::RightsConfirmationRequired);
+        }
         if self.config.scraper_owns_site_id(draft.source_id.as_str()) {
             return Err(NipError::ScraperOwnsSource);
         }
@@ -1484,7 +1506,7 @@ impl NipService {
                     feed_url: feed_url.to_owned(),
                     show_name: display_name.to_owned(),
                     rights_statement: draft.rights_statement.trim().to_owned(),
-                    user_confirmed_rights: true,
+                    user_confirmed_rights,
                 },
                 client,
                 now,
@@ -3394,18 +3416,19 @@ mod tests {
             true,
         )
         .unwrap();
+        let profile = acquisition::AcquisitionSiteProfile {
+            site_id: "fixture-site".into(),
+            display_name: "Fixture podcast worker".into(),
+            kind: "podcast".into(),
+            enabled: true,
+            poll_interval_min: 60,
+            feed_url: Some("https://fixture.test/feed.xml/".into()),
+            source_seed_status: "observed".into(),
+            schedule_seed_status: "observed".into(),
+            credential_status: "not_required".into(),
+        };
         config
-            .set_acquisition_site_profiles(vec![acquisition::AcquisitionSiteProfile {
-                site_id: "fixture-site".into(),
-                display_name: "Fixture podcast worker".into(),
-                kind: "podcast".into(),
-                enabled: true,
-                poll_interval_min: 60,
-                feed_url: Some("https://fixture.test/feed.xml/".into()),
-                source_seed_status: "observed".into(),
-                schedule_seed_status: "observed".into(),
-                credential_status: "not_required".into(),
-            }])
+            .set_acquisition_site_profiles(vec![profile.clone()])
             .unwrap();
         let mut service = NipService::open(config).unwrap();
         let source_id = SourceId::new("fixture-source").unwrap();
@@ -3455,7 +3478,7 @@ mod tests {
         let binding = service
             .bind_acquisition_source(
                 "fixture-site",
-                source_id,
+                source_id.clone(),
                 "reviewer@example.test",
                 Some("fixture review"),
                 true,
@@ -3467,6 +3490,68 @@ mod tests {
             .unwrap()
             .iter()
             .any(|binding| binding.explicit && binding.state == "bound"));
+
+        let mut disabled_profile = profile.clone();
+        disabled_profile.enabled = false;
+        service
+            .config
+            .set_acquisition_site_profiles(vec![disabled_profile])
+            .unwrap();
+        assert!(service
+            .acquisition_source_bindings()
+            .unwrap()
+            .iter()
+            .any(|binding| binding.explicit && binding.state == "unresolved"));
+        assert!(matches!(
+            service.bind_acquisition_source(
+                "fixture-site",
+                source_id.clone(),
+                "reviewer@example.test",
+                None,
+                true,
+            ),
+            Err(NipError::AcquisitionBindingEvidenceMismatch)
+        ));
+
+        let mut changed_profile = profile.clone();
+        changed_profile.feed_url = Some("https://fixture.test/changed-profile.xml".into());
+        service
+            .config
+            .set_acquisition_site_profiles(vec![changed_profile])
+            .unwrap();
+        assert!(service
+            .acquisition_source_bindings()
+            .unwrap()
+            .iter()
+            .any(|binding| binding.explicit && binding.state == "unresolved"));
+        service
+            .config
+            .set_acquisition_site_profiles(vec![profile.clone()])
+            .unwrap();
+
+        service
+            .store
+            .set_source_state(&source_id, SourceState::Paused, now)
+            .unwrap();
+        assert!(service
+            .acquisition_source_bindings()
+            .unwrap()
+            .iter()
+            .any(|binding| binding.explicit && binding.state == "unresolved"));
+        assert!(matches!(
+            service.bind_acquisition_source(
+                "fixture-site",
+                source_id.clone(),
+                "reviewer@example.test",
+                None,
+                true,
+            ),
+            Err(NipError::AcquisitionBindingEvidenceMismatch)
+        ));
+        service
+            .store
+            .set_source_state(&source_id, SourceState::Active, now)
+            .unwrap();
 
         service
             .store
@@ -3501,6 +3586,48 @@ mod tests {
         assert_eq!(binding.state, "unbound");
         assert_eq!(binding.review_note.as_deref(), Some("mapping withdrawn"));
         assert_eq!(service.sources(true).unwrap().len(), 1);
+
+        service
+            .store
+            .update_source(
+                &source_id,
+                &SourceUpdate {
+                    locator: Some("https://fixture.test/feed.xml".into()),
+                    ..SourceUpdate::default()
+                },
+                now,
+            )
+            .unwrap();
+        service
+            .bind_acquisition_source(
+                "fixture-site",
+                source_id.clone(),
+                "reviewer@example.test",
+                Some("reconfirm before lifecycle test"),
+                true,
+            )
+            .unwrap();
+        let source_to_recreate = service.source(&source_id).unwrap();
+        service.delete_source(&source_id).unwrap();
+        let deleted_binding = service
+            .store
+            .acquisition_binding("fixture-site")
+            .unwrap()
+            .unwrap();
+        assert_eq!(deleted_binding.state, "unbound");
+        assert_eq!(deleted_binding.reviewed_by, "system:source-deletion");
+        service.store.insert_source(&source_to_recreate).unwrap();
+        assert_eq!(
+            service
+                .acquisition_source_bindings()
+                .unwrap()
+                .iter()
+                .find(|binding| binding.worker_site_id == "fixture-site")
+                .unwrap()
+                .state,
+            "unbound",
+            "recreating a deleted source ID must not restore prior authorization"
+        );
     }
 
     #[test]
@@ -3643,6 +3770,23 @@ mod tests {
             .unwrap();
         assert!(replay.replay);
         assert_eq!(replay.event_id, first.event_id);
+
+        service
+            .store
+            .set_source_state(&source_id, SourceState::Paused, Utc::now())
+            .unwrap();
+        assert!(matches!(
+            service.ingest_acquisition_batch("fixture-site", &batch),
+            Err(NipError::AcquisitionBindingEvidenceMismatch)
+        ));
+        assert!(matches!(
+            service.derive_acquisition_batch("fixture-site", &batch),
+            Err(NipError::AcquisitionBindingEvidenceMismatch)
+        ));
+        service
+            .store
+            .set_source_state(&source_id, SourceState::Active, Utc::now())
+            .unwrap();
 
         batch.items[0].content_text = "Changed body for the same worker identity.".into();
         batch.items[0].content_hash = hash_text(&batch.items[0].content_text);
@@ -3796,18 +3940,35 @@ mod tests {
         let mut service = service_with_scraper_ownership_at(temp.path(), &[], &["native-site-id"]);
         let source_id = SourceId::new("native-site-id").unwrap();
         let client = FixtureFeedClient::default();
+        let draft = SourceDraft {
+            source_id: source_id.clone(),
+            kind: SourceKind::Web,
+            display_name: "Would collide".into(),
+            locator: Some("https://example.test/source".into()),
+            rights_statement: "Synthetic test rights".into(),
+            topics: Vec::new(),
+            poll_interval_minutes: None,
+            per_scan_limit: None,
+            notes: None,
+        };
+        assert!(matches!(
+            service.create_source(
+                draft.clone(),
+                false,
+                &client,
+                "2026-11-16T09:00:00Z".parse().unwrap(),
+            ),
+            Err(NipError::RightsConfirmationRequired)
+        ));
+        assert_eq!(client.call_count(), 0);
+        assert!(matches!(
+            service.source(&source_id),
+            Err(NipError::SourceNotFound)
+        ));
+
         let result = service.create_source(
-            SourceDraft {
-                source_id: source_id.clone(),
-                kind: SourceKind::Web,
-                display_name: "Would collide".into(),
-                locator: Some("https://example.test/source".into()),
-                rights_statement: "Synthetic test rights".into(),
-                topics: Vec::new(),
-                poll_interval_minutes: None,
-                per_scan_limit: None,
-                notes: None,
-            },
+            draft,
+            true,
             &client,
             "2026-11-16T09:00:00Z".parse().unwrap(),
         );

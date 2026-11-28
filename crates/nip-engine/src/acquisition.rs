@@ -7,9 +7,9 @@
 //! called here; a future typed acquisition request must be validated and
 //! committed by NIP before that surface is enabled.
 
+use nip_domain::{NarrativeSource, SourceKind};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use nip_domain::{NarrativeSource, SourceKind};
 use std::{
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
@@ -64,6 +64,24 @@ pub fn resolve_source_bindings(
     sites
         .iter()
         .map(|site| {
+            if !site.enabled || site.kind != "podcast" {
+                return AcquisitionSourceBinding {
+                    worker_site_id: site.site_id.clone(),
+                    worker_kind: site.kind.clone(),
+                    worker_locator: site.feed_url.clone(),
+                    source_id: None,
+                    state: "unresolved".to_owned(),
+                    match_basis: None,
+                    detail: if site.enabled {
+                        "only podcast worker profiles can bind to NIP podcast sources".to_owned()
+                    } else {
+                        "worker profile is disabled; it cannot authorize acquisition".to_owned()
+                    },
+                    explicit: false,
+                    reviewed_by: None,
+                    review_note: None,
+                };
+            }
             let candidates = site
                 .feed_url
                 .as_deref()
@@ -73,6 +91,8 @@ pub fn resolve_source_bindings(
                         .iter()
                         .filter(|source| {
                             source.kind == SourceKind::Podcast
+                                && source.state == nip_domain::SourceState::Active
+                                && source.rights_status == "approved"
                                 && source
                                     .locator
                                     .as_deref()
@@ -93,7 +113,7 @@ pub fn resolve_source_bindings(
                     None,
                     "unresolved".to_owned(),
                     None,
-                    "no NIP source matches the worker feed URL; no source was created".to_owned(),
+                    "no active, rights-approved NIP podcast source matches the worker feed URL; no source was created".to_owned(),
                 ),
                 [] => (
                     None,
@@ -299,9 +319,8 @@ impl AcquisitionSupervisor {
                     }
                     Ok(_) => {}
                     Err(error) => {
-                        let _ = messages_tx.send(Err(format!(
-                            "acquisition worker stdout failed: {error}"
-                        )));
+                        let _ = messages_tx
+                            .send(Err(format!("acquisition worker stdout failed: {error}")));
                         return;
                     }
                 }
