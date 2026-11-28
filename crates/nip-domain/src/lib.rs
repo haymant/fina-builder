@@ -172,6 +172,347 @@ pub struct LocalEventImport {
     pub review_status: Option<ClaimReviewStatus>,
 }
 
+/// Versioned result envelope returned by the embedded acquisition worker.
+/// This is a transport contract, not a second persisted catalog: NIP validates
+/// the source binding and remains responsible for committing accepted records.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcquisitionBatch {
+    pub contract_version: u32,
+    pub producer: AcquisitionProducer,
+    pub run_id: String,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: DateTime<Utc>,
+    pub items: Vec<AcquisitionItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcquisitionProducer {
+    pub name: String,
+    pub version: String,
+}
+
+/// A worker output item is bound to a NIP source ID by the NIP orchestrator;
+/// `worker_source_key` is retained only as producer provenance.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcquisitionItem {
+    pub source_id: SourceId,
+    pub worker_source_key: String,
+    pub worker_item_id: String,
+    pub source_url: String,
+    pub title: String,
+    pub content_kind: AcquisitionContentKind,
+    pub content_text: String,
+    pub content_hash: String,
+    pub published_at: Option<DateTime<Utc>>,
+    pub ingested_at: DateTime<Utc>,
+    pub valid_from: DateTime<Utc>,
+    pub valid_to: Option<DateTime<Utc>>,
+    pub availability: AcquisitionAvailability,
+    pub transcript: Option<AcquisitionTranscript>,
+    pub claims: Vec<AcquisitionClaim>,
+    pub entities: Vec<AcquisitionEntity>,
+    /// Values refer to NIP-registered feature keys. The worker cannot register
+    /// or redefine a feature through an ingestion result.
+    pub features: Vec<AcquisitionFeatureValue>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AcquisitionContentKind {
+    Article,
+    Transcript,
+    Filing,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AcquisitionAvailability {
+    Live,
+    Reconstructed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcquisitionTranscript {
+    pub transcript_text: String,
+    pub content_hash: String,
+    pub language: Option<String>,
+    pub method: String,
+    pub model: Option<String>,
+    pub model_version: Option<String>,
+    pub transcribed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcquisitionClaim {
+    pub worker_claim_id: String,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub confidence_millis: u16,
+    pub review_status: ClaimReviewStatus,
+    pub extraction: AcquisitionExtractionProvenance,
+    pub evidence: AcquisitionEvidenceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcquisitionEntity {
+    pub worker_entity_id: String,
+    pub canonical_id: String,
+    pub name: String,
+    pub entity_type: String,
+    pub ticker: Option<String>,
+    pub extraction: AcquisitionExtractionProvenance,
+    pub evidence: Vec<AcquisitionEvidenceSpan>,
+}
+
+/// Offsets count Unicode scalar values (the same convention used by NIP's
+/// retained-transcript quote validator), not UTF-8 bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcquisitionEvidenceSpan {
+    pub payload: AcquisitionEvidencePayload,
+    pub quote: String,
+    pub start_offset: u32,
+    pub end_offset: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AcquisitionEvidencePayload {
+    ItemContent,
+    Transcript,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcquisitionExtractionProvenance {
+    pub tier: ExtractionTier,
+    pub model: String,
+    pub model_version: String,
+    pub prompt_version: Option<String>,
+    pub confidence_millis: Option<u16>,
+    pub extracted_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcquisitionFeatureValue {
+    pub feature_key: String,
+    pub value: serde_json::Value,
+    pub as_of: DateTime<Utc>,
+    pub valid_from: DateTime<Utc>,
+    pub valid_to: Option<DateTime<Utc>>,
+    pub availability: AcquisitionAvailability,
+    pub extraction: AcquisitionExtractionProvenance,
+}
+
+impl AcquisitionBatch {
+    /// Validate structure and exact evidence before NIP hands a batch to its
+    /// persistence layer. Source existence, hashes, rights, and feature-key
+    /// registration are store-level checks and must not be inferred here.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.contract_version != 1 {
+            return Err(format!(
+                "unsupported acquisition contract version {}",
+                self.contract_version
+            ));
+        }
+        if self.producer.name.trim().is_empty() || self.producer.version.trim().is_empty() {
+            return Err("producer name and version are required".into());
+        }
+        if self.run_id.trim().is_empty() {
+            return Err("run_id is required".into());
+        }
+        if self.completed_at < self.started_at {
+            return Err("completed_at must not precede started_at".into());
+        }
+        if self.items.is_empty() {
+            return Err("an acquisition batch must contain at least one item".into());
+        }
+
+        let mut item_ids = std::collections::HashSet::new();
+        for item in &self.items {
+            if item.worker_source_key.trim().is_empty()
+                || item.worker_item_id.trim().is_empty()
+                || item.source_url.trim().is_empty()
+                || item.title.trim().is_empty()
+                || item.content_text.trim().is_empty()
+                || item.content_hash.trim().is_empty()
+            {
+                return Err(
+                    "item source key, worker item ID, URL, title, content, and hash are required"
+                        .into(),
+                );
+            }
+            if !item_ids.insert((
+                item.source_id.as_str(),
+                item.worker_source_key.as_str(),
+                item.worker_item_id.as_str(),
+            )) {
+                return Err(format!(
+                    "duplicate worker item {} for source {}",
+                    item.worker_item_id,
+                    item.source_id.as_str()
+                ));
+            }
+            if item
+                .valid_to
+                .as_ref()
+                .is_some_and(|end| end <= &item.valid_from)
+            {
+                return Err(format!(
+                    "item {} has an invalid validity interval",
+                    item.worker_item_id
+                ));
+            }
+            if let Some(transcript) = &item.transcript {
+                if transcript.transcript_text.trim().is_empty()
+                    || transcript.content_hash.trim().is_empty()
+                    || transcript.method.trim().is_empty()
+                {
+                    return Err(format!(
+                        "item {} has an incomplete transcript record",
+                        item.worker_item_id
+                    ));
+                }
+            }
+
+            let mut claim_ids = std::collections::HashSet::new();
+            for claim in &item.claims {
+                if claim.worker_claim_id.trim().is_empty()
+                    || claim.subject.trim().is_empty()
+                    || claim.predicate.trim().is_empty()
+                    || claim.object.trim().is_empty()
+                    || claim.confidence_millis > 1000
+                {
+                    return Err(format!("item {} has an invalid claim", item.worker_item_id));
+                }
+                if !claim_ids.insert(claim.worker_claim_id.as_str()) {
+                    return Err(format!(
+                        "item {} has duplicate claim ID {}",
+                        item.worker_item_id, claim.worker_claim_id
+                    ));
+                }
+                validate_acquisition_provenance(&claim.extraction)?;
+                validate_acquisition_span(item, &claim.evidence)?;
+            }
+
+            let mut entity_ids = std::collections::HashSet::new();
+            for entity in &item.entities {
+                if entity.worker_entity_id.trim().is_empty()
+                    || entity.canonical_id.trim().is_empty()
+                    || entity.name.trim().is_empty()
+                    || entity.entity_type.trim().is_empty()
+                {
+                    return Err(format!(
+                        "item {} has an invalid entity",
+                        item.worker_item_id
+                    ));
+                }
+                if !entity_ids.insert(entity.worker_entity_id.as_str()) {
+                    return Err(format!(
+                        "item {} has duplicate entity ID {}",
+                        item.worker_item_id, entity.worker_entity_id
+                    ));
+                }
+                if entity.evidence.is_empty() {
+                    return Err(format!(
+                        "entity {} must include evidence",
+                        entity.worker_entity_id
+                    ));
+                }
+                validate_acquisition_provenance(&entity.extraction)?;
+                for span in &entity.evidence {
+                    validate_acquisition_span(item, span)?;
+                }
+            }
+
+            let mut feature_keys = std::collections::HashSet::new();
+            for feature in &item.features {
+                if feature.feature_key.trim().is_empty() || feature.value.is_null() {
+                    return Err(format!(
+                        "item {} has an invalid feature value",
+                        item.worker_item_id
+                    ));
+                }
+                if !feature_keys.insert(feature.feature_key.as_str()) {
+                    return Err(format!(
+                        "item {} has duplicate feature key {}",
+                        item.worker_item_id, feature.feature_key
+                    ));
+                }
+                if feature
+                    .valid_to
+                    .as_ref()
+                    .is_some_and(|end| end <= &feature.valid_from)
+                {
+                    return Err(format!(
+                        "item {} feature {} has an invalid validity interval",
+                        item.worker_item_id, feature.feature_key
+                    ));
+                }
+                validate_acquisition_provenance(&feature.extraction)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_acquisition_provenance(
+    provenance: &AcquisitionExtractionProvenance,
+) -> Result<(), String> {
+    if provenance.model.trim().is_empty()
+        || provenance.model_version.trim().is_empty()
+        || provenance
+            .confidence_millis
+            .is_some_and(|confidence| confidence > 1000)
+    {
+        return Err("extraction model/version and a valid optional confidence are required".into());
+    }
+    Ok(())
+}
+
+fn validate_acquisition_span(
+    item: &AcquisitionItem,
+    span: &AcquisitionEvidenceSpan,
+) -> Result<(), String> {
+    let content = match span.payload {
+        AcquisitionEvidencePayload::ItemContent => item.content_text.as_str(),
+        AcquisitionEvidencePayload::Transcript => item
+            .transcript
+            .as_ref()
+            .map(|transcript| transcript.transcript_text.as_str())
+            .ok_or_else(|| {
+                format!(
+                    "item {} evidence references a missing transcript",
+                    item.worker_item_id
+                )
+            })?,
+    };
+    if span.quote.trim().is_empty() || span.start_offset >= span.end_offset {
+        return Err(format!(
+            "item {} has an empty or reversed evidence span",
+            item.worker_item_id
+        ));
+    }
+    let chars: Vec<char> = content.chars().collect();
+    let (start, end) = (span.start_offset as usize, span.end_offset as usize);
+    if end > chars.len() || chars[start..end].iter().collect::<String>() != span.quote {
+        return Err(format!(
+            "item {} evidence span does not exactly match its referenced payload",
+            item.worker_item_id
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventSearchQuery {
     pub text: Option<String>,
@@ -1858,6 +2199,149 @@ mod tests {
         );
         assert_eq!(BacktestVerdict::NotSupported.as_str(), "not_supported");
         assert_eq!(BacktestVerdict::parse("pass"), None);
+    }
+
+    fn acquisition_test_batch() -> AcquisitionBatch {
+        let at: DateTime<Utc> = "2026-11-28T00:00:00Z".parse().unwrap();
+        let text = "Apex élan improves margins";
+        let quote = "Apex élan";
+        let quote_start = text.find(quote).unwrap();
+        let start_chars = text[..quote_start].chars().count() as u32;
+        let end_chars = start_chars + quote.chars().count() as u32;
+        let provenance = AcquisitionExtractionProvenance {
+            tier: ExtractionTier::Tier2Llm,
+            model: "test-model".into(),
+            model_version: "1".into(),
+            prompt_version: Some("claims-v1".into()),
+            confidence_millis: Some(900),
+            extracted_at: at.clone(),
+        };
+        AcquisitionBatch {
+            contract_version: 1,
+            producer: AcquisitionProducer {
+                name: "fina-scraper-worker".into(),
+                version: "0.1.0".into(),
+            },
+            run_id: "run-1".into(),
+            started_at: at.clone(),
+            completed_at: at.clone(),
+            items: vec![AcquisitionItem {
+                source_id: SourceId::new("nip-source-1").unwrap(),
+                worker_source_key: "podcast:123".into(),
+                worker_item_id: "episode:456".into(),
+                source_url: "https://example.test/episode/456".into(),
+                title: "Episode 456".into(),
+                content_kind: AcquisitionContentKind::Transcript,
+                content_text: text.into(),
+                content_hash: "sha256:test-item".into(),
+                published_at: None,
+                ingested_at: at.clone(),
+                valid_from: at.clone(),
+                valid_to: None,
+                availability: AcquisitionAvailability::Live,
+                transcript: None,
+                claims: vec![AcquisitionClaim {
+                    worker_claim_id: "claim-1".into(),
+                    subject: "Apex".into(),
+                    predicate: "improves".into(),
+                    object: "margins".into(),
+                    confidence_millis: 900,
+                    review_status: ClaimReviewStatus::LlmVerified,
+                    extraction: provenance.clone(),
+                    evidence: AcquisitionEvidenceSpan {
+                        payload: AcquisitionEvidencePayload::ItemContent,
+                        quote: quote.into(),
+                        start_offset: start_chars,
+                        end_offset: end_chars,
+                    },
+                }],
+                entities: vec![AcquisitionEntity {
+                    worker_entity_id: "entity-1".into(),
+                    canonical_id: "apex-inc".into(),
+                    name: "Apex".into(),
+                    entity_type: "company".into(),
+                    ticker: None,
+                    extraction: provenance.clone(),
+                    evidence: vec![AcquisitionEvidenceSpan {
+                        payload: AcquisitionEvidencePayload::ItemContent,
+                        quote: "Apex".into(),
+                        start_offset: 0,
+                        end_offset: 4,
+                    }],
+                }],
+                features: vec![AcquisitionFeatureValue {
+                    feature_key: "narrative.sentiment".into(),
+                    value: serde_json::json!({"score": 0.42}),
+                    as_of: at.clone(),
+                    valid_from: at,
+                    valid_to: None,
+                    availability: AcquisitionAvailability::Live,
+                    extraction: provenance,
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn acquisition_contract_accepts_unicode_character_offsets_and_keeps_provenance() {
+        let batch = acquisition_test_batch();
+        batch.validate().unwrap();
+        let json = serde_json::to_value(batch).unwrap();
+        assert_eq!(json["producer"]["name"], "fina-scraper-worker");
+        assert_eq!(json["items"][0]["worker_source_key"], "podcast:123");
+        assert_eq!(
+            json["items"][0]["claims"][0]["extraction"]["tier"],
+            "tier2_llm"
+        );
+        assert_eq!(
+            json["items"][0]["claims"][0]["evidence"]["quote"],
+            "Apex élan"
+        );
+        assert_eq!(
+            json["items"][0]["features"][0]["feature_key"],
+            "narrative.sentiment"
+        );
+    }
+
+    #[test]
+    fn acquisition_contract_rejects_inexact_spans_and_missing_transcript_refs() {
+        let mut batch = acquisition_test_batch();
+        batch.items[0].claims[0].evidence.quote = "Apex elan".into();
+        assert!(batch
+            .validate()
+            .unwrap_err()
+            .contains("does not exactly match"));
+
+        let mut batch = acquisition_test_batch();
+        batch.items[0].claims[0].evidence.payload = AcquisitionEvidencePayload::Transcript;
+        assert!(batch.validate().unwrap_err().contains("missing transcript"));
+    }
+
+    #[test]
+    fn acquisition_contract_rejects_unsupported_versions_duplicate_ids_and_unknown_fields() {
+        let mut batch = acquisition_test_batch();
+        batch.contract_version = 2;
+        assert!(batch
+            .validate()
+            .unwrap_err()
+            .contains("unsupported acquisition contract version"));
+
+        let mut batch = acquisition_test_batch();
+        batch.items.push(batch.items[0].clone());
+        assert!(batch
+            .validate()
+            .unwrap_err()
+            .contains("duplicate worker item"));
+
+        let json = serde_json::to_value(acquisition_test_batch()).unwrap();
+        let mut object = json.as_object().unwrap().clone();
+        object.insert(
+            "unrecognized_writer_override".into(),
+            serde_json::json!(true),
+        );
+        assert!(
+            serde_json::from_value::<AcquisitionBatch>(serde_json::Value::Object(object)).is_err()
+        );
     }
 }
 

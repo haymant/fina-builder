@@ -1,5 +1,7 @@
 # Handoff: Deduplicate responsibility overlap between nip-engine and fina-scraper
 
+> **Superseded as an implementation target.** This handoff describes the earlier split-owner model in which fina-scraper remains authoritative for its sources and Parquet while NIP owns separate workflows. The clarified target is now **NIP as the single product and canonical data authority, with fina-scraper as an embedded acquisition worker**. Do not follow the old ownership rules or acceptance criteria below as the final design. Keep this file only as historical context for current schemas and compatibility risks; use [`NIP_SINGLE_AUTHORITY_ARCHITECTURE.md`](NIP_SINGLE_AUTHORITY_ARCHITECTURE.md) for the current target and phase-gated execution instructions.
+
 ## Assignment
 
 Clarify and implement the responsibility boundary between `fina-scraper` and `nip-engine`/`nip-store`. The goal is one coherent narrative source and evidence experience in FinA Builder without maintaining two competing registries, pollers, and overlapping claim/entity paths in the UI.
