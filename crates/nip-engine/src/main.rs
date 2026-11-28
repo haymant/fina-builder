@@ -5094,6 +5094,7 @@ fn parse_cli() -> Result<Cli, String> {
     if allowed_hosts.is_empty() {
         allowed_hosts = vec!["localhost".into(), "127.0.0.1".into(), "::1".into()];
     }
+    validate_http_bind(transport, bind)?;
     Ok(Cli {
         transport,
         bind,
@@ -5102,8 +5103,18 @@ fn parse_cli() -> Result<Cli, String> {
     })
 }
 
+fn validate_http_bind(transport: Transport, bind: SocketAddr) -> Result<(), String> {
+    if transport == Transport::Http && !bind.ip().is_loopback() {
+        return Err(
+            "HTTP transport only supports loopback bind addresses until authenticated remote access is implemented"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 fn usage() -> &'static str {
-    "Usage: nip-engine [--transport stdio|http] [--bind HOST:PORT] [--allowed-host HOST]... [--restore-snapshot PATH]\nDefaults: stdio; HTTP bind 127.0.0.1:8794; HTTP endpoint /mcp. Restore imports a verified snapshot only into a new configured database."
+    "Usage: nip-engine [--transport stdio|http] [--bind HOST:PORT] [--allowed-host HOST]... [--restore-snapshot PATH]\nDefaults: stdio; HTTP is loopback-only (default bind 127.0.0.1:8794), endpoint /mcp. Remote HTTP access is unsupported until authentication is implemented. Restore imports a verified snapshot only into a new configured database."
 }
 
 #[tokio::main]
@@ -5387,6 +5398,28 @@ fn parse_byte_range(value: &str, total: usize) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn http_transport_allows_ipv4_and_ipv6_loopback_only() {
+        assert!(validate_http_bind(Transport::Http, "127.0.0.1:8794".parse().unwrap()).is_ok());
+        assert!(validate_http_bind(Transport::Http, "[::1]:8794".parse().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn http_transport_rejects_wildcard_and_remote_bind_addresses() {
+        for address in ["0.0.0.0:8794", "192.0.2.10:8794", "[::]:8794"] {
+            let error = validate_http_bind(Transport::Http, address.parse().unwrap()).unwrap_err();
+            assert!(
+                error.contains("loopback"),
+                "unexpected error for {address}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn stdio_transport_does_not_apply_http_bind_restrictions() {
+        assert!(validate_http_bind(Transport::Stdio, "0.0.0.0:8794".parse().unwrap()).is_ok());
+    }
 
     #[test]
     fn linkzag_render_mode_defaults_to_flash_and_accepts_full() {
