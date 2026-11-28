@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button } from '../../../components/ui/button'
 import { PanelCard } from '../../shared/components/PanelCard'
-import { narrativeApi } from '../api'
-import { scraperApi } from '../scraperApi'
+import { narrativeRepository } from '../repository'
 import type { NipBacktestEvidence, NipClaim, NipEvent, NipNarrativeGraph, NipThesis, NipTranscript, ThesisStatus } from '../types'
 import type { SymbolFeatures, TriageResponse } from '../scraperTypes'
 import {
@@ -15,6 +14,9 @@ import {
   tierLabel,
   THESIS_PIPELINE,
 } from '../thesisGates'
+
+const narrativeApi = narrativeRepository.nip
+const scraperApi = narrativeRepository.scraper
 
 /**
  * Which cited claims appear as nodes in the NIP graph — the baseline-e2e

@@ -21,6 +21,7 @@ use nip_domain::{
     VideoTimeline, VideoVisualSourceKind, VideoVisualSpec, VideoWorkflow,
 };
 use nip_engine::{
+    acquisition::AcquisitionSupervisor,
     asr::{AsrError, AsrProvider, ComfyUiAsrProvider, DeterministicFakeAsrProvider},
     comfy::{self, ComfyAsrStatus, ComfyWorkspaceReport},
     jobs::{cleanup_working_audio, JobRegistry, TranscriptionJob},
@@ -68,6 +69,7 @@ struct NipMcp {
     /// One long GPU job at a time: SDXL covers and the ASR model share an 8 GB
     /// card, so concurrent transcriptions would fight for the same VRAM.
     gate: Arc<Mutex<()>>,
+    acquisition_worker: Arc<AcquisitionSupervisor>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1738,6 +1740,11 @@ impl NipMcp {
         }
     }
 
+    #[tool(description = "Report the NIP-owned acquisition worker lifecycle state. Legacy scraper acquisition writes are not exposed here.")]
+    fn acquisition_worker_status(&self) -> CallToolResult {
+        structured_success(serde_json::to_value(self.acquisition_worker.status()).unwrap())
+    }
+
     #[tool(description = "Report NIP liveness, schema version, and readiness.")]
     fn health(&self) -> CallToolResult {
         match self.service.lock() {
@@ -2196,6 +2203,9 @@ impl NipMcp {
                 Ok(source) => source,
                 Err(error) => return structured_error("invalid_request", error.message),
             };
+            if let Err(error) = service.ensure_nip_owned_source(&source_id) {
+                return structured_error("scraper_owned_feed", error.to_string());
+            }
             let episodes = match service.podcast_episodes(&source_id) {
                 Ok(episodes) => episodes,
                 Err(error) => return structured_error("storage_unavailable", error.to_string()),
@@ -2354,6 +2364,9 @@ impl NipMcp {
                 Ok(source) => source,
                 Err(error) => return structured_error("invalid_request", error.message),
             };
+            if let Err(error) = service.ensure_nip_owned_source(&source_id) {
+                return structured_error("scraper_owned_feed", error.to_string());
+            }
             let episodes = match service.podcast_episodes(&source_id) {
                 Ok(episodes) => episodes,
                 Err(error) => return structured_error("storage_unavailable", error.to_string()),
@@ -4527,7 +4540,23 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<(), String> {
     let cli = parse_cli()?;
-    let config = NipConfig::from_env().map_err(|_| "NIP configuration is invalid".to_owned())?;
+    let mut config =
+        NipConfig::from_env().map_err(|_| "NIP configuration is invalid".to_owned())?;
+    let acquisition_inventory = nip_engine::acquisition::initialize_storage(config.lake_dir())?;
+    config
+        .set_acquisition_inventory(
+            &acquisition_inventory.podcast_feed_urls,
+            &acquisition_inventory.site_ids,
+        )
+        .map_err(|error| format!("NIP acquisition inventory is invalid: {error}"))?;
+    let scraper_binary = env::var_os("FINA_SCRAPER_BIN")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "FINA_SCRAPER_BIN was not provided to nip-engine; build/resolve the acquisition worker first".to_owned())?;
+    let acquisition_worker = Arc::new(
+        AcquisitionSupervisor::start(&scraper_binary, config.lake_dir())
+            .map_err(|error| format!("NIP acquisition worker unavailable: {error}"))?,
+    );
     eprintln!(
         "NIP storage: NIP_LAKE_DIR={} NIP_DATA_DIR={} (legacy app-data storage location is unused)",
         config.lake_dir().display(),
@@ -4562,6 +4591,7 @@ async fn run() -> Result<(), String> {
         jobs,
         video_cancel: Arc::new(Mutex::new(HashMap::new())),
         gate: Arc::new(Mutex::new(())),
+        acquisition_worker,
     };
     start_in_process_refresh_scheduler(server.service.clone());
     match cli.transport {
@@ -4672,7 +4702,12 @@ async fn serve_http(
                 let body = health_server
                     .service
                     .lock()
-                    .map(|service| serde_json::to_value(service.health()).unwrap())
+                    .map(|service| {
+                        json!({
+                            "nip": serde_json::to_value(service.health()).unwrap(),
+                            "acquisition_worker": health_server.acquisition_worker.status(),
+                        })
+                    })
                     .unwrap_or_else(|_| json!({"service":"nip-engine","readiness":"not_ready"}));
                 axum::Json(body)
             }),

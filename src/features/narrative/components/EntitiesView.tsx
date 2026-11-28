@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '../../../components/ui/button'
 import { PanelCard } from '../../shared/components/PanelCard'
-import { scraperApi } from '../scraperApi'
+import { narrativeRepository } from '../repository'
 import type { ScraperEntityRow, SymbolFeatures } from '../scraperTypes'
 import { formatNumber, reviewStatusLabel, tierLabel } from '../thesisGates'
+
+const scraperApi = narrativeRepository.scraper
 
 function formatDate(value: string | null | undefined): string {
   if (!value) return '—'

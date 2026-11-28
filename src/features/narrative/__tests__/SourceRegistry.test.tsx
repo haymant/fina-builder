@@ -64,7 +64,7 @@ describe('SourceRegistry', () => {
   it('corrects a wrong podcast URL through update_source', async () => {
     const onChanged = vi.fn().mockResolvedValue(undefined)
     api.updateSource.mockResolvedValue(podcast)
-    render(<SourceRegistry sources={[podcast]} onChanged={onChanged} />)
+    render(<SourceRegistry sources={[podcast]} scraperInventoryKnown onChanged={onChanged} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
     const url = screen.getByLabelText('Source locator')
@@ -83,7 +83,7 @@ describe('SourceRegistry', () => {
   it('pauses and removes a source through set_source_state', async () => {
     const onChanged = vi.fn().mockResolvedValue(undefined)
     api.setSourceState.mockResolvedValue({ ...podcast, state: 'paused' })
-    render(<SourceRegistry sources={[podcast]} onChanged={onChanged} />)
+    render(<SourceRegistry sources={[podcast]} scraperInventoryKnown onChanged={onChanged} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => expect(api.setSourceState).toHaveBeenCalledWith('feed-a', 'paused'))

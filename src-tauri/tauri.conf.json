@@ -38,7 +38,8 @@
     "externalBin": [
       "binaries/riga-mcp",
       "binaries/tac-engine",
-      "binaries/nip-engine"
+      "binaries/nip-engine",
+      "binaries/fina-scraper"
     ],
     "icon": [
       "icons/32x32.png",

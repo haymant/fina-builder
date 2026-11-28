@@ -21,7 +21,8 @@ test('UI projection smoke: fina-slides-v1 is not the canonical storyboard or fin
   })
   test.skip(process.env.PLAYWRIGHT_NIP !== 'on', 'run with PLAYWRIGHT_NIP=on for the real NIP engine and LinkZag renderer')
   test.setTimeout(600_000)
-  const runId = process.env.NIP_E2E_RUN_ID ?? 'e2e-run'
+  const runId = process.env.NIP_E2E_RUN_ID
+  expect(runId, 'PLAYWRIGHT_NIP=on requires the launcher's explicit fresh NIP_E2E_RUN_ID').toBeTruthy()
   const runOutput = path.resolve('playwright/.data/nip', runId)
 
   const workspace = new WorkspacePage(page)
@@ -31,12 +32,17 @@ test('UI projection smoke: fina-slides-v1 is not the canonical storyboard or fin
   await expect(page.getByRole('heading', { name: 'Narrative Intelligence' })).toBeVisible()
 
   const sourceId = `video-commentary-${Date.now()}`
-  await page.getByLabel('Source ID').fill(sourceId)
-  await page.getByLabel('Podcast feed URL').fill('http://127.0.0.1:8795/fixture/feed.xml')
-  await page.getByLabel('Show name').fill(`Video Commentary E2E ${sourceId}`)
-  await page.getByLabel('Rights statement').fill('Synthetic fixture approved for local processing and retention.')
-  await page.getByLabel(/I confirm access and retention rights/).check()
-  await page.getByRole('button', { name: 'Approve and sync' }).click()
+  await page.getByTestId('tab-sources').click()
+  await page.getByTestId('add-source-open').click()
+  const sourceDialog = page.getByRole('dialog', { name: 'Add a source' })
+  const sourceForm = sourceDialog.getByTestId('add-source-form')
+  await sourceForm.getByLabel('Source ID').fill(sourceId)
+  await sourceForm.getByLabel('Podcast feed URL').fill('http://127.0.0.1:8795/fixture/feed.xml')
+  await sourceForm.getByLabel('Show name').fill(`Video Commentary E2E ${sourceId}`)
+  await sourceForm.getByLabel('Rights statement').fill('Synthetic fixture approved for local processing and retention.')
+  await sourceForm.getByLabel(/I confirm access and retention rights/).check()
+  await sourceForm.getByRole('button', { name: 'Approve and sync' }).click()
+  await page.getByTestId('tab-overview').click()
   await expect(page.getByTestId(`source-row-${sourceId}`)).toContainText(`Video Commentary E2E ${sourceId}`)
   await expect(page.getByText('Policy outlook fixture')).toBeVisible()
   await page.getByLabel('Filter episodes by source').selectOption(sourceId)
@@ -98,7 +104,7 @@ test('UI projection smoke: fina-slides-v1 is not the canonical storyboard or fin
   expect(assetHash).toMatch(/^[0-9a-f]{64}$/)
   expect(relativePath).toMatch(/^video\/linkzag\/.+\.mp4$/)
 
-  const mediaRoot = path.join(runOutput, 'media')
+  const mediaRoot = path.join(runOutput, '_nip', 'media')
   const mediaFile = path.resolve(mediaRoot, relativePath!)
   expect(mediaFile.startsWith(`${mediaRoot}${path.sep}`)).toBe(true)
   expect(existsSync(mediaFile)).toBe(true)

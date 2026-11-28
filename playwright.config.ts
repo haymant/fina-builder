@@ -2,6 +2,8 @@ import { defineConfig, devices } from '@playwright/test'
 
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
 const nipEnabled = process.env.PLAYWRIGHT_NIP === 'on'
+const runLabel = (process.env.NIP_E2E_RUN_ID ?? process.env.PLAYWRIGHT_RUN_ID ?? 'adhoc').replace(/[^a-zA-Z0-9._-]/gu, '-').slice(0, 60)
+const tradeRepoRunId = `${runLabel}-${process.pid}-${Date.now()}`
 
 export default defineConfig({
   testDir: './playwright',
@@ -47,7 +49,7 @@ export default defineConfig({
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
       env: {
-        DATABASE_URL: 'sqlite:playwright/.data/trade-repo.sqlite',
+        DATABASE_URL: `sqlite:playwright/.data/trade-repo-e2e/${tradeRepoRunId}.sqlite`,
         TRADE_REPO_HTTP_PORT: '8792',
       },
     },

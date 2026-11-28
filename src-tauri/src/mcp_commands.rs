@@ -168,6 +168,17 @@ pub fn get_nip_engine_path(app: AppHandle) -> Result<String, String> {
     resolve_engine_binary(Some(&app), "NIP_ENGINE_BIN", "..", "nip-engine")
 }
 
+/// Resolve fina-scraper for the NIP-owned acquisition initialization/worker
+/// boundary. This is not exposed as a product-facing renderer command.
+pub fn resolve_fina_scraper_binary(app: &AppHandle) -> Result<String, String> {
+    resolve_engine_binary(
+        Some(app),
+        "FINA_SCRAPER_BIN",
+        "fina-scraper",
+        "fina-scraper",
+    )
+}
+
 /// NIP-owned app-data paths plus the loopback bridge credentials. These entries
 /// are attached to the `nip` server only; RIGA and TAC children never receive
 /// the token.

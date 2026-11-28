@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from 'react'
 import { Button } from '../../../components/ui/button'
 import { PanelCard } from '../../shared/components/PanelCard'
-import { scraperApi } from '../scraperApi'
+import { narrativeRepository } from '../repository'
 import type { ScraperStatus } from '../scraperTypes'
 import type { NipResourceStatus } from '../types'
+
+const scraperApi = narrativeRepository.scraper
 
 function formatDate(value: string | null | undefined): string {
   if (!value) return '—'

@@ -34,7 +34,7 @@ const formatDuration = (milliseconds: number | null | undefined) => {
 }
 const blankProject = (): VideoProject => ({ project_id: id('project'), revision: 1, title: '', language: 'en', target_platform: 'youtube', target_duration_ms: 90_000, audience: '', style_profile: 'evidence_first', status: 'draft', created_at: now(), updated_at: now() })
 
-export function VideoWorkspace({ view, projectId, episodeId, claimId, onNavigate }: { view: VideoView; projectId?: string; episodeId?: string; claimId?: string; onNavigate: (view: VideoView, projectId?: string) => void }) {
+export function VideoWorkspace({ view, projectId, episodeId, claimId, thesisId, transcriptId, onNavigate }: { view: VideoView; projectId?: string; episodeId?: string; claimId?: string; thesisId?: string; transcriptId?: string; onNavigate: (view: VideoView, projectId?: string) => void }) {
   const [projects, setProjects] = useState<VideoProject[]>([])
   const [capabilities, setCapabilities] = useState<VideoCapabilities | null>(null)
   const [loading, setLoading] = useState(true)
@@ -61,7 +61,7 @@ export function VideoWorkspace({ view, projectId, episodeId, claimId, onNavigate
   useEffect(() => { void load() }, [load])
 
   if (view === 'workspace' && selected) {
-    return <EpisodeWorkspace key={`${selected.project_id}:${episodeId ?? 'new'}`} project={selected} capabilities={capabilities} episodeId={episodeId} claimId={claimId} onBack={() => onNavigate('projects')} onMessage={setMessage} message={message} />
+    return <EpisodeWorkspace key={`${selected.project_id}:${episodeId ?? 'new'}`} project={selected} capabilities={capabilities} episodeId={episodeId} claimId={claimId} thesisId={thesisId} transcriptId={transcriptId} onBack={() => onNavigate('projects')} onMessage={setMessage} message={message} />
   }
   return <ProjectList projects={projects} loading={loading} message={message} onRefresh={refresh} onOpen={(project) => onNavigate('workspace', project.project_id)} onCreated={(project) => { setProjects((items) => [project, ...items]); onNavigate('workspace', project.project_id) }} onDeleted={(projectId) => setProjects((items) => items.filter((item) => item.project_id !== projectId))} />
 }
@@ -120,7 +120,7 @@ function ProjectDeleteDialog({ project, confirmationName, onConfirmationNameChan
   return <div className="video-delete-backdrop"><section role="dialog" aria-modal="true" aria-labelledby="video-delete-title" aria-describedby="video-delete-description" className="video-delete-dialog" onKeyDown={(event) => { if (event.key === 'Escape') onCancel() }}><p className="eyebrow">Destructive action</p><h2 id="video-delete-title">Delete “{project.title}”?</h2><p id="video-delete-description">This permanently removes the Video project and its project-owned production records. It does not delete canonical NIP events, transcripts, or claims. Shared media assets and job history are retained; deletion is blocked while any Video job is queued or running.</p><label htmlFor="video-delete-confirmation">Paste the exact project name to confirm<input id="video-delete-confirmation" aria-label="Project name confirmation" autoComplete="off" autoFocus spellCheck={false} value={confirmationName} onChange={(event) => onConfirmationNameChange(event.target.value)} placeholder={project.title} /></label>{error ? <p className="video-alert" role="alert">{error}</p> : null}<div className="video-delete-actions"><button type="button" className="video-secondary-button" onClick={onCancel} disabled={deleting}>Cancel</button><button type="button" className="video-danger-button" onClick={onConfirm} disabled={!matches || deleting}>{deleting ? 'Deleting…' : 'Delete project permanently'}</button></div>{!matches ? <p className="video-delete-hint">The delete button becomes available only when the name matches exactly, including capitalization.</p> : null}</section></div>
 }
 
-function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, onMessage, message }: { project: VideoProject; capabilities: VideoCapabilities | null; episodeId?: string; claimId?: string; onBack: () => void; onMessage: (message: string | null) => void; message: string | null }) {
+function EpisodeWorkspace({ project, capabilities, episodeId, claimId, thesisId, transcriptId, onBack, onMessage, message }: { project: VideoProject; capabilities: VideoCapabilities | null; episodeId?: string; claimId?: string; thesisId?: string; transcriptId?: string; onBack: () => void; onMessage: (message: string | null) => void; message: string | null }) {
   const [episode, setEpisode] = useState<VideoEpisode | null>(null)
   const [hydrating, setHydrating] = useState(Boolean(episodeId))
   const [hydrationFailed, setHydrationFailed] = useState(false)
@@ -221,14 +221,14 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
     setPublishReceipt(null)
   }, [activeEpisodeId])
 
-  const fetchThesisInput = useCallback(async (thesisId: string) => {
+  const fetchThesisInput = useCallback(async (thesisId: string, preferredTranscriptId?: string) => {
     const [thesis, transcripts, backtests, allClaims] = await Promise.all([
       thesisApi.getThesis(thesisId),
       thesisApi.listTranscripts(thesisId),
       thesisApi.listBacktestEvidence(thesisId),
       narrativeApi.listClaims(),
     ])
-    const transcript = transcripts[0] ?? null
+    const transcript = (preferredTranscriptId ? transcripts.find((item) => item.transcript_id === preferredTranscriptId) : null) ?? transcripts[0] ?? null
     const eventIds = new Set<string>()
     for (const claim of allClaims) for (const span of claim.evidence) eventIds.add(span.event_id)
     for (const beat of transcript?.beats ?? []) for (const ref of beat.evidence_refs) {
@@ -246,11 +246,11 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
     return { thesis, transcript, backtests, verification, claims: allClaims, events }
   }, [])
 
-  const loadThesisBundle = useCallback(async (thesisId: string) => {
+  const loadThesisBundle = useCallback(async (thesisId: string, preferredTranscriptId?: string) => {
     setThesisLoading(true)
     setThesisError(null)
     try {
-      const { thesis, transcript, backtests, verification } = await fetchThesisInput(thesisId)
+      const { thesis, transcript, backtests, verification } = await fetchThesisInput(thesisId, preferredTranscriptId)
       setThesisBundle({ thesis, transcript, backtests, verification })
       setSelectedThesisId(thesisId)
       onMessage(verification.ready
@@ -272,11 +272,12 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
     void thesisApi.listTheses()
       .then((items) => {
         setTheses(items)
-        if (episode.origin === 'thesis' && episode.thesis_id) void loadThesisBundle(episode.thesis_id)
+        const requestedThesisId = episode.origin === 'thesis' ? episode.thesis_id : thesisId
+        if (requestedThesisId) void loadThesisBundle(requestedThesisId, transcriptId)
       })
       .catch(() => setTheses([]))
       .finally(() => setThesesLoading(false))
-  }, [episode, loadThesisBundle])
+  }, [episode, loadThesisBundle, thesisId, transcriptId])
 
   useEffect(() => {
     if (!previewAsset?.relative_path) {
@@ -386,7 +387,7 @@ function EpisodeWorkspace({ project, capabilities, episodeId, claimId, onBack, o
     try {
       // Re-fetch everything, so the storyboard is built from freshly
       // re-verified spans and backtest rows, not stale UI state.
-      const fresh = await fetchThesisInput(bundle.thesis.thesis_id)
+      const fresh = await fetchThesisInput(bundle.thesis.thesis_id, bundle.transcript?.transcript_id)
       setThesisBundle({ thesis: fresh.thesis, transcript: fresh.transcript, backtests: fresh.backtests, verification: fresh.verification })
       const draft = buildThesisStoryboard(
         { thesis: fresh.thesis, transcript: fresh.transcript, claims: fresh.claims, events: fresh.events, backtests: fresh.backtests },

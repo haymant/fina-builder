@@ -14,7 +14,7 @@ export type Location =
   | { kind: 'rd'; view: RdView }
   | { kind: 'riskcube'; view: RiskCubeView }
   | { kind: 'narrative'; view: NarrativeView }
-  | { kind: 'video'; view: VideoView; projectId?: string; episodeId?: string; claimId?: string }
+  | { kind: 'video'; view: VideoView; projectId?: string; episodeId?: string; claimId?: string; thesisId?: string; transcriptId?: string }
 
 export const TRADE_VIEWS: { id: TradeView; label: string; accel: string }[] = [
   { id: 'blotter', label: 'Blotter', accel: 'Alt+Shift+1' }, { id: 'positions', label: 'Positions', accel: 'Alt+Shift+2' },

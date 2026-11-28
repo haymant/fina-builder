@@ -45,8 +45,10 @@ pub enum ConfigError {
     InvalidLocalLlmModel,
     #[error("NIP_LOCAL_LLM_URL and NIP_LOCAL_LLM_MODEL must be configured together")]
     IncompleteLocalLlmConfig,
-    #[error("NIP_SCRAPER_OWNED_PODCAST_FEEDS must be a JSON array of feed URLs")]
-    InvalidScraperPodcastFeeds,
+    #[error("NIP acquisition inventory contains an invalid podcast feed URL")]
+    InvalidAcquisitionFeedUrls,
+    #[error("NIP acquisition inventory contains an invalid site ID")]
+    InvalidAcquisitionSiteIds,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +150,7 @@ pub struct NipConfig {
     claim_provider_mode: ClaimProviderMode,
     local_llm: Option<LocalLlmConfig>,
     scraper_owned_podcast_feeds: BTreeSet<String>,
+    scraper_owned_site_ids: BTreeSet<String>,
 }
 
 impl NipConfig {
@@ -172,7 +175,6 @@ impl NipConfig {
             "NIP_CLAIM_PROVIDER",
             "NIP_LOCAL_LLM_URL",
             "NIP_LOCAL_LLM_MODEL",
-            "NIP_SCRAPER_OWNED_PODCAST_FEEDS",
         ]
         .into_iter()
         .filter_map(|key| env::var(key).ok().map(|value| (key.to_owned(), value)))
@@ -212,18 +214,6 @@ impl NipConfig {
         let riga_bridge = resolve_riga_bridge(values)?;
         let claim_provider_mode = resolve_claim_provider_mode(values)?;
         let local_llm = resolve_local_llm(values)?;
-        let scraper_owned_podcast_feeds = values
-            .get("NIP_SCRAPER_OWNED_PODCAST_FEEDS")
-            .map(|raw| {
-                let feeds: Vec<String> = serde_json::from_str(raw)
-                    .map_err(|_| ConfigError::InvalidScraperPodcastFeeds)?;
-                feeds
-                    .iter()
-                    .map(|feed| canonical_feed_url(feed).ok_or(ConfigError::InvalidScraperPodcastFeeds))
-                    .collect::<Result<BTreeSet<_>, _>>()
-            })
-            .transpose()?
-            .unwrap_or_default();
 
         let tac_lake_dir = configured_path(values, "TAC_LAKE_DIR")?
             .map(|path| normalize_absolute(&path, &repo_root));
@@ -288,7 +278,8 @@ impl NipConfig {
             riga_bridge,
             claim_provider_mode,
             local_llm,
-            scraper_owned_podcast_feeds,
+            scraper_owned_podcast_feeds: BTreeSet::new(),
+            scraper_owned_site_ids: BTreeSet::new(),
         })
     }
 
@@ -303,6 +294,37 @@ impl NipConfig {
     pub fn scraper_owns_podcast_feed(&self, feed_url: &str) -> bool {
         canonical_feed_url(feed_url)
             .is_some_and(|canonical| self.scraper_owned_podcast_feeds.contains(&canonical))
+    }
+
+    pub fn scraper_owns_site_id(&self, site_id: &str) -> bool {
+        self.scraper_owned_site_ids.contains(site_id)
+    }
+
+    /// Set ownership from the sources discovered by NIP's acquisition adapter.
+    /// Launcher-provided environment copies are deliberately not accepted.
+    pub fn set_acquisition_inventory(
+        &mut self,
+        podcast_feed_urls: &[String],
+        site_ids: &[String],
+    ) -> Result<(), ConfigError> {
+        let feeds = podcast_feed_urls
+            .iter()
+            .map(|feed| canonical_feed_url(feed).ok_or(ConfigError::InvalidAcquisitionFeedUrls))
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        let sites = site_ids
+            .iter()
+            .map(|site_id| {
+                let site_id = site_id.trim();
+                if site_id.is_empty() || site_id.chars().any(char::is_control) {
+                    Err(ConfigError::InvalidAcquisitionSiteIds)
+                } else {
+                    Ok(site_id.to_owned())
+                }
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        self.scraper_owned_podcast_feeds = feeds;
+        self.scraper_owned_site_ids = sites;
+        Ok(())
     }
 
     pub fn database_path(&self) -> PathBuf {
@@ -1103,17 +1125,36 @@ mod tests {
     #[test]
     fn canonical_scraper_owned_feed_urls_match_without_fragments() {
         let temp = tempdir().unwrap();
-        let config = NipConfig::resolve(
-            &env(&[(
-                "NIP_SCRAPER_OWNED_PODCAST_FEEDS",
-                r#"["https://Example.com:443/feed.xml#template"]"#,
-            )]),
+        let mut config = NipConfig::resolve(&env(&[]), temp.path(), None, true).unwrap();
+        config
+            .set_acquisition_inventory(
+                &["https://Example.com:443/feed.xml#template".to_owned()],
+                &[],
+            )
+            .unwrap();
+        assert!(config.scraper_owns_podcast_feed("https://example.com/feed.xml"));
+        assert!(!config.scraper_owns_podcast_feed("https://example.com/other.xml"));
+    }
+
+    #[test]
+    fn acquisition_inventory_replaces_launcher_copies() {
+        let temp = tempdir().unwrap();
+        let mut config = NipConfig::resolve(
+            &env(&[("NIP_SCRAPER_OWNED_PODCAST_FEEDS", "not-json-and-ignored")]),
             temp.path(),
             None,
             true,
         )
         .unwrap();
-        assert!(config.scraper_owns_podcast_feed("https://example.com/feed.xml"));
-        assert!(!config.scraper_owns_podcast_feed("https://example.com/other.xml"));
+        config
+            .set_acquisition_inventory(
+                &["https://new.example/feed.xml".to_owned()],
+                &["podcast-site".to_owned()],
+            )
+            .unwrap();
+
+        assert!(config.scraper_owns_podcast_feed("https://new.example/feed.xml"));
+        assert!(!config.scraper_owns_podcast_feed("https://old.example/feed.xml"));
+        assert!(config.scraper_owns_site_id("podcast-site"));
     }
 }

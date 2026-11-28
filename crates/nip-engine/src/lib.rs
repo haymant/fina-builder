@@ -1,3 +1,4 @@
+pub mod acquisition;
 pub mod asr;
 pub mod comfy;
 pub mod comfy_discovery;
@@ -179,6 +180,8 @@ pub enum NipError {
     RefreshNotDue,
     #[error("podcast feed is owned by fina-scraper; NIP will not fetch the same feed twice")]
     ScraperOwnsPodcastFeed,
+    #[error("source ID is owned by fina-scraper; NIP registry mutations are refused")]
+    ScraperOwnsSource,
     #[error("podcast feed could not be fetched or parsed; retry is scheduled")]
     FeedUnavailable,
     #[error("local transcription is unavailable; retry is possible")]
@@ -270,6 +273,40 @@ impl NipService {
 
     pub fn config(&self) -> &NipConfig {
         &self.config
+    }
+
+    /// Read-only owner preflight used by transport entry points before network
+    /// work or job creation. Existing compatibility rows remain readable, but
+    /// none of their NIP mutation paths may write while fina-scraper owns the feed.
+    pub fn ensure_nip_owned_source(&self, source_id: &SourceId) -> Result<(), NipError> {
+        if self.config.scraper_owns_site_id(source_id.as_str()) {
+            return Err(NipError::ScraperOwnsSource);
+        }
+        let source = self
+            .store
+            .source(source_id)?
+            .ok_or(NipError::SourceNotFound)?;
+        let subscription = self.store.subscription(source_id)?;
+        if source.kind == SourceKind::Podcast || subscription.is_some() {
+            if source
+                .locator
+                .as_deref()
+                .is_some_and(|feed| self.config.scraper_owns_podcast_feed(feed))
+                || subscription
+                    .as_ref()
+                    .is_some_and(|record| self.config.scraper_owns_podcast_feed(&record.feed_url))
+            {
+                return Err(NipError::ScraperOwnsPodcastFeed);
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_nip_owned_feed_url(&self, feed_url: &str) -> Result<(), NipError> {
+        if self.config.scraper_owns_podcast_feed(feed_url) {
+            return Err(NipError::ScraperOwnsPodcastFeed);
+        }
+        Ok(())
     }
 
     pub fn video_projects(&self) -> Result<Vec<VideoProject>, NipError> {
@@ -734,7 +771,10 @@ impl NipService {
             .store
             .subscription(source_id)?
             .ok_or(NipError::SubscriptionNotFound)?;
-        if self.config.scraper_owns_podcast_feed(&subscription.feed_url) {
+        if self
+            .config
+            .scraper_owns_podcast_feed(&subscription.feed_url)
+        {
             return Err(NipError::ScraperOwnsPodcastFeed);
         }
         if subscription.state != PodcastSubscriptionState::Active {
@@ -863,7 +903,9 @@ impl NipService {
             .into_iter()
             .filter(|subscription| {
                 subscription.state == PodcastSubscriptionState::Active
-                    && !self.config.scraper_owns_podcast_feed(&subscription.feed_url)
+                    && !self
+                        .config
+                        .scraper_owns_podcast_feed(&subscription.feed_url)
                     && subscription.next_poll_at.is_none_or(|next| now >= next)
             })
             .map(|subscription| subscription.source_id)
@@ -888,7 +930,9 @@ impl NipService {
             .into_iter()
             .filter(|subscription| {
                 subscription.state == PodcastSubscriptionState::Active
-                    && !self.config.scraper_owns_podcast_feed(&subscription.feed_url)
+                    && !self
+                        .config
+                        .scraper_owns_podcast_feed(&subscription.feed_url)
             })
             .map(|subscription| subscription.source_id)
             .collect::<Vec<_>>();
@@ -926,6 +970,7 @@ impl NipService {
         source_id: &SourceId,
         state: PodcastSubscriptionState,
     ) -> Result<(), NipError> {
+        self.ensure_nip_owned_source(source_id)?;
         let existing = self
             .store
             .subscription(source_id)?
@@ -964,6 +1009,9 @@ impl NipService {
         client: &dyn FeedClient,
         now: DateTime<Utc>,
     ) -> Result<NarrativeSource, NipError> {
+        if self.config.scraper_owns_site_id(draft.source_id.as_str()) {
+            return Err(NipError::ScraperOwnsSource);
+        }
         let display_name = draft.display_name.trim();
         if display_name.is_empty() || draft.rights_statement.trim().is_empty() {
             return Err(NipError::InvalidSourceDetails);
@@ -1037,6 +1085,7 @@ impl NipService {
         now: DateTime<Utc>,
     ) -> Result<NarrativeSource, NipError> {
         let existing = self.source(source_id)?;
+        self.ensure_nip_owned_source(source_id)?;
         if existing.state == SourceState::Removed {
             return Err(NipError::SourceNotFound);
         }
@@ -1058,6 +1107,7 @@ impl NipService {
             self.reject_duplicate_locator(source_id, locator)?;
             if existing.kind == SourceKind::Podcast {
                 validate_feed_url(locator).map_err(map_feed_url_error)?;
+                self.ensure_nip_owned_feed_url(locator)?;
             }
         }
 
@@ -1123,6 +1173,7 @@ impl NipService {
         state: SourceState,
         now: DateTime<Utc>,
     ) -> Result<NarrativeSource, NipError> {
+        self.ensure_nip_owned_source(source_id)?;
         self.source(source_id)?;
         if !self.store.set_source_state(source_id, state, now)? {
             // Already in the requested state is still a success.
@@ -1132,6 +1183,7 @@ impl NipService {
     }
 
     pub fn delete_source(&mut self, source_id: &SourceId) -> Result<(), NipError> {
+        self.ensure_nip_owned_source(source_id)?;
         self.source(source_id)?;
         let events = self.store.delete_source(source_id)?;
         if events > 0 {
@@ -2447,6 +2499,7 @@ impl NipService {
         provider: &dyn AsrProvider,
         now: DateTime<Utc>,
     ) -> Result<PodcastTranscript, NipError> {
+        self.ensure_nip_owned_source(&episode.source_id)?;
         if self.store.subscription(&episode.source_id)?.is_none() {
             return Err(NipError::SubscriptionNotFound);
         }
@@ -2489,6 +2542,7 @@ impl NipService {
         result: AsrResult,
         now: DateTime<Utc>,
     ) -> Result<PodcastTranscript, NipError> {
+        self.ensure_nip_owned_source(&episode.source_id)?;
         if self.store.subscription(&episode.source_id)?.is_none() {
             return Err(NipError::SubscriptionNotFound);
         }
@@ -2518,6 +2572,7 @@ impl NipService {
         episode: &PodcastEpisode,
         error: AsrError,
     ) -> Result<(), NipError> {
+        self.ensure_nip_owned_source(&episode.source_id)?;
         let state = match error {
             AsrError::Unavailable | AsrError::Timeout | AsrError::Cancelled => {
                 PodcastEpisodeState::TranscriptionUnavailable
@@ -2539,6 +2594,7 @@ impl NipService {
         provider: &dyn AsrProvider,
         now: DateTime<Utc>,
     ) -> Result<PodcastTranscript, NipError> {
+        self.ensure_nip_owned_source(&episode.source_id)?;
         if let Some(transcript) = self.publisher_transcript(episode, audio_client, now)? {
             return Ok(transcript);
         }
@@ -2556,6 +2612,7 @@ impl NipService {
         audio_client: &dyn AudioClient,
         now: DateTime<Utc>,
     ) -> Result<Option<PodcastTranscript>, NipError> {
+        self.ensure_nip_owned_source(&episode.source_id)?;
         let Some(url) = episode.transcript_url.as_deref() else {
             return Ok(None);
         };
@@ -2850,6 +2907,184 @@ mod tests {
         )
         .unwrap();
         NipService::open(config).unwrap()
+    }
+
+    fn service_with_scraper_ownership_at(
+        root: &std::path::Path,
+        feed_urls: &[&str],
+        site_ids: &[&str],
+    ) -> NipService {
+        let mut config = NipConfig::resolve(
+            &BTreeMap::from([(
+                "NIP_LAKE_DIR".to_owned(),
+                root.join("lake").to_string_lossy().into_owned(),
+            )]),
+            root,
+            None,
+            true,
+        )
+        .unwrap();
+        let feed_urls = feed_urls
+            .iter()
+            .map(|feed| (*feed).to_owned())
+            .collect::<Vec<_>>();
+        let site_ids = site_ids
+            .iter()
+            .map(|site| (*site).to_owned())
+            .collect::<Vec<_>>();
+        config
+            .set_acquisition_inventory(&feed_urls, &site_ids)
+            .unwrap();
+        NipService::open(config).unwrap()
+    }
+
+    #[test]
+    fn scraper_owned_compatibility_podcast_stays_readable_but_cannot_be_mutated_or_refetched() {
+        struct CountingAudioClient(std::sync::atomic::AtomicUsize);
+        impl podcast::AudioClient for CountingAudioClient {
+            fn fetch(
+                &self,
+                _url: &str,
+            ) -> Result<podcast::AudioResponse, podcast::AudioClientError> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(podcast::AudioClientError::Request)
+            }
+        }
+
+        let temp = tempdir().unwrap();
+        let feed_url = "https://example.com/owned/feed.xml?edition=main";
+        let now = "2026-11-16T09:00:00Z".parse().unwrap();
+        let mut service =
+            service_with_scraper_ownership_at(temp.path(), &[feed_url], &["scraper-native-site"]);
+        let source_id = SourceId::new("legacy-nip-show").unwrap();
+        service
+            .store
+            .add_approved_subscription(&PodcastSubscription {
+                source_id: source_id.clone(),
+                feed_url: feed_url.to_owned(),
+                show_name: "Legacy compatibility show".into(),
+                rights_statement: "Synthetic fixture rights".into(),
+                rights_confirmed_at: now,
+                state: PodcastSubscriptionState::Active,
+                etag: Some("\"preserved-etag\"".into()),
+                last_modified: None,
+                last_checked_at: Some(now),
+                next_poll_at: Some(now + chrono::TimeDelta::hours(1)),
+                last_error_code: None,
+                consecutive_failures: 0,
+            })
+            .unwrap();
+        let episode = PodcastEpisode {
+            source_id: source_id.clone(),
+            source_native_id: Some("legacy-episode-1".into()),
+            canonical_url: Some("https://example.com/episode-1".into()),
+            title: Some("Retained compatibility metadata".into()),
+            enclosure_url: Some("https://example.com/episode-1.mp3".into()),
+            published_at: Some(now),
+            discovered_at: now,
+            state: PodcastEpisodeState::AwaitingLocalTranscription,
+            transcript_url: Some("https://example.com/episode-1.vtt".into()),
+            transcript_type: Some("text/vtt".into()),
+        };
+        service
+            .store
+            .record_discovered_episodes(std::slice::from_ref(&episode))
+            .unwrap();
+        let source_before = service.source(&source_id).unwrap();
+        let subscription_before = service.store.subscription(&source_id).unwrap().unwrap();
+        let episodes_before = service.podcast_episodes(&source_id).unwrap();
+        let feed_client = FixtureFeedClient::default();
+        let audio_client = CountingAudioClient(std::sync::atomic::AtomicUsize::new(0));
+        let provider =
+            asr::DeterministicFakeAsrProvider::new("must not run", Some("en".into())).unwrap();
+
+        assert!(matches!(
+            service.refresh_podcast_feed(&source_id, &feed_client, now),
+            Err(NipError::ScraperOwnsPodcastFeed)
+        ));
+        assert!(matches!(
+            service.update_source(
+                &source_id,
+                &SourceUpdate {
+                    display_name: Some("must not change".into()),
+                    ..Default::default()
+                },
+                &feed_client,
+                false,
+                now,
+            ),
+            Err(NipError::ScraperOwnsPodcastFeed)
+        ));
+        assert!(matches!(
+            service.set_source_state(&source_id, SourceState::Paused, now),
+            Err(NipError::ScraperOwnsPodcastFeed)
+        ));
+        assert!(matches!(
+            service.set_podcast_subscription_state(&source_id, PodcastSubscriptionState::Paused),
+            Err(NipError::ScraperOwnsPodcastFeed)
+        ));
+        assert!(matches!(
+            service.delete_source(&source_id),
+            Err(NipError::ScraperOwnsPodcastFeed)
+        ));
+        assert!(matches!(
+            service.transcribe_podcast_episode_from_enclosure(
+                &episode,
+                &audio_client,
+                &provider,
+                now,
+            ),
+            Err(NipError::ScraperOwnsPodcastFeed)
+        ));
+
+        assert_eq!(
+            feed_client.call_count(),
+            0,
+            "scraper-owned feed must not be fetched by NIP"
+        );
+        assert_eq!(
+            audio_client.0.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no publisher transcript/audio request may run"
+        );
+        assert_eq!(service.source(&source_id).unwrap(), source_before);
+        assert_eq!(
+            service.store.subscription(&source_id).unwrap().unwrap(),
+            subscription_before
+        );
+        assert_eq!(
+            service.podcast_episodes(&source_id).unwrap(),
+            episodes_before
+        );
+    }
+
+    #[test]
+    fn scraper_site_id_collision_is_rejected_before_nip_source_creation() {
+        let temp = tempdir().unwrap();
+        let mut service = service_with_scraper_ownership_at(temp.path(), &[], &["native-site-id"]);
+        let source_id = SourceId::new("native-site-id").unwrap();
+        let client = FixtureFeedClient::default();
+        let result = service.create_source(
+            SourceDraft {
+                source_id: source_id.clone(),
+                kind: SourceKind::Web,
+                display_name: "Would collide".into(),
+                locator: Some("https://example.test/source".into()),
+                rights_statement: "Synthetic test rights".into(),
+                topics: Vec::new(),
+                poll_interval_minutes: None,
+                per_scan_limit: None,
+                notes: None,
+            },
+            &client,
+            "2026-11-16T09:00:00Z".parse().unwrap(),
+        );
+        assert!(matches!(result, Err(NipError::ScraperOwnsSource)));
+        assert_eq!(client.call_count(), 0);
+        assert!(matches!(
+            service.source(&source_id),
+            Err(NipError::SourceNotFound)
+        ));
     }
 
     fn feed_body() -> String {
