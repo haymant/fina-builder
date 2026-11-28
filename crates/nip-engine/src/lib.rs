@@ -19,25 +19,27 @@ pub mod video_qa_adapter;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use nip_domain::{
     AcquisitionBatch, AgentClaimAnnotation, AgentEntityCandidate, AgentNarrativeAnalysis,
-    AgentNarrativeGraphDraft,
-    BacktestDelta, BacktestEvidenceRecord, BacktestMetrics, BacktestVerdict, CapabilitiesResponse,
-    ClaimEvidence, ClaimRecord, ClaimReviewStatus, EditorialCandidate, EditorialReviewAudit,
-    EmbeddingIndexManifest, EtfMapping, EventRecord, EventSearchPage, EventSearchQuery,
-    ExtractionStatus, ExtractionTier, FeatureCapabilities, HealthResponse, LocalEventImport,
-    NarrativeCluster, NarrativeGraph, NarrativeGraphEdge, NarrativeGraphNode, NarrativeSignal,
-    NarrativeSignalSnapshot, NarrativeSource, PodcastEpisode, PodcastEpisodePage,
-    PodcastEpisodeState, PodcastRefreshReport, PodcastSubscription, PodcastSubscriptionState,
-    PodcastTranscript, ProviderConsent, ProviderStatus, Readiness, ResourceStatus,
-    SemanticSearchResult, SourceId, SourceKind, SourceState, SourceUpdate, ThesisBasis,
-    ThesisDirection, ThesisRecord, ThesisStatus, TranscriptBeat, TranscriptEvidenceRef,
-    TranscriptRecord, VideoAsset, VideoAssetLineage, VideoAudioCue, VideoEpisode, VideoEvidenceRef,
-    VideoExportManifest, VideoJob, VideoNarrative, VideoProject, VideoQaReport, VideoScene,
-    VideoShot, VideoStoryboard, VideoTimeline, VideoVisualSpec, VideoWorkflow, API_VERSION,
-    DOMAIN_SCHEMA_VERSION, SERVICE_NAME,
+    AgentNarrativeGraphDraft, BacktestDelta, BacktestEvidenceRecord, BacktestMetrics,
+    BacktestVerdict, CapabilitiesResponse, ClaimEvidence, ClaimRecord, ClaimReviewStatus,
+    EditorialCandidate, EditorialReviewAudit, EmbeddingIndexManifest, EtfMapping, EventRecord,
+    EventSearchPage, EventSearchQuery, ExtractionStatus, ExtractionTier, FeatureCapabilities,
+    HealthResponse, LocalEventImport, NarrativeCluster, NarrativeGraph, NarrativeGraphEdge,
+    NarrativeGraphNode, NarrativeSignal, NarrativeSignalSnapshot, NarrativeSource, PodcastEpisode,
+    PodcastEpisodePage, PodcastEpisodeState, PodcastRefreshReport, PodcastSubscription,
+    PodcastSubscriptionState, PodcastTranscript, ProviderConsent, ProviderStatus, Readiness,
+    ResourceStatus, SemanticSearchResult, SourceId, SourceKind, SourceState, SourceUpdate,
+    ThesisBasis, ThesisDirection, ThesisRecord, ThesisStatus, TranscriptBeat,
+    TranscriptEvidenceRef, TranscriptRecord, VideoAsset, VideoAssetLineage, VideoAudioCue,
+    VideoEpisode, VideoEvidenceRef, VideoExportManifest, VideoJob, VideoNarrative, VideoProject,
+    VideoQaReport, VideoScene, VideoShot, VideoStoryboard, VideoTimeline, VideoVisualSpec,
+    VideoWorkflow, API_VERSION, DOMAIN_SCHEMA_VERSION, SERVICE_NAME,
 };
 use nip_store::{
-    AcquisitionBinding, AcquisitionIngestResult, AcquisitionTranscriptRecord, SnapshotManifest,
-    Store, StoreError, SubscriptionFetchStateUpdate, VideoProjectDeleteResult,
+    AcquisitionBinding, AcquisitionDerivationResult, AcquisitionIngestResult,
+    AcquisitionTranscriptRecord, NipClaimAnnotationRecord, NipClaimEntityLinkRecord,
+    NipClaimRelationRecord, NipClaimReviewRecord, NipEntityMentionRecord, NipEntityRecord,
+    NipEntityResolutionRecord, NipFeatureSnapshotRecord, SnapshotManifest, Store, StoreError,
+    SubscriptionFetchStateUpdate, VideoProjectDeleteResult,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -48,8 +50,8 @@ use std::{
 };
 use thiserror::Error;
 
-use asr::{AsrError, AsrProvider, AsrRequest, AsrResult};
 use acquisition::{canonical_locator, resolve_source_bindings, AcquisitionSourceBinding};
+use asr::{AsrError, AsrProvider, AsrRequest, AsrResult};
 use config::ClaimProviderMode;
 pub use config::{ConfigError, NipConfig};
 use local_model::{LocalModelError, LocalOpenAiClaimProvider};
@@ -1027,7 +1029,8 @@ impl NipService {
                     binding.source_id = None;
                     binding.state = "unbound".to_owned();
                     binding.match_basis = Some("explicit_review_unbound".to_owned());
-                    binding.detail = "explicit NIP review left this worker profile unbound".to_owned();
+                    binding.detail =
+                        "explicit NIP review left this worker profile unbound".to_owned();
                     continue;
                 }
                 let evidence_matches = sources.iter().find(|source| {
@@ -1035,18 +1038,19 @@ impl NipService {
                         && source.kind == SourceKind::Podcast
                         && source.rights_status == "approved"
                         && source.state != SourceState::Removed
-                        && source
-                            .locator
-                            .as_deref()
-                            .is_some_and(|locator| canonical_locator(locator) == record.worker_locator)
+                        && source.locator.as_deref().is_some_and(|locator| {
+                            canonical_locator(locator) == record.worker_locator
+                        })
                         && record.worker_kind == "podcast"
                 });
                 if evidence_matches.is_some() {
                     binding.source_id = Some(record.source_id.clone());
                     binding.worker_locator = Some(record.worker_locator.clone());
                     binding.state = "bound".to_owned();
-                    binding.match_basis = Some("explicit_review_exact_feed_url_source_kind_rights".to_owned());
-                    binding.detail = "NIP explicitly reviewed and bound this worker profile".to_owned();
+                    binding.match_basis =
+                        Some("explicit_review_exact_feed_url_source_kind_rights".to_owned());
+                    binding.detail =
+                        "NIP explicitly reviewed and bound this worker profile".to_owned();
                 } else {
                     binding.source_id = None;
                     binding.state = "unresolved".to_owned();
@@ -1142,6 +1146,214 @@ impl NipService {
         )?)
     }
 
+    pub fn derive_acquisition_batch(
+        &mut self,
+        worker_site_id: &str,
+        batch: &AcquisitionBatch,
+    ) -> Result<AcquisitionDerivationResult, NipError> {
+        batch
+            .validate()
+            .map_err(NipError::AcquisitionBatchRejected)?;
+        if batch.items.len() != 1 {
+            return Err(NipError::AcquisitionBatchRejected(
+                "derivation reprocessing accepts exactly one retained worker item".to_owned(),
+            ));
+        }
+        let item = &batch.items[0];
+        if item.worker_source_key != worker_site_id {
+            return Err(NipError::AcquisitionBatchRejected(
+                "worker source key does not match the reviewed worker profile".to_owned(),
+            ));
+        }
+        let binding = self
+            .acquisition_source_bindings()?
+            .into_iter()
+            .find(|binding| binding.worker_site_id == worker_site_id)
+            .ok_or(NipError::AcquisitionProfileNotFound)?;
+        if !binding.explicit || binding.state != "bound" {
+            return Err(NipError::AcquisitionBindingEvidenceMismatch);
+        }
+        let source_id_text = binding
+            .source_id
+            .as_deref()
+            .ok_or(NipError::AcquisitionBindingEvidenceMismatch)?;
+        if item.source_id.as_str() != source_id_text {
+            return Err(NipError::AcquisitionBindingEvidenceMismatch);
+        }
+        let source_id = SourceId::new(source_id_text.to_owned())
+            .map_err(|_| NipError::AcquisitionBindingEvidenceMismatch)?;
+        let source = self
+            .store
+            .source(&source_id)?
+            .ok_or(NipError::SourceNotFound)?;
+        if source.rights_status != "approved" {
+            return Err(NipError::AcquisitionBindingRightsRequired);
+        }
+        if source.kind != SourceKind::Podcast || source.state == SourceState::Removed {
+            return Err(NipError::AcquisitionBindingEvidenceMismatch);
+        }
+        let worker_locator = binding
+            .worker_locator
+            .as_deref()
+            .ok_or(NipError::AcquisitionBindingEvidenceMismatch)?;
+        let source_locator = source
+            .locator
+            .as_deref()
+            .ok_or(NipError::AcquisitionBindingEvidenceMismatch)?;
+        if binding.worker_kind != "podcast"
+            || canonical_locator(worker_locator) != canonical_locator(source_locator)
+        {
+            return Err(NipError::AcquisitionBindingEvidenceMismatch);
+        }
+        Ok(self.store.derive_acquisition_item(
+            batch,
+            worker_site_id,
+            source_id.as_str(),
+            &binding.worker_kind,
+            worker_locator,
+            source_locator,
+            Utc::now(),
+        )?)
+    }
+
+    pub fn nip_claim_annotations(
+        &self,
+        limit: u32,
+        offset: u32,
+        review_status: Option<&str>,
+    ) -> Result<Vec<NipClaimAnnotationRecord>, NipError> {
+        Ok(self
+            .store
+            .list_nip_claim_annotations(limit, offset, review_status)?)
+    }
+
+    pub fn review_nip_claim(
+        &mut self,
+        claim_id: &str,
+        status: &str,
+        reviewer: &str,
+        reason: Option<&str>,
+    ) -> Result<(), NipError> {
+        Ok(self
+            .store
+            .review_nip_claim(claim_id, status, reviewer, reason)?)
+    }
+
+    pub fn nip_claim_review_history(
+        &self,
+        claim_id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<NipClaimReviewRecord>, NipError> {
+        Ok(self
+            .store
+            .list_nip_claim_review_history(claim_id, limit, offset)?)
+    }
+
+    pub fn add_nip_claim_relation(
+        &mut self,
+        source_claim_id: &str,
+        target_claim_id: &str,
+        relation_kind: &str,
+        provenance: &str,
+        producer: &str,
+    ) -> Result<NipClaimRelationRecord, NipError> {
+        Ok(self.store.add_nip_claim_relation(
+            source_claim_id,
+            target_claim_id,
+            relation_kind,
+            provenance,
+            producer,
+        )?)
+    }
+
+    pub fn nip_claim_relations(
+        &self,
+        claim_id: &str,
+        limit: u32,
+    ) -> Result<Vec<NipClaimRelationRecord>, NipError> {
+        Ok(self.store.list_nip_claim_relations(claim_id, limit)?)
+    }
+
+    pub fn nip_claim_entity_links(
+        &self,
+        claim_id: Option<&str>,
+        mention_id: Option<&str>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<NipClaimEntityLinkRecord>, NipError> {
+        Ok(self
+            .store
+            .list_nip_claim_entity_links(claim_id, mention_id, limit, offset)?)
+    }
+
+    pub fn nip_entity_mentions(
+        &self,
+        limit: u32,
+        unresolved_only: bool,
+    ) -> Result<Vec<NipEntityMentionRecord>, NipError> {
+        Ok(self
+            .store
+            .list_nip_entity_mentions(limit, unresolved_only)?)
+    }
+
+    pub fn nip_entity_resolution_history(
+        &self,
+        mention_id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<NipEntityResolutionRecord>, NipError> {
+        Ok(self
+            .store
+            .list_nip_entity_resolution_history(mention_id, limit, offset)?)
+    }
+
+    pub fn nip_entities(&self, limit: u32) -> Result<Vec<NipEntityRecord>, NipError> {
+        Ok(self.store.list_nip_entities(limit)?)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn review_nip_entity_mention(
+        &mut self,
+        mention_id: &str,
+        entity_id: Option<&str>,
+        entity_kind: Option<&str>,
+        display_name: Option<&str>,
+        decision_kind: &str,
+        reviewer: &str,
+        reason: &str,
+    ) -> Result<Option<NipEntityRecord>, NipError> {
+        Ok(self.store.review_entity_mention(
+            mention_id,
+            entity_id,
+            entity_kind,
+            display_name,
+            decision_kind,
+            reviewer,
+            reason,
+        )?)
+    }
+
+    pub fn compute_nip_feature_snapshot(
+        &mut self,
+        entity_id: &str,
+        window_start: DateTime<Utc>,
+        window_end: DateTime<Utc>,
+        as_of: DateTime<Utc>,
+    ) -> Result<NipFeatureSnapshotRecord, NipError> {
+        Ok(self
+            .store
+            .compute_nip_feature_snapshot(entity_id, window_start, window_end, as_of)?)
+    }
+
+    pub fn nip_feature_snapshots(
+        &self,
+        entity_id: &str,
+        limit: u32,
+    ) -> Result<Vec<NipFeatureSnapshotRecord>, NipError> {
+        Ok(self.store.list_nip_feature_snapshots(entity_id, limit)?)
+    }
+
     pub fn acquisition_transcript(
         &self,
         event_id: &str,
@@ -1180,11 +1392,7 @@ impl NipService {
             || site.kind != "podcast"
             || source.rights_status != "approved"
             || source.state == SourceState::Removed
-            || source
-                .locator
-                .as_deref()
-                .map(canonical_locator)
-                != Some(locator.clone())
+            || source.locator.as_deref().map(canonical_locator) != Some(locator.clone())
         {
             return Err(if source.rights_status != "approved" {
                 NipError::AcquisitionBindingRightsRequired
@@ -3056,7 +3264,7 @@ mod tests {
         let health = service.health();
         assert_eq!(health.service, "nip-engine");
         assert_eq!(health.readiness, Readiness::Ready);
-        assert_eq!(health.schema_version, 22);
+        assert_eq!(health.schema_version, 23);
 
         let capabilities = service.capabilities();
         assert!(capabilities.features.duckdb_store);
@@ -3391,6 +3599,7 @@ mod tests {
                 claims: Vec::new(),
                 entities: Vec::new(),
                 features: Vec::new(),
+                derivation_manifest: None,
             }],
         };
         let mut multi_item_batch = batch.clone();
@@ -4551,7 +4760,7 @@ mod tests {
     fn f2_migration_applies_on_fresh_temp_data_dir_and_thesis_round_trips_via_service() {
         let temp = tempdir().unwrap();
         let mut service = service_at(temp.path());
-        assert_eq!(service.health().schema_version, 22);
+        assert_eq!(service.health().schema_version, 23);
 
         let now: DateTime<Utc> = "2026-11-24T16:00:00Z".parse().unwrap();
         let thesis = ThesisRecord {

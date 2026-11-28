@@ -1,24 +1,26 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use duckdb::{params, Connection, OptionalExt};
+use duckdb::{params, Connection, OptionalExt, Transaction};
 use nip_domain::{
-    AcquisitionAvailability, AcquisitionBatch, AcquisitionContentKind, AgentNarrativeAnalysis,
-    BacktestDelta, BacktestEvidenceRecord, BacktestMetrics, BacktestVerdict, ClaimEvidence,
-    ClaimRecord, ClaimReviewStatus, EditorialCandidate, EditorialReviewAudit,
-    EmbeddingIndexManifest, EtfMapping, EventRecord, EventSearchPage, EventSearchQuery,
-    ExtractionTier, LocalEventImport, NarrativeCluster, NarrativeClusterMember, NarrativeGraph,
-    NarrativeSource, PodcastEpisode, PodcastEpisodeState, PodcastSubscription,
-    PodcastSubscriptionState, PodcastTranscript, ProviderConsent, SourceId, SourceKind,
-    SourceState, SourceUpdate, ThesisBasis, ThesisDirection, ThesisRecord, ThesisStatus,
-    TranscriptRecord, VideoAnalysisMode, VideoAsset, VideoAssetLineage, VideoAssetUpstreamKind,
-    VideoAudioCue, VideoEpisode, VideoEpisodeOrigin, VideoEpisodeStatus, VideoEvidenceRef,
-    VideoExportFile, VideoExportManifest, VideoExportManifestV1, VideoJob, VideoNarrative,
-    VideoProject, VideoProjectStatus, VideoQaFinding, VideoQaReport, VideoQaSeverity,
-    VideoQaStatus, VideoReviewStatus, VideoScene, VideoShot, VideoShotStatus, VideoStoryboard,
-    VideoTimeline, VideoVisualSource, VideoVisualSourceKind, VideoVisualSpec, VideoWorkflow,
+    AcquisitionAvailability, AcquisitionBatch, AcquisitionClaim, AcquisitionClaimType,
+    AcquisitionCompleteness, AcquisitionContentKind, AcquisitionEntityRole, AcquisitionItem,
+    AcquisitionPolarity, AgentNarrativeAnalysis, BacktestDelta, BacktestEvidenceRecord,
+    BacktestMetrics, BacktestVerdict, ClaimEvidence, ClaimRecord, ClaimReviewStatus,
+    EditorialCandidate, EditorialReviewAudit, EmbeddingIndexManifest, EtfMapping, EventRecord,
+    EventSearchPage, EventSearchQuery, ExtractionTier, LocalEventImport, NarrativeCluster,
+    NarrativeClusterMember, NarrativeGraph, NarrativeSource, PodcastEpisode, PodcastEpisodeState,
+    PodcastSubscription, PodcastSubscriptionState, PodcastTranscript, ProviderConsent, SourceId,
+    SourceKind, SourceState, SourceUpdate, ThesisBasis, ThesisDirection, ThesisRecord,
+    ThesisStatus, TranscriptRecord, VideoAnalysisMode, VideoAsset, VideoAssetLineage,
+    VideoAssetUpstreamKind, VideoAudioCue, VideoEpisode, VideoEpisodeOrigin, VideoEpisodeStatus,
+    VideoEvidenceRef, VideoExportFile, VideoExportManifest, VideoExportManifestV1, VideoJob,
+    VideoNarrative, VideoProject, VideoProjectStatus, VideoQaFinding, VideoQaReport,
+    VideoQaSeverity, VideoQaStatus, VideoReviewStatus, VideoScene, VideoShot, VideoShotStatus,
+    VideoStoryboard, VideoTimeline, VideoVisualSource, VideoVisualSourceKind, VideoVisualSpec,
+    VideoWorkflow,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
@@ -46,7 +48,8 @@ const MIGRATION_19: &str = include_str!("../migrations/0019_f2_thesis_transcript
 const MIGRATION_20: &str = include_str!("../migrations/0020_f7_5_thesis_backtest_check.sql");
 const MIGRATION_21: &str = include_str!("../migrations/0021_acquisition_bindings.sql");
 const MIGRATION_22: &str = include_str!("../migrations/0022_single_item_acquisition.sql");
-const LATEST_SCHEMA_VERSION: u32 = 22;
+const MIGRATION_23: &str = include_str!("../migrations/0023_nip_phase5.sql");
+const LATEST_SCHEMA_VERSION: u32 = 23;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -96,6 +99,16 @@ pub enum StoreError {
     AcquisitionEventCollision,
     #[error("worker run identity was replayed with changed provenance")]
     AcquisitionRunConflict,
+    #[error("derivation run identity was replayed with changed output")]
+    DerivationRunConflict,
+    #[error("NIP claim review request is invalid")]
+    InvalidNipClaimReview,
+    #[error("NIP claim relation request is invalid")]
+    InvalidNipClaimRelation,
+    #[error("NIP entity resolution request is invalid")]
+    InvalidNipEntityResolution,
+    #[error("NIP feature snapshot request is invalid")]
+    InvalidNipFeatureRequest,
     #[error("acquisition payload serialization failed")]
     AcquisitionPayloadSerialization(serde_json::Error),
     #[error("Video project was not found")]
@@ -269,6 +282,145 @@ pub struct AcquisitionTranscriptRecord {
     pub model: Option<String>,
     pub model_version: Option<String>,
     pub transcribed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcquisitionDerivationResult {
+    pub event_id: String,
+    pub derivation_run_id: String,
+    pub worker_site_id: String,
+    pub worker_item_id: String,
+    pub replay: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NipClaimAnnotationRecord {
+    pub claim_id: String,
+    pub event_id: String,
+    pub source_id: String,
+    pub derivation_run_id: String,
+    pub worker_site_id: String,
+    pub worker_item_id: String,
+    pub worker_claim_id: String,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub claim_text: String,
+    pub claim_text_origin: String,
+    pub claim_type: Option<String>,
+    pub polarity: Option<String>,
+    pub producer_review_status: Option<String>,
+    pub nip_review_status: String,
+    pub extraction_tier: Option<String>,
+    pub known_at: DateTime<Utc>,
+    pub evidence_quote: String,
+    pub evidence_payload_kind: Option<String>,
+    pub evidence_payload_hash: Option<String>,
+    pub evidence_start_offset: Option<u32>,
+    pub evidence_end_offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NipClaimRelationRecord {
+    pub relation_id: String,
+    pub source_claim_id: String,
+    pub target_claim_id: String,
+    pub relation_kind: String,
+    pub provenance: String,
+    pub producer: String,
+    pub known_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NipClaimReviewRecord {
+    pub review_id: String,
+    pub claim_id: String,
+    pub review_status: String,
+    pub reviewer: String,
+    pub reason: Option<String>,
+    pub known_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NipEntityResolutionRecord {
+    pub resolution_id: String,
+    pub mention_id: String,
+    pub entity_id: Option<String>,
+    pub decision_kind: String,
+    pub reviewer: String,
+    pub reason: String,
+    pub known_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NipClaimEntityLinkRecord {
+    pub claim_id: String,
+    pub mention_id: String,
+    pub role: String,
+    pub derivation_run_id: String,
+    pub known_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NipEntityMentionEvidenceRecord {
+    pub payload_kind: String,
+    pub payload_hash: String,
+    pub quote: String,
+    pub start_offset: u32,
+    pub end_offset: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NipEntityMentionRecord {
+    pub mention_id: String,
+    pub event_id: String,
+    pub source_id: String,
+    pub worker_site_id: String,
+    pub worker_item_id: String,
+    pub worker_entity_id: String,
+    pub surface_form: String,
+    pub producer_entity_type: String,
+    pub canonical_id_hint: String,
+    pub ticker_hint: Option<String>,
+    pub resolved_entity_id: Option<String>,
+    pub resolution_status: String,
+    pub known_at: DateTime<Utc>,
+    pub evidence: Vec<NipEntityMentionEvidenceRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NipEntityRecord {
+    pub entity_id: String,
+    pub entity_kind: String,
+    pub display_name: String,
+    pub created_by: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NipFeatureValueRecord {
+    pub feature_key: String,
+    pub definition_version: u32,
+    pub unit: String,
+    pub value_numeric: Option<f64>,
+    pub availability: String,
+    pub sample_count: u32,
+    pub quality_flags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NipFeatureSnapshotRecord {
+    pub feature_run_id: String,
+    pub entity_id: String,
+    pub window_start: DateTime<Utc>,
+    pub window_end: DateTime<Utc>,
+    pub as_of: DateTime<Utc>,
+    pub known_at: DateTime<Utc>,
+    pub input_hash: String,
+    pub definition_set_hash: String,
+    pub claim_count: u32,
+    pub source_count: u32,
+    pub features: Vec<NipFeatureValueRecord>,
 }
 
 /// One local DuckDB ledger. The connection remains owned by the store and is
@@ -998,8 +1150,9 @@ impl Store {
     }
 
     /// Persist exactly one typed worker item after repeating the authorization
-    /// and integrity checks at the canonical-store boundary. Claims, entities,
-    /// and feature values remain a later-phase contract and are rejected here.
+    /// and integrity checks at the canonical-store boundary. Evidence-backed
+    /// claims and unresolved mentions are appended as one derivation; worker
+    /// feature values remain rejected.
     #[allow(clippy::too_many_arguments)]
     pub fn ingest_acquisition_item(
         &mut self,
@@ -1024,8 +1177,6 @@ impl Store {
             || expected_worker_locator.trim().is_empty()
             || expected_source_locator.trim().is_empty()
             || item.content_kind == AcquisitionContentKind::Filing
-            || !item.claims.is_empty()
-            || !item.entities.is_empty()
             || !item.features.is_empty()
             || batch.completed_at > received_at
             || item.ingested_at > batch.completed_at
@@ -1275,6 +1426,15 @@ impl Store {
                 ],
             )?;
         }
+        persist_item_derivation(
+            &transaction,
+            batch,
+            item,
+            worker_site_id,
+            &event_id,
+            expected_source_id,
+            Utc::now(),
+        )?;
         transaction.commit()?;
 
         Ok(AcquisitionIngestResult {
@@ -1313,6 +1473,989 @@ impl Store {
             )
             .optional()
             .map_err(StoreError::from)
+    }
+
+    /// Record a new immutable derivation against an already-retained acquisition item.
+    /// The retained event and transcript are read-only; changing their bytes is rejected.
+    #[allow(clippy::too_many_arguments)]
+    pub fn derive_acquisition_item(
+        &mut self,
+        batch: &AcquisitionBatch,
+        worker_site_id: &str,
+        expected_source_id: &str,
+        expected_worker_kind: &str,
+        expected_worker_locator: &str,
+        expected_source_locator: &str,
+        received_at: DateTime<Utc>,
+    ) -> Result<AcquisitionDerivationResult, StoreError> {
+        batch
+            .validate()
+            .map_err(|_| StoreError::InvalidAcquisitionPayload)?;
+        if batch.items.len() != 1 || batch.producer.name != "fina-scraper" {
+            return Err(StoreError::InvalidAcquisitionPayload);
+        }
+        let item = &batch.items[0];
+        if item.source_id.as_str() != expected_source_id
+            || item.worker_source_key != worker_site_id
+            || expected_worker_kind != "podcast"
+            || expected_worker_locator.trim().is_empty()
+            || expected_source_locator.trim().is_empty()
+            || item.content_kind == AcquisitionContentKind::Filing
+            || !item.features.is_empty()
+            || batch.completed_at > received_at
+            || item.ingested_at > batch.completed_at
+            || item.published_at.is_some_and(|value| value > received_at)
+            || item.valid_from > received_at
+            || item
+                .transcript
+                .as_ref()
+                .is_some_and(|value| value.transcribed_at > batch.completed_at)
+        {
+            return Err(StoreError::InvalidAcquisitionPayload);
+        }
+        let url =
+            url::Url::parse(&item.source_url).map_err(|_| StoreError::InvalidAcquisitionPayload)?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+            return Err(StoreError::InvalidAcquisitionPayload);
+        }
+        if !valid_content_sha256(&item.content_hash)
+            || normalized_text_sha256(&item.content_text) != item.content_hash
+        {
+            return Err(StoreError::InvalidAcquisitionPayload);
+        }
+        if let Some(transcript) = &item.transcript {
+            if !valid_content_sha256(&transcript.content_hash)
+                || normalized_text_sha256(&transcript.transcript_text) != transcript.content_hash
+            {
+                return Err(StoreError::InvalidAcquisitionPayload);
+            }
+        }
+        let identity = format!(
+            "{}\0{}\0{}",
+            expected_source_id, worker_site_id, item.worker_item_id
+        );
+        let expected_event_id = format!("event-{}", &hex_digest(identity.as_bytes())[..32]);
+        let output_hash = hex_digest(
+            &serde_json::to_vec(&(&item.claims, &item.entities))
+                .map_err(StoreError::AcquisitionPayloadSerialization)?,
+        );
+        let run_payload_hash = derivation_run_payload_hash(
+            batch,
+            item,
+            worker_site_id,
+            &expected_event_id,
+            expected_source_id,
+            &output_hash,
+        )?;
+        let derivation_id = format!(
+            "derivation-{}",
+            &hex_digest(
+                format!("{worker_site_id}\0{expected_event_id}\0{}", batch.run_id).as_bytes()
+            )[..32]
+        );
+
+        let transaction = self.connection.transaction()?;
+        let authorized: bool = transaction.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM nip_acquisition_bindings b
+                JOIN nip_sources s ON s.source_id = b.source_id
+                WHERE b.worker_site_id = ? AND b.source_id = ?
+                  AND b.worker_kind = ? AND b.worker_locator = ? AND b.state = 'bound'
+                  AND s.source_type = 'podcast' AND s.source_kind = 'podcast'
+                  AND s.rights_status = 'approved' AND s.state <> 'removed' AND s.locator = ?
+            )",
+            params![
+                worker_site_id,
+                expected_source_id,
+                expected_worker_kind,
+                expected_worker_locator,
+                expected_source_locator
+            ],
+            |row| row.get(0),
+        )?;
+        if !authorized {
+            return Err(StoreError::AcquisitionBindingRejected);
+        }
+        let retained: Option<(String, String, String)> = transaction
+            .query_row(
+                "SELECT i.event_id, i.worker_content_hash, e.content_text
+                 FROM nip_acquisition_items i JOIN nip_events e ON e.event_id = i.event_id
+                 WHERE i.worker_site_id = ? AND i.worker_item_id = ? AND i.source_id = ?",
+                params![worker_site_id, item.worker_item_id, expected_source_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let (event_id, retained_hash, retained_text) =
+            retained.ok_or(StoreError::InvalidAcquisitionPayload)?;
+        if event_id != expected_event_id
+            || retained_hash != item.content_hash
+            || retained_text != item.content_text
+        {
+            return Err(StoreError::InvalidAcquisitionPayload);
+        }
+        if let Some(transcript) = &item.transcript {
+            let retained_transcript: Option<(String, String)> = transaction
+                .query_row(
+                    "SELECT transcript_text, content_hash FROM nip_acquisition_transcripts WHERE event_id = ?",
+                    params![event_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            if retained_transcript.as_ref().is_none_or(|(text, hash)| {
+                text != &transcript.transcript_text || hash != &transcript.content_hash
+            }) {
+                return Err(StoreError::InvalidAcquisitionPayload);
+            }
+        }
+        let existing: Option<(String, String)> = transaction
+            .query_row(
+                "SELECT output_hash, run_payload_hash FROM nip_derivation_runs WHERE derivation_run_id = ?",
+                params![derivation_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((existing_output_hash, existing_run_payload_hash)) = existing {
+            if existing_output_hash != output_hash || existing_run_payload_hash != run_payload_hash
+            {
+                return Err(StoreError::DerivationRunConflict);
+            }
+            transaction.rollback()?;
+            return Ok(AcquisitionDerivationResult {
+                event_id,
+                derivation_run_id: derivation_id,
+                worker_site_id: worker_site_id.to_owned(),
+                worker_item_id: item.worker_item_id.clone(),
+                replay: true,
+            });
+        }
+        persist_item_derivation(
+            &transaction,
+            batch,
+            item,
+            worker_site_id,
+            &event_id,
+            expected_source_id,
+            Utc::now(),
+        )?;
+        transaction.commit()?;
+        Ok(AcquisitionDerivationResult {
+            event_id,
+            derivation_run_id: derivation_id,
+            worker_site_id: worker_site_id.to_owned(),
+            worker_item_id: item.worker_item_id.clone(),
+            replay: false,
+        })
+    }
+
+    pub fn list_nip_claim_annotations(
+        &self,
+        limit: u32,
+        offset: u32,
+        review_status: Option<&str>,
+    ) -> Result<Vec<NipClaimAnnotationRecord>, StoreError> {
+        if limit == 0
+            || limit > 200
+            || review_status.is_some_and(|value| {
+                !matches!(
+                    value,
+                    "pending" | "accepted" | "rejected" | "correction_requested"
+                )
+            })
+        {
+            return Err(StoreError::InvalidNipClaimReview);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT a.claim_id, d.event_id, d.source_id, a.derivation_run_id, a.worker_site_id,
+                    a.worker_item_id, a.worker_claim_id, a.subject, a.predicate, a.object,
+                    c.claim_text, a.claim_text_origin, a.claim_type, a.polarity, c.review_status,
+                    COALESCE((SELECT r.review_status FROM nip_claim_review_history r
+                              WHERE r.claim_id = a.claim_id ORDER BY r.known_at DESC, r.review_id DESC LIMIT 1), 'pending'),
+                    c.extraction_tier, a.known_at, COALESCE(e.quote, ''), e.payload_kind,
+                    e.payload_hash, e.start_offset, e.end_offset
+             FROM nip_claim_annotations a
+             JOIN nip_derivation_runs d ON d.derivation_run_id = a.derivation_run_id
+             JOIN nip_claims c ON c.claim_id = a.claim_id
+             LEFT JOIN nip_claim_evidence e ON e.claim_id = a.claim_id
+             WHERE (? IS NULL OR COALESCE((SELECT r.review_status FROM nip_claim_review_history r
+                      WHERE r.claim_id = a.claim_id ORDER BY r.known_at DESC, r.review_id DESC LIMIT 1), 'pending') = ?)
+             ORDER BY a.known_at DESC, a.claim_id LIMIT ? OFFSET ?",
+        )?;
+        let rows = statement.query_map(
+            params![
+                review_status,
+                review_status,
+                i64::from(limit),
+                i64::from(offset)
+            ],
+            |row| {
+                let start: Option<i32> = row.get(21)?;
+                let end: Option<i32> = row.get(22)?;
+                Ok(NipClaimAnnotationRecord {
+                    claim_id: row.get(0)?,
+                    event_id: row.get(1)?,
+                    source_id: row.get(2)?,
+                    derivation_run_id: row.get(3)?,
+                    worker_site_id: row.get(4)?,
+                    worker_item_id: row.get(5)?,
+                    worker_claim_id: row.get(6)?,
+                    subject: row.get(7)?,
+                    predicate: row.get(8)?,
+                    object: row.get(9)?,
+                    claim_text: row.get(10)?,
+                    claim_text_origin: row.get(11)?,
+                    claim_type: row.get(12)?,
+                    polarity: row.get(13)?,
+                    producer_review_status: row.get(14)?,
+                    nip_review_status: row.get(15)?,
+                    extraction_tier: row.get(16)?,
+                    known_at: row.get(17)?,
+                    evidence_quote: row.get(18)?,
+                    evidence_payload_kind: row.get(19)?,
+                    evidence_payload_hash: row.get(20)?,
+                    evidence_start_offset: start.and_then(|v| u32::try_from(v).ok()),
+                    evidence_end_offset: end.and_then(|v| u32::try_from(v).ok()),
+                })
+            },
+        )?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn review_nip_claim(
+        &mut self,
+        claim_id: &str,
+        review_status: &str,
+        reviewer: &str,
+        reason: Option<&str>,
+    ) -> Result<(), StoreError> {
+        if claim_id.trim().is_empty()
+            || reviewer.trim().is_empty()
+            || !matches!(
+                review_status,
+                "accepted" | "rejected" | "correction_requested"
+            )
+            || reason.is_some_and(|value| value.len() > 4096)
+        {
+            return Err(StoreError::InvalidNipClaimReview);
+        }
+        let transaction = self.connection.transaction()?;
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM nip_claim_annotations WHERE claim_id = ?)",
+            params![claim_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(StoreError::InvalidNipClaimReview);
+        }
+        let known_at = Utc::now();
+        let review_id = format!(
+            "nip-review-{}",
+            &hex_digest(
+                format!(
+                    "{claim_id}\0{review_status}\0{reviewer}\0{}\0{}",
+                    reason.unwrap_or(""),
+                    known_at.timestamp_nanos_opt().unwrap_or_default()
+                )
+                .as_bytes()
+            )[..32]
+        );
+        transaction.execute(
+            "INSERT INTO nip_claim_review_history (review_id, claim_id, review_status, reviewer, reason, known_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (review_id) DO NOTHING",
+            params![review_id, claim_id, review_status, reviewer, reason, known_at],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn list_nip_claim_review_history(
+        &self,
+        claim_id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<NipClaimReviewRecord>, StoreError> {
+        if claim_id.trim().is_empty() || limit == 0 || limit > 200 {
+            return Err(StoreError::InvalidNipClaimReview);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT review_id, claim_id, review_status, reviewer, reason, known_at
+             FROM nip_claim_review_history WHERE claim_id = ?
+             ORDER BY known_at DESC, review_id DESC LIMIT ? OFFSET ?",
+        )?;
+        let rows = statement.query_map(
+            params![claim_id, i64::from(limit), i64::from(offset)],
+            |row| {
+                Ok(NipClaimReviewRecord {
+                    review_id: row.get(0)?,
+                    claim_id: row.get(1)?,
+                    review_status: row.get(2)?,
+                    reviewer: row.get(3)?,
+                    reason: row.get(4)?,
+                    known_at: row.get(5)?,
+                })
+            },
+        )?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn add_nip_claim_relation(
+        &mut self,
+        source_claim_id: &str,
+        target_claim_id: &str,
+        relation_kind: &str,
+        provenance: &str,
+        producer: &str,
+    ) -> Result<NipClaimRelationRecord, StoreError> {
+        if source_claim_id.trim().is_empty()
+            || target_claim_id.trim().is_empty()
+            || source_claim_id == target_claim_id
+            || provenance.trim().is_empty()
+            || producer.trim().is_empty()
+            || !matches!(
+                relation_kind,
+                "restates" | "supports" | "contradicts" | "supersedes" | "duplicate_candidate"
+            )
+        {
+            return Err(StoreError::InvalidNipClaimRelation);
+        }
+        let known_at = Utc::now();
+        let relation_id = format!("nip-relation-{}", &hex_digest(format!("{source_claim_id}\0{target_claim_id}\0{relation_kind}\0{provenance}\0{producer}\0{}", known_at.timestamp_nanos_opt().unwrap_or_default()).as_bytes())[..32]);
+        self.connection.execute(
+            "INSERT INTO nip_claim_relations (relation_id, source_claim_id, target_claim_id, relation_kind, provenance, producer, known_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![relation_id, source_claim_id, target_claim_id, relation_kind, provenance, producer, known_at],
+        ).map_err(|error| if error.to_string().contains("Constraint Error") { StoreError::InvalidNipClaimRelation } else { StoreError::Database(error) })?;
+        Ok(NipClaimRelationRecord {
+            relation_id,
+            source_claim_id: source_claim_id.to_owned(),
+            target_claim_id: target_claim_id.to_owned(),
+            relation_kind: relation_kind.to_owned(),
+            provenance: provenance.to_owned(),
+            producer: producer.to_owned(),
+            known_at,
+        })
+    }
+
+    pub fn list_nip_claim_relations(
+        &self,
+        claim_id: &str,
+        limit: u32,
+    ) -> Result<Vec<NipClaimRelationRecord>, StoreError> {
+        if claim_id.trim().is_empty() || limit == 0 || limit > 200 {
+            return Err(StoreError::InvalidNipClaimRelation);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT relation_id, source_claim_id, target_claim_id, relation_kind, provenance, producer, known_at
+             FROM nip_claim_relations WHERE source_claim_id = ? OR target_claim_id = ?
+             ORDER BY known_at DESC, relation_id LIMIT ?",
+        )?;
+        let rows = statement.query_map(params![claim_id, claim_id, i64::from(limit)], |row| {
+            Ok(NipClaimRelationRecord {
+                relation_id: row.get(0)?,
+                source_claim_id: row.get(1)?,
+                target_claim_id: row.get(2)?,
+                relation_kind: row.get(3)?,
+                provenance: row.get(4)?,
+                producer: row.get(5)?,
+                known_at: row.get(6)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn list_nip_entity_mentions(
+        &self,
+        limit: u32,
+        unresolved_only: bool,
+    ) -> Result<Vec<NipEntityMentionRecord>, StoreError> {
+        if limit == 0 || limit > 200 {
+            return Err(StoreError::InvalidNipEntityResolution);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT m.mention_id, m.event_id, m.source_id, m.worker_site_id, m.worker_item_id,
+                    m.worker_entity_id, m.surface_form, m.producer_entity_type, m.canonical_id_hint,
+                    m.ticker_hint,
+                    (SELECT r.entity_id FROM nip_entity_resolution_history r WHERE r.mention_id = m.mention_id
+                     ORDER BY r.known_at DESC, r.resolution_id DESC LIMIT 1),
+                    COALESCE((SELECT r.decision_kind FROM nip_entity_resolution_history r WHERE r.mention_id = m.mention_id
+                     ORDER BY r.known_at DESC, r.resolution_id DESC LIMIT 1), 'unresolved'), m.known_at
+             FROM nip_entity_mentions m
+             WHERE (? = false OR COALESCE((SELECT r.decision_kind FROM nip_entity_resolution_history r WHERE r.mention_id = m.mention_id
+                     ORDER BY r.known_at DESC, r.resolution_id DESC LIMIT 1), 'unresolved') = 'unresolved')
+             ORDER BY m.known_at DESC, m.mention_id LIMIT ?",
+        )?;
+        let rows = statement.query_map(params![unresolved_only, i64::from(limit)], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<String>>(10)?,
+                row.get::<_, String>(11)?,
+                row.get::<_, DateTime<Utc>>(12)?,
+            ))
+        })?;
+        let mut mentions = Vec::new();
+        for row in rows {
+            let (
+                mention_id,
+                event_id,
+                source_id,
+                worker_site_id,
+                worker_item_id,
+                worker_entity_id,
+                surface_form,
+                producer_entity_type,
+                canonical_id_hint,
+                ticker_hint,
+                resolved_entity_id,
+                decision,
+                known_at,
+            ) = row?;
+            let mut evidence_statement = self.connection.prepare(
+                "SELECT payload_kind, payload_hash, quote, start_offset, end_offset FROM nip_entity_mention_evidence
+                 WHERE mention_id = ? ORDER BY evidence_ordinal",
+            )?;
+            let evidence_rows = evidence_statement.query_map(params![mention_id], |row| {
+                let start: i32 = row.get(3)?;
+                let end: i32 = row.get(4)?;
+                Ok(NipEntityMentionEvidenceRecord {
+                    payload_kind: row.get(0)?,
+                    payload_hash: row.get(1)?,
+                    quote: row.get(2)?,
+                    start_offset: u32::try_from(start).unwrap_or_default(),
+                    end_offset: u32::try_from(end).unwrap_or_default(),
+                })
+            })?;
+            let evidence = evidence_rows.collect::<Result<Vec<_>, _>>()?;
+            let resolution_status = match decision.as_str() {
+                "resolve" => "resolved",
+                "reject" => "rejected",
+                _ => "unresolved",
+            }
+            .to_owned();
+            mentions.push(NipEntityMentionRecord {
+                mention_id,
+                event_id,
+                source_id,
+                worker_site_id,
+                worker_item_id,
+                worker_entity_id,
+                surface_form,
+                producer_entity_type,
+                canonical_id_hint,
+                ticker_hint,
+                resolved_entity_id: if resolution_status == "resolved" {
+                    resolved_entity_id
+                } else {
+                    None
+                },
+                resolution_status,
+                known_at,
+                evidence,
+            });
+        }
+        Ok(mentions)
+    }
+
+    pub fn list_nip_entities(&self, limit: u32) -> Result<Vec<NipEntityRecord>, StoreError> {
+        if limit == 0 || limit > 200 {
+            return Err(StoreError::InvalidNipEntityResolution);
+        }
+        let mut statement = self.connection.prepare("SELECT entity_id, entity_kind, display_name, created_by, created_at FROM nip_entities ORDER BY created_at, entity_id LIMIT ?")?;
+        let rows = statement.query_map(params![i64::from(limit)], |row| {
+            Ok(NipEntityRecord {
+                entity_id: row.get(0)?,
+                entity_kind: row.get(1)?,
+                display_name: row.get(2)?,
+                created_by: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn review_entity_mention(
+        &mut self,
+        mention_id: &str,
+        entity_id: Option<&str>,
+        entity_kind: Option<&str>,
+        display_name: Option<&str>,
+        decision_kind: &str,
+        reviewer: &str,
+        reason: &str,
+    ) -> Result<Option<NipEntityRecord>, StoreError> {
+        if mention_id.trim().is_empty()
+            || reviewer.trim().is_empty()
+            || reason.trim().is_empty()
+            || !matches!(decision_kind, "resolve" | "reject")
+            || (decision_kind == "resolve"
+                && entity_id.is_none()
+                && (entity_kind.is_none() || display_name.is_none_or(|v| v.trim().is_empty())))
+            || (decision_kind == "reject" && entity_id.is_some())
+            || entity_kind.is_some_and(|kind| {
+                !matches!(
+                    kind,
+                    "company" | "security" | "person" | "product" | "theme" | "index" | "other"
+                )
+            })
+        {
+            return Err(StoreError::InvalidNipEntityResolution);
+        }
+        let transaction = self.connection.transaction()?;
+        let mention_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM nip_entity_mentions WHERE mention_id = ?)",
+            params![mention_id],
+            |row| row.get(0),
+        )?;
+        if !mention_exists {
+            return Err(StoreError::InvalidNipEntityResolution);
+        }
+        let known_at = Utc::now();
+        let mut created = None;
+        let resolved_id = if decision_kind == "resolve" {
+            if let Some(entity_id) = entity_id {
+                let entity: Option<NipEntityRecord> = transaction.query_row(
+                    "SELECT entity_id, entity_kind, display_name, created_by, created_at FROM nip_entities WHERE entity_id = ?",
+                    params![entity_id], |row| Ok(NipEntityRecord { entity_id: row.get(0)?, entity_kind: row.get(1)?, display_name: row.get(2)?, created_by: row.get(3)?, created_at: row.get(4)? }),
+                ).optional()?;
+                if entity.is_none() {
+                    return Err(StoreError::InvalidNipEntityResolution);
+                }
+                Some(entity_id.to_owned())
+            } else {
+                let id = format!(
+                    "nip-entity-{}",
+                    &hex_digest(
+                        format!(
+                            "{mention_id}\0{}\0{}\0{reviewer}\0{}",
+                            entity_kind.unwrap(),
+                            display_name.unwrap().trim(),
+                            known_at.timestamp_nanos_opt().unwrap_or_default()
+                        )
+                        .as_bytes()
+                    )[..32]
+                );
+                let entity = NipEntityRecord {
+                    entity_id: id.clone(),
+                    entity_kind: entity_kind.unwrap().to_owned(),
+                    display_name: display_name.unwrap().trim().to_owned(),
+                    created_by: reviewer.to_owned(),
+                    created_at: known_at,
+                };
+                transaction.execute("INSERT INTO nip_entities (entity_id, entity_kind, display_name, created_by, created_at) VALUES (?, ?, ?, ?, ?)", params![entity.entity_id, entity.entity_kind, entity.display_name, entity.created_by, entity.created_at])?;
+                created = Some(entity);
+                Some(id)
+            }
+        } else {
+            None
+        };
+        let resolution_id = format!(
+            "nip-resolution-{}",
+            &hex_digest(
+                format!(
+                    "{mention_id}\0{}\0{}\0{}\0{}\0{}",
+                    resolved_id.as_deref().unwrap_or(""),
+                    decision_kind,
+                    reviewer,
+                    reason,
+                    known_at.timestamp_nanos_opt().unwrap_or_default()
+                )
+                .as_bytes()
+            )[..32]
+        );
+        transaction.execute("INSERT INTO nip_entity_resolution_history (resolution_id, mention_id, entity_id, decision_kind, reviewer, reason, known_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (resolution_id) DO NOTHING", params![resolution_id, mention_id, resolved_id, decision_kind, reviewer, reason, known_at])?;
+        transaction.commit()?;
+        Ok(created)
+    }
+
+    pub fn list_nip_entity_resolution_history(
+        &self,
+        mention_id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<NipEntityResolutionRecord>, StoreError> {
+        if mention_id.trim().is_empty() || limit == 0 || limit > 200 {
+            return Err(StoreError::InvalidNipEntityResolution);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT resolution_id, mention_id, entity_id, decision_kind, reviewer, reason, known_at
+             FROM nip_entity_resolution_history WHERE mention_id = ?
+             ORDER BY known_at DESC, resolution_id DESC LIMIT ? OFFSET ?",
+        )?;
+        let rows = statement.query_map(
+            params![mention_id, i64::from(limit), i64::from(offset)],
+            |row| {
+                Ok(NipEntityResolutionRecord {
+                    resolution_id: row.get(0)?,
+                    mention_id: row.get(1)?,
+                    entity_id: row.get(2)?,
+                    decision_kind: row.get(3)?,
+                    reviewer: row.get(4)?,
+                    reason: row.get(5)?,
+                    known_at: row.get(6)?,
+                })
+            },
+        )?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn list_nip_claim_entity_links(
+        &self,
+        claim_id: Option<&str>,
+        mention_id: Option<&str>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<NipClaimEntityLinkRecord>, StoreError> {
+        if claim_id.is_some() == mention_id.is_some()
+            || claim_id.is_some_and(|value| value.trim().is_empty())
+            || mention_id.is_some_and(|value| value.trim().is_empty())
+            || limit == 0
+            || limit > 200
+        {
+            return Err(StoreError::InvalidNipClaimRelation);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT claim_id, mention_id, role, derivation_run_id, known_at
+             FROM nip_claim_entity_links
+             WHERE (? IS NULL OR claim_id = ?) AND (? IS NULL OR mention_id = ?)
+             ORDER BY known_at DESC, claim_id, mention_id, role LIMIT ? OFFSET ?",
+        )?;
+        let rows = statement.query_map(
+            params![
+                claim_id,
+                claim_id,
+                mention_id,
+                mention_id,
+                i64::from(limit),
+                i64::from(offset)
+            ],
+            |row| {
+                Ok(NipClaimEntityLinkRecord {
+                    claim_id: row.get(0)?,
+                    mention_id: row.get(1)?,
+                    role: row.get(2)?,
+                    derivation_run_id: row.get(3)?,
+                    known_at: row.get(4)?,
+                })
+            },
+        )?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    /// Build or reuse a deterministic as-of snapshot. Only NIP-accepted claims
+    /// linked through a resolution decision known by `as_of` are eligible.
+    pub fn compute_nip_feature_snapshot(
+        &mut self,
+        entity_id: &str,
+        window_start: DateTime<Utc>,
+        window_end: DateTime<Utc>,
+        as_of: DateTime<Utc>,
+    ) -> Result<NipFeatureSnapshotRecord, StoreError> {
+        if entity_id.trim().is_empty() || window_end <= window_start {
+            return Err(StoreError::InvalidNipFeatureRequest);
+        }
+        let transaction = self.connection.transaction()?;
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM nip_entities WHERE entity_id = ?)",
+            params![entity_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(StoreError::InvalidNipFeatureRequest);
+        }
+        let mut statement = transaction.prepare(
+            "SELECT DISTINCT a.claim_id, d.source_id, d.event_id, a.subject, a.predicate, a.object,
+                    a.polarity, a.availability
+             FROM nip_claim_annotations a
+             JOIN nip_derivation_runs d ON d.derivation_run_id = a.derivation_run_id
+             WHERE a.known_at <= ? AND a.valid_from < ? AND (a.valid_to IS NULL OR a.valid_to > ?)
+               AND COALESCE((SELECT r.review_status FROM nip_claim_review_history r
+                    WHERE r.claim_id = a.claim_id AND r.known_at <= ?
+                    ORDER BY r.known_at DESC, r.review_id DESC LIMIT 1), 'pending') = 'accepted'
+               AND EXISTS (
+                    SELECT 1 FROM nip_claim_entity_links l
+                    JOIN nip_entity_resolution_history resolution ON resolution.mention_id = l.mention_id
+                    WHERE l.claim_id = a.claim_id AND l.known_at <= ? AND resolution.entity_id = ?
+                      AND resolution.decision_kind = 'resolve' AND resolution.known_at <= ?
+                      AND resolution.known_at = (SELECT MAX(r2.known_at) FROM nip_entity_resolution_history r2
+                          WHERE r2.mention_id = l.mention_id AND r2.known_at <= ?)
+                      AND resolution.resolution_id = (SELECT r3.resolution_id FROM nip_entity_resolution_history r3
+                          WHERE r3.mention_id = l.mention_id AND r3.known_at <= ?
+                          ORDER BY r3.known_at DESC, r3.resolution_id DESC LIMIT 1)
+               )
+               AND a.known_at <= ?
+             ORDER BY d.source_id, d.event_id, a.subject, a.predicate, a.object, a.claim_id",
+        )?;
+        let rows = statement.query_map(
+            params![
+                as_of,
+                window_end,
+                window_start,
+                as_of,
+                as_of,
+                entity_id,
+                as_of,
+                as_of,
+                as_of,
+                as_of
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            },
+        )?;
+        let mut facts = rows.collect::<Result<Vec<_>, _>>()?;
+        facts.sort();
+        let input_hash = hex_digest(
+            &serde_json::to_vec(&facts).map_err(StoreError::AcquisitionPayloadSerialization)?,
+        );
+        let observations: std::collections::BTreeSet<_> = facts
+            .iter()
+            .map(|(_, source, event, subject, predicate, object, _, _)| {
+                (
+                    source.clone(),
+                    event.clone(),
+                    format!(
+                        "{}\0{}\0{}",
+                        normalize_feature_fact_field(subject),
+                        normalize_feature_fact_field(predicate),
+                        normalize_feature_fact_field(object)
+                    ),
+                )
+            })
+            .collect();
+        let sources: std::collections::BTreeSet<_> = facts
+            .iter()
+            .map(|(_, source, _, _, _, _, _, _)| source.clone())
+            .collect();
+        let polarity_count = |polarity: &str| -> usize {
+            facts
+                .iter()
+                .filter(|fact| fact.6.as_deref() == Some(polarity))
+                .map(
+                    |(_, source, event, subject, predicate, object, polarity, _)| {
+                        (
+                            source.clone(),
+                            event.clone(),
+                            format!(
+                                "{}\0{}\0{}",
+                                normalize_feature_fact_field(subject),
+                                normalize_feature_fact_field(predicate),
+                                normalize_feature_fact_field(object)
+                            ),
+                            polarity.clone().unwrap_or_default(),
+                        )
+                    },
+                )
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+        };
+        let definition_rows = {
+            let mut definitions = transaction.prepare(
+                "SELECT feature_key, definition_version, unit, formula_version, formula_description,
+                        minimum_observations, registered_at
+                 FROM nip_feature_definitions WHERE registered_at <= ?
+                 ORDER BY feature_key, definition_version",
+            )?;
+            let rows = definitions.query_map(params![as_of], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i32>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i32>(5)?,
+                    row.get::<_, DateTime<Utc>>(6)?,
+                ))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        let definition_set_hash = hex_digest(
+            &serde_json::to_vec(&definition_rows)
+                .map_err(StoreError::AcquisitionPayloadSerialization)?,
+        );
+        let feature_run_id = format!("nip-feature-run-{}", &hex_digest(format!("{entity_id}\0{window_start}\0{window_end}\0{as_of}\0{input_hash}\0{definition_set_hash}").as_bytes())[..32]);
+        let claim_count = facts
+            .iter()
+            .map(|fact| fact.0.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len() as u32;
+        let source_count = sources.len() as u32;
+        let persisted_at = Utc::now();
+        transaction.execute(
+            "INSERT INTO nip_feature_runs (feature_run_id, entity_id, window_start, window_end, as_of,
+                known_at, input_hash, definition_set_hash, claim_count, source_count, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (feature_run_id) DO NOTHING",
+            params![feature_run_id, entity_id, window_start, window_end, as_of, persisted_at, input_hash, definition_set_hash, claim_count as i32, source_count as i32, persisted_at],
+        )?;
+        let mut features = Vec::new();
+        for (
+            feature_key,
+            definition_version,
+            unit,
+            formula_version,
+            _formula_description,
+            minimum,
+            _registered_at,
+        ) in &definition_rows
+        {
+            if *definition_version != 1 || formula_version != "v1" {
+                return Err(StoreError::InvalidNipFeatureRequest);
+            }
+            let (value, sample_count) = match feature_key.as_str() {
+                "nip.claim_observation_count" => (observations.len(), observations.len()),
+                "nip.distinct_source_count" => (sources.len(), observations.len()),
+                "nip.positive_claim_count" => (polarity_count("positive"), observations.len()),
+                "nip.neutral_claim_count" => (polarity_count("neutral"), observations.len()),
+                "nip.negative_claim_count" => (polarity_count("negative"), observations.len()),
+                _ => continue,
+            };
+            let availability = if sample_count < (*minimum).max(0) as usize {
+                "insufficient"
+            } else {
+                "available"
+            };
+            let quality_flags = if facts.iter().any(|fact| fact.7 == "reconstructed") {
+                vec!["includes_reconstructed".to_owned()]
+            } else {
+                Vec::new()
+            };
+            let flags_json = serde_json::to_string(&quality_flags)
+                .map_err(StoreError::AcquisitionPayloadSerialization)?;
+            let numeric = (availability == "available").then_some(value as f64);
+            transaction.execute(
+                "INSERT INTO nip_entity_feature_values (feature_run_id, feature_key, definition_version,
+                    entity_id, window_start, window_end, as_of, value_numeric, availability, sample_count, quality_flags)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (feature_run_id, feature_key, definition_version) DO NOTHING",
+                params![feature_run_id, feature_key, definition_version, entity_id, window_start, window_end, as_of, numeric, availability, sample_count as i32, flags_json],
+            )?;
+            features.push(NipFeatureValueRecord {
+                feature_key: feature_key.clone(),
+                definition_version: *definition_version as u32,
+                unit: unit.clone(),
+                value_numeric: numeric,
+                availability: availability.to_owned(),
+                sample_count: sample_count as u32,
+                quality_flags,
+            });
+        }
+        let snapshot_known_at: DateTime<Utc> = transaction.query_row(
+            "SELECT known_at FROM nip_feature_runs WHERE feature_run_id = ?",
+            params![feature_run_id],
+            |row| row.get(0),
+        )?;
+        transaction.commit()?;
+        Ok(NipFeatureSnapshotRecord {
+            feature_run_id,
+            entity_id: entity_id.to_owned(),
+            window_start,
+            window_end,
+            as_of,
+            known_at: snapshot_known_at,
+            input_hash,
+            definition_set_hash,
+            claim_count,
+            source_count,
+            features,
+        })
+    }
+
+    pub fn list_nip_feature_snapshots(
+        &self,
+        entity_id: &str,
+        limit: u32,
+    ) -> Result<Vec<NipFeatureSnapshotRecord>, StoreError> {
+        if entity_id.trim().is_empty() || limit == 0 || limit > 200 {
+            return Err(StoreError::InvalidNipFeatureRequest);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT feature_run_id, entity_id, window_start, window_end, as_of, known_at, input_hash,
+                    definition_set_hash, claim_count, source_count
+             FROM nip_feature_runs WHERE entity_id = ? ORDER BY as_of DESC, known_at DESC, feature_run_id LIMIT ?",
+        )?;
+        let rows = statement.query_map(params![entity_id, i64::from(limit)], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, DateTime<Utc>>(2)?,
+                row.get::<_, DateTime<Utc>>(3)?,
+                row.get::<_, DateTime<Utc>>(4)?,
+                row.get::<_, DateTime<Utc>>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, i32>(8)?,
+                row.get::<_, i32>(9)?,
+            ))
+        })?;
+        let mut snapshots = Vec::new();
+        for row in rows {
+            let (
+                run_id,
+                entity,
+                start,
+                end,
+                as_of,
+                known_at,
+                input_hash,
+                definition_hash,
+                claims,
+                sources,
+            ) = row?;
+            let mut values_statement = self.connection.prepare(
+                "SELECT v.feature_key, v.definition_version, d.unit, v.value_numeric, v.availability,
+                        v.sample_count, v.quality_flags
+                 FROM nip_entity_feature_values v JOIN nip_feature_definitions d
+                   ON d.feature_key = v.feature_key AND d.definition_version = v.definition_version
+                 WHERE v.feature_run_id = ? ORDER BY v.feature_key, v.definition_version",
+            )?;
+            let values = values_statement
+                .query_map(params![run_id], |row| {
+                    let flags: String = row.get(6)?;
+                    Ok(NipFeatureValueRecord {
+                        feature_key: row.get(0)?,
+                        definition_version: u32::try_from(row.get::<_, i32>(1)?)
+                            .unwrap_or_default(),
+                        unit: row.get(2)?,
+                        value_numeric: row.get(3)?,
+                        availability: row.get(4)?,
+                        sample_count: u32::try_from(row.get::<_, i32>(5)?).unwrap_or_default(),
+                        quality_flags: serde_json::from_str(&flags).unwrap_or_default(),
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            snapshots.push(NipFeatureSnapshotRecord {
+                feature_run_id: run_id,
+                entity_id: entity,
+                window_start: start,
+                window_end: end,
+                as_of,
+                known_at,
+                input_hash,
+                definition_set_hash: definition_hash,
+                claim_count: u32::try_from(claims).unwrap_or_default(),
+                source_count: u32::try_from(sources).unwrap_or_default(),
+                features: values,
+            });
+        }
+        Ok(snapshots)
     }
 
     pub fn import_local_event(
@@ -5795,6 +6938,19 @@ fn agent_evidence_matches(content: &str, evidence: &ClaimEvidence) -> bool {
 }
 
 fn apply_migrations(connection: &mut Connection) -> Result<u32, StoreError> {
+    apply_migrations_through(connection, LATEST_SCHEMA_VERSION)
+}
+
+fn apply_migrations_through(
+    connection: &mut Connection,
+    target_version: u32,
+) -> Result<u32, StoreError> {
+    if target_version == 0 || target_version > LATEST_SCHEMA_VERSION {
+        return Err(StoreError::FutureSchema {
+            found: target_version,
+            supported: LATEST_SCHEMA_VERSION,
+        });
+    }
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS nip_schema_migrations (
              version INTEGER PRIMARY KEY,
@@ -5918,13 +7074,22 @@ fn apply_migrations(connection: &mut Connection) -> Result<u32, StoreError> {
         apply_migration(connection, 22, "single_item_acquisition", MIGRATION_22)?;
         applied_any = true;
     }
+    if current_version < 23 && target_version >= 23 {
+        apply_migration(connection, 23, "nip_phase5", MIGRATION_23)?;
+        applied_any = true;
+    }
     if applied_any {
         // Migration 0009 rebuilds tables (DROP/RENAME). DuckDB cannot replay
         // those catalog records from a WAL left behind by a crashed process, so
         // flush the migration into the database file immediately.
         connection.execute_batch("CHECKPOINT;")?;
     }
-    Ok(LATEST_SCHEMA_VERSION)
+    let applied_version: i64 = connection.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM nip_schema_migrations",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(u32::try_from(applied_version).unwrap_or_default())
 }
 
 fn apply_migration(
@@ -6252,6 +7417,377 @@ fn valid_media_relative_path(value: &str) -> bool {
             .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
+fn persist_item_derivation(
+    transaction: &Transaction<'_>,
+    batch: &AcquisitionBatch,
+    item: &AcquisitionItem,
+    worker_site_id: &str,
+    event_id: &str,
+    source_id: &str,
+    known_at: DateTime<Utc>,
+) -> Result<(), StoreError> {
+    if item.claims.is_empty() && item.entities.is_empty() && item.derivation_manifest.is_none() {
+        return Ok(());
+    }
+
+    let serialized_output = serde_json::to_vec(&(&item.claims, &item.entities))
+        .map_err(StoreError::AcquisitionPayloadSerialization)?;
+    let output_hash = hex_digest(&serialized_output);
+    if item
+        .derivation_manifest
+        .as_ref()
+        .is_some_and(|manifest| !manifest.output_hash.eq_ignore_ascii_case(&output_hash))
+    {
+        return Err(StoreError::InvalidAcquisitionPayload);
+    }
+    let run_payload_hash = derivation_run_payload_hash(
+        batch,
+        item,
+        worker_site_id,
+        event_id,
+        source_id,
+        &output_hash,
+    )?;
+
+    let derivation_identity = format!("{worker_site_id}\0{event_id}\0{}", batch.run_id);
+    let derivation_run_id = format!(
+        "derivation-{}",
+        &hex_digest(derivation_identity.as_bytes())[..32]
+    );
+    let manifest = item.derivation_manifest.as_ref();
+    let claim_status = manifest
+        .map(|value| acquisition_completeness_as_str(value.claim_status))
+        .unwrap_or("unspecified");
+    let entity_status = manifest
+        .map(|value| acquisition_completeness_as_str(value.entity_status))
+        .unwrap_or("unspecified");
+    let claim_windows = manifest.map_or(0, |value| value.claim_windows_covered);
+    let entity_windows = manifest.map_or(0, |value| value.entity_windows_covered);
+    transaction.execute(
+        "INSERT INTO nip_derivation_runs
+            (derivation_run_id, event_id, source_id, worker_site_id, worker_item_id,
+             worker_run_id, producer_name, producer_version, contract_version, output_hash, run_payload_hash,
+             claim_status, entity_status, claim_count, entity_count, claim_windows_covered,
+             entity_windows_covered, availability, started_at, completed_at, known_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        params![
+            derivation_run_id,
+            event_id,
+            source_id,
+            worker_site_id,
+            item.worker_item_id,
+            batch.run_id,
+            batch.producer.name,
+            batch.producer.version,
+            batch.contract_version as i32,
+            output_hash,
+            run_payload_hash,
+            claim_status,
+            entity_status,
+            item.claims.len() as i32,
+            item.entities.len() as i32,
+            claim_windows as i32,
+            entity_windows as i32,
+            acquisition_availability_as_str(item.availability),
+            batch.started_at,
+            batch.completed_at,
+            known_at,
+        ],
+    )?;
+
+    let claim_ids = item
+        .claims
+        .iter()
+        .map(|claim| {
+            let identity = format!("{}\0{}", derivation_run_id, claim.worker_claim_id);
+            let claim_id = format!("nip-claim-{}", &hex_digest(identity.as_bytes())[..32]);
+            let claim_text = claim.claim_text.clone().unwrap_or_else(|| {
+                format!("{} — {} — {}", claim.subject, claim.predicate, claim.object)
+            });
+            let text_origin = if claim.claim_text.is_some() {
+                "producer_paraphrase"
+            } else {
+                "triplet_rendering"
+            };
+            transaction.execute(
+                "INSERT INTO nip_claims
+                    (claim_id, claim_text, speaker_or_author, confidence_millis,
+                     extraction_run_id, provider, model, prompt_version, provider_kind,
+                     provider_profile_id, reasoning_effort, extracted_at,
+                     extraction_tier, review_status)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?)",
+                params![
+                    claim_id,
+                    claim_text,
+                    claim.attribution,
+                    claim.confidence_millis as i32,
+                    derivation_run_id,
+                    batch.producer.name,
+                    claim.extraction.model,
+                    claim.extraction.prompt_version.as_deref().unwrap_or("not_provided"),
+                    claim.extraction.extracted_at,
+                    claim.extraction.tier.as_str(),
+                    claim.review_status.as_str(),
+                ],
+            )?;
+            let (evidence_text, evidence_hash) =
+                stored_evidence_payload(transaction, event_id, &claim.evidence)?;
+            if !span_matches_text(&evidence_text, &claim.evidence.quote, claim.evidence.start_offset, claim.evidence.end_offset) {
+                return Err(StoreError::InvalidAcquisitionPayload);
+            }
+            transaction.execute(
+                "INSERT INTO nip_claim_evidence
+                    (claim_id, event_id, quote, start_offset, end_offset, payload_kind, payload_hash)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    claim_id,
+                    event_id,
+                    claim.evidence.quote,
+                    claim.evidence.start_offset as i32,
+                    claim.evidence.end_offset as i32,
+                    acquisition_payload_as_str(claim.evidence.payload),
+                    evidence_hash,
+                ],
+            )?;
+            transaction.execute(
+                "INSERT INTO nip_claim_annotations
+                    (claim_id, derivation_run_id, worker_site_id, worker_item_id,
+                     worker_claim_id, subject, predicate, object, claim_text_origin,
+                     claim_type, polarity, certainty_millis, horizon, magnitude_millis,
+                     attribution, valid_from, valid_to, availability, known_at, source_output_hash)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    claim_id,
+                    derivation_run_id,
+                    worker_site_id,
+                    item.worker_item_id,
+                    claim.worker_claim_id,
+                    claim.subject,
+                    claim.predicate,
+                    claim.object,
+                    text_origin,
+                    claim.claim_type.map(acquisition_claim_type_as_str),
+                    claim.polarity.map(acquisition_polarity_as_str),
+                    claim.certainty_millis.map(i32::from),
+                    claim.horizon,
+                    claim.magnitude_millis,
+                    claim.attribution,
+                    claim.valid_from.clone().unwrap_or_else(|| item.valid_from.clone()),
+                    claim.valid_to.clone().or_else(|| item.valid_to.clone()),
+                    acquisition_availability_as_str(item.availability),
+                    known_at,
+                    output_hash,
+                ],
+            )?;
+            Ok::<(String, &AcquisitionClaim), StoreError>((claim_id, claim))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut mention_ids = HashMap::new();
+    for entity in &item.entities {
+        let identity = format!("{}\0{}", derivation_run_id, entity.worker_entity_id);
+        let mention_id = format!("nip-mention-{}", &hex_digest(identity.as_bytes())[..32]);
+        transaction.execute(
+            "INSERT INTO nip_entity_mentions
+                (mention_id, derivation_run_id, event_id, source_id, worker_site_id,
+                 worker_item_id, worker_entity_id, surface_form, producer_entity_type,
+                 canonical_id_hint, ticker_hint, availability, known_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                mention_id,
+                derivation_run_id,
+                event_id,
+                source_id,
+                worker_site_id,
+                item.worker_item_id,
+                entity.worker_entity_id,
+                entity.name,
+                entity.entity_type,
+                entity.canonical_id,
+                entity.ticker,
+                acquisition_availability_as_str(item.availability),
+                known_at,
+            ],
+        )?;
+        mention_ids.insert(entity.worker_entity_id.as_str(), mention_id.clone());
+        for (ordinal, evidence) in entity.evidence.iter().enumerate() {
+            let (evidence_text, evidence_hash) =
+                stored_evidence_payload(transaction, event_id, evidence)?;
+            if !span_matches_text(
+                &evidence_text,
+                &evidence.quote,
+                evidence.start_offset,
+                evidence.end_offset,
+            ) {
+                return Err(StoreError::InvalidAcquisitionPayload);
+            }
+            transaction.execute(
+                "INSERT INTO nip_entity_mention_evidence
+                    (mention_id, evidence_ordinal, payload_kind, payload_hash, quote,
+                     start_offset, end_offset)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    mention_id,
+                    ordinal as i32,
+                    acquisition_payload_as_str(evidence.payload),
+                    evidence_hash,
+                    evidence.quote,
+                    evidence.start_offset as i32,
+                    evidence.end_offset as i32,
+                ],
+            )?;
+        }
+    }
+
+    for (claim_id, claim) in claim_ids {
+        for reference in &claim.entity_refs {
+            let mention_id = mention_ids
+                .get(reference.worker_entity_id.as_str())
+                .ok_or(StoreError::InvalidAcquisitionPayload)?;
+            transaction.execute(
+                "INSERT INTO nip_claim_entity_links
+                    (claim_id, mention_id, role, derivation_run_id, known_at)
+                 VALUES (?, ?, ?, ?, ?)",
+                params![
+                    claim_id,
+                    mention_id,
+                    acquisition_entity_role_as_str(reference.role),
+                    derivation_run_id,
+                    known_at,
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn derivation_run_payload_hash(
+    batch: &AcquisitionBatch,
+    item: &AcquisitionItem,
+    worker_site_id: &str,
+    event_id: &str,
+    source_id: &str,
+    output_hash: &str,
+) -> Result<String, StoreError> {
+    let manifest = item.derivation_manifest.as_ref();
+    let payload = (
+        event_id,
+        source_id,
+        worker_site_id,
+        item.worker_item_id.as_str(),
+        batch.run_id.as_str(),
+        batch.producer.name.as_str(),
+        batch.producer.version.as_str(),
+        batch.contract_version,
+        (
+            item.worker_source_key.as_str(),
+            item.source_url.as_str(),
+            item.content_hash.as_str(),
+            &item.valid_from,
+            &item.valid_to,
+        ),
+        output_hash,
+        (
+            manifest.map(|value| acquisition_completeness_as_str(value.claim_status)),
+            manifest.map(|value| acquisition_completeness_as_str(value.entity_status)),
+            manifest.map_or(item.claims.len() as u32, |value| value.claim_count),
+            manifest.map_or(item.entities.len() as u32, |value| value.entity_count),
+            manifest.map_or(0, |value| value.claim_windows_covered),
+            manifest.map_or(0, |value| value.entity_windows_covered),
+        ),
+        acquisition_availability_as_str(item.availability),
+        &batch.started_at,
+        &batch.completed_at,
+    );
+    let bytes =
+        serde_json::to_vec(&payload).map_err(StoreError::AcquisitionPayloadSerialization)?;
+    Ok(hex_digest(&bytes))
+}
+
+fn normalize_feature_fact_field(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn stored_evidence_payload(
+    transaction: &Transaction<'_>,
+    event_id: &str,
+    span: &nip_domain::AcquisitionEvidenceSpan,
+) -> Result<(String, String), StoreError> {
+    let query = match span.payload {
+        nip_domain::AcquisitionEvidencePayload::ItemContent => {
+            "SELECT content_text, content_hash FROM nip_events WHERE event_id = ?"
+        }
+        nip_domain::AcquisitionEvidencePayload::Transcript => {
+            "SELECT transcript_text, content_hash FROM nip_acquisition_transcripts WHERE event_id = ?"
+        }
+    };
+    transaction
+        .query_row(query, params![event_id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .optional()?
+        .ok_or(StoreError::InvalidAcquisitionPayload)
+}
+
+fn span_matches_text(text: &str, quote: &str, start: u32, end: u32) -> bool {
+    if start >= end || start > i32::MAX as u32 || end > i32::MAX as u32 {
+        return false;
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let (start, end) = (start as usize, end as usize);
+    end <= chars.len() && chars[start..end].iter().collect::<String>() == quote
+}
+
+fn acquisition_completeness_as_str(value: AcquisitionCompleteness) -> &'static str {
+    match value {
+        AcquisitionCompleteness::Complete => "complete",
+        AcquisitionCompleteness::Partial => "partial",
+        AcquisitionCompleteness::NotRequested => "not_requested",
+        AcquisitionCompleteness::Failed => "failed",
+    }
+}
+
+fn acquisition_claim_type_as_str(value: AcquisitionClaimType) -> &'static str {
+    match value {
+        AcquisitionClaimType::Assertion => "assertion",
+        AcquisitionClaimType::Forecast => "forecast",
+        AcquisitionClaimType::Commitment => "commitment",
+        AcquisitionClaimType::Causal => "causal",
+        AcquisitionClaimType::Comparative => "comparative",
+        AcquisitionClaimType::Other => "other",
+    }
+}
+
+fn acquisition_polarity_as_str(value: AcquisitionPolarity) -> &'static str {
+    match value {
+        AcquisitionPolarity::Positive => "positive",
+        AcquisitionPolarity::Neutral => "neutral",
+        AcquisitionPolarity::Negative => "negative",
+        AcquisitionPolarity::Mixed => "mixed",
+    }
+}
+
+fn acquisition_entity_role_as_str(value: AcquisitionEntityRole) -> &'static str {
+    match value {
+        AcquisitionEntityRole::Subject => "subject",
+        AcquisitionEntityRole::Object => "object",
+        AcquisitionEntityRole::Speaker => "speaker",
+        AcquisitionEntityRole::Author => "author",
+        AcquisitionEntityRole::Other => "other",
+    }
+}
+
+fn acquisition_payload_as_str(value: nip_domain::AcquisitionEvidencePayload) -> &'static str {
+    match value {
+        nip_domain::AcquisitionEvidencePayload::ItemContent => "item_content",
+        nip_domain::AcquisitionEvidencePayload::Transcript => "transcript",
+    }
+}
+
 fn hex_digest(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -6517,9 +8053,7 @@ impl TryFrom<RawSource> for NarrativeSource {
     }
 }
 
-fn raw_acquisition_binding_from_row(
-    row: &duckdb::Row<'_>,
-) -> duckdb::Result<AcquisitionBinding> {
+fn raw_acquisition_binding_from_row(row: &duckdb::Row<'_>) -> duckdb::Result<AcquisitionBinding> {
     Ok(AcquisitionBinding {
         worker_site_id: row.get(0)?,
         source_id: row.get(1)?,
@@ -6850,6 +8384,14 @@ mod tests {
             assert!(store.has_table("nip_acquisition_runs").unwrap());
             assert!(store.has_table("nip_acquisition_items").unwrap());
             assert!(store.has_table("nip_acquisition_transcripts").unwrap());
+            assert!(store.has_table("nip_derivation_runs").unwrap());
+            assert!(store.has_table("nip_claim_annotations").unwrap());
+            assert!(store.has_table("nip_entity_mentions").unwrap());
+            assert!(store.has_table("nip_entities").unwrap());
+            assert!(store.has_table("nip_entity_aliases").unwrap());
+            assert!(store.has_table("nip_claim_relations").unwrap());
+            assert!(store.has_table("nip_feature_definitions").unwrap());
+            assert!(store.has_table("nip_entity_feature_values").unwrap());
         }
 
         let reopened = Store::open(&path).unwrap();
@@ -6906,7 +8448,8 @@ mod tests {
                     "DROP TABLE nip_acquisition_transcripts;
                      DROP TABLE nip_acquisition_items;
                      DROP TABLE nip_acquisition_runs;
-                     DELETE FROM nip_schema_migrations WHERE version = 22;",
+                     DELETE FROM nip_schema_migrations WHERE version IN (22, 23);
+                     DELETE FROM nip_feature_definitions WHERE feature_key LIKE 'nip.%';",
                 )
                 .unwrap();
         }
@@ -6926,6 +8469,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(version_22_count, 1);
+        let version_23_count: i64 = upgraded
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM nip_schema_migrations WHERE version = 23",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version_23_count, 1);
     }
 
     #[test]
@@ -9686,7 +11238,10 @@ mod tests {
             .unwrap());
         let loaded = store.acquisition_binding("podcast-main").unwrap().unwrap();
         assert_eq!(loaded.state, "unbound");
-        assert_eq!(loaded.review_note.as_deref(), Some("mapping withdrawn for review"));
+        assert_eq!(
+            loaded.review_note.as_deref(),
+            Some("mapping withdrawn for review")
+        );
     }
 
     fn acquisition_fixture_store() -> (tempfile::TempDir, Store, DateTime<Utc>) {
@@ -9757,6 +11312,7 @@ mod tests {
                 claims: Vec::new(),
                 entities: Vec::new(),
                 features: Vec::new(),
+                derivation_manifest: None,
             }],
         }
     }
@@ -9767,6 +11323,105 @@ mod tests {
         received_at: DateTime<Utc>,
     ) -> Result<AcquisitionIngestResult, StoreError> {
         store.ingest_acquisition_item(
+            batch,
+            "fixture-site",
+            "fixture-source",
+            "podcast",
+            "https://fixture.test/feed.xml",
+            "https://fixture.test/feed.xml",
+            received_at,
+        )
+    }
+
+    fn phase5_v2_fixture_batch(
+        now: DateTime<Utc>,
+        run_id: &str,
+        subject: &str,
+        object: &str,
+    ) -> AcquisitionBatch {
+        let mut batch = acquisition_fixture_batch(now, "Episode notes.\n\nA fixture summary.");
+        batch.contract_version = 2;
+        batch.run_id = run_id.to_owned();
+        let claim_quote = "policy remains restrictive.";
+        let transcript_text = batch.items[0]
+            .transcript
+            .as_ref()
+            .unwrap()
+            .transcript_text
+            .clone();
+        let claim_start = transcript_text.find(claim_quote).unwrap() as u32;
+        let valid_from = batch.items[0].valid_from;
+        let provenance = nip_domain::AcquisitionExtractionProvenance {
+            tier: nip_domain::ExtractionTier::Tier2Llm,
+            model: "fixture-model".into(),
+            model_version: "v1".into(),
+            prompt_version: Some("phase5-fixture-v1".into()),
+            confidence_millis: Some(900),
+            extracted_at: now,
+        };
+        batch.items[0].claims.push(nip_domain::AcquisitionClaim {
+            worker_claim_id: "claim-1".into(),
+            subject: subject.into(),
+            predicate: "raises".into(),
+            object: object.into(),
+            confidence_millis: 900,
+            review_status: nip_domain::ClaimReviewStatus::FastGlance,
+            extraction: provenance.clone(),
+            evidence: nip_domain::AcquisitionEvidenceSpan {
+                payload: nip_domain::AcquisitionEvidencePayload::Transcript,
+                quote: claim_quote.into(),
+                start_offset: claim_start,
+                end_offset: claim_start + claim_quote.chars().count() as u32,
+            },
+            claim_text: Some(format!("{subject} raises {object}")),
+            claim_type: Some(nip_domain::AcquisitionClaimType::Assertion),
+            polarity: Some(nip_domain::AcquisitionPolarity::Positive),
+            certainty_millis: Some(850),
+            horizon: None,
+            magnitude_millis: None,
+            attribution: Some("Fixture speaker".into()),
+            valid_from: Some(valid_from),
+            valid_to: None,
+            entity_refs: vec![nip_domain::AcquisitionClaimEntityRef {
+                worker_entity_id: "entity-1".into(),
+                role: nip_domain::AcquisitionEntityRole::Subject,
+            }],
+        });
+        batch.items[0].entities.push(nip_domain::AcquisitionEntity {
+            worker_entity_id: "entity-1".into(),
+            canonical_id: "untrusted-fixture-id".into(),
+            name: "Fixture Apex".into(),
+            entity_type: "company".into(),
+            ticker: Some("APX".into()),
+            extraction: provenance,
+            evidence: vec![nip_domain::AcquisitionEvidenceSpan {
+                payload: nip_domain::AcquisitionEvidencePayload::Transcript,
+                quote: "Fixture transcript".into(),
+                start_offset: 0,
+                end_offset: "Fixture transcript".chars().count() as u32,
+            }],
+        });
+        let output_hash = hex_digest(
+            &serde_json::to_vec(&(&batch.items[0].claims, &batch.items[0].entities)).unwrap(),
+        );
+        batch.items[0].derivation_manifest = Some(nip_domain::AcquisitionDerivationManifest {
+            claim_status: nip_domain::AcquisitionCompleteness::Complete,
+            entity_status: nip_domain::AcquisitionCompleteness::Complete,
+            claim_count: 1,
+            entity_count: 1,
+            claim_windows_covered: 1,
+            entity_windows_covered: 1,
+            output_hash,
+        });
+        batch
+    }
+
+    fn derive_fixture(
+        store: &mut Store,
+        batch: &AcquisitionBatch,
+        received_at: DateTime<Utc>,
+    ) -> Result<AcquisitionDerivationResult, StoreError> {
+        store.derive_acquisition_item(
             batch,
             "fixture-site",
             "fixture-source",
@@ -9855,6 +11510,121 @@ mod tests {
     }
 
     #[test]
+    fn worker_item_persists_claim_derivation_and_entity_mentions_atomically() {
+        let (_temp, mut store, now) = acquisition_fixture_store();
+        let mut batch = acquisition_fixture_batch(now, "Episode notes.\n\nA fixture summary.");
+        let transcript_text = batch.items[0]
+            .transcript
+            .as_ref()
+            .unwrap()
+            .transcript_text
+            .clone();
+        let transcript_hash = batch.items[0]
+            .transcript
+            .as_ref()
+            .unwrap()
+            .content_hash
+            .clone();
+        let claim_quote = "policy remains restrictive.";
+        let claim_start = transcript_text.find(claim_quote).unwrap() as u32;
+        let entity_quote = "Fixture transcript";
+        let provenance = nip_domain::AcquisitionExtractionProvenance {
+            tier: nip_domain::ExtractionTier::Tier2Llm,
+            model: "fixture-model".into(),
+            model_version: "v1".into(),
+            prompt_version: Some("claims-v1".into()),
+            confidence_millis: Some(900),
+            extracted_at: now,
+        };
+        batch.items[0].claims.push(nip_domain::AcquisitionClaim {
+            worker_claim_id: "claim-1".into(),
+            subject: "Apex".into(),
+            predicate: "raises".into(),
+            object: "guidance".into(),
+            confidence_millis: 900,
+            review_status: nip_domain::ClaimReviewStatus::FastGlance,
+            extraction: provenance.clone(),
+            evidence: nip_domain::AcquisitionEvidenceSpan {
+                payload: nip_domain::AcquisitionEvidencePayload::Transcript,
+                quote: claim_quote.into(),
+                start_offset: claim_start,
+                end_offset: claim_start + claim_quote.chars().count() as u32,
+            },
+            claim_text: None,
+            claim_type: None,
+            polarity: None,
+            certainty_millis: None,
+            horizon: None,
+            magnitude_millis: None,
+            attribution: None,
+            valid_from: None,
+            valid_to: None,
+            entity_refs: Vec::new(),
+        });
+        batch.items[0].entities.push(nip_domain::AcquisitionEntity {
+            worker_entity_id: "entity-1".into(),
+            canonical_id: "apex-inc".into(),
+            name: "Apex".into(),
+            entity_type: "company".into(),
+            ticker: Some("APX".into()),
+            extraction: provenance,
+            evidence: vec![nip_domain::AcquisitionEvidenceSpan {
+                payload: nip_domain::AcquisitionEvidencePayload::Transcript,
+                quote: entity_quote.into(),
+                start_offset: 0,
+                end_offset: entity_quote.chars().count() as u32,
+            }],
+        });
+
+        let first = ingest_fixture(&mut store, &batch, now).unwrap();
+        assert!(!first.replay);
+        assert_eq!(table_count(&store, "nip_derivation_runs"), 1);
+        assert_eq!(table_count(&store, "nip_claim_annotations"), 1);
+        assert_eq!(table_count(&store, "nip_entity_mentions"), 1);
+        assert_eq!(table_count(&store, "nip_entity_mention_evidence"), 1);
+        assert_eq!(table_count(&store, "nip_claim_entity_links"), 0);
+        assert_eq!(table_count(&store, "nip_entities"), 0);
+        let claim_text: String = store
+            .connection
+            .query_row("SELECT claim_text FROM nip_claims", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(claim_text, "Apex — raises — guidance");
+        let evidence: (String, String, Option<String>) = store
+            .connection
+            .query_row(
+                "SELECT quote, payload_kind, payload_hash FROM nip_claim_evidence",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(evidence.0, claim_quote);
+        assert_eq!(evidence.1, "transcript");
+        assert_eq!(evidence.2.as_deref(), Some(transcript_hash.as_str()));
+        let origin: String = store
+            .connection
+            .query_row(
+                "SELECT claim_text_origin FROM nip_claim_annotations",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(origin, "triplet_rendering");
+
+        let replay =
+            ingest_fixture(&mut store, &batch, now + chrono::Duration::seconds(1)).unwrap();
+        assert!(replay.replay);
+        assert_eq!(table_count(&store, "nip_derivation_runs"), 1);
+        assert_eq!(table_count(&store, "nip_claim_annotations"), 1);
+
+        batch.items[0].claims[0].object = "outlook".into();
+        assert!(matches!(
+            ingest_fixture(&mut store, &batch, now + chrono::Duration::seconds(2)),
+            Err(StoreError::AcquisitionIdentityConflict)
+        ));
+        assert_eq!(table_count(&store, "nip_claim_annotations"), 1);
+    }
+
+    #[test]
     fn changed_payload_hash_or_invalid_worker_metadata_writes_nothing() {
         let (_temp, mut store, now) = acquisition_fixture_store();
         let mut bad_hash = acquisition_fixture_batch(now, "Episode notes.");
@@ -9906,23 +11676,13 @@ mod tests {
                     extracted_at: now,
                 },
             });
-        assert!(ingest_fixture(&mut store, &unsupported_feature, now).is_err());
-        let evidence = nip_domain::AcquisitionEvidenceSpan {
-            payload: nip_domain::AcquisitionEvidencePayload::ItemContent,
-            quote: "Episode notes.".into(),
-            start_offset: 0,
-            end_offset: 14,
-        };
-        let extraction = nip_domain::AcquisitionExtractionProvenance {
-            tier: nip_domain::ExtractionTier::Tier2Llm,
-            model: "fixture-model".into(),
-            model_version: "v1".into(),
-            prompt_version: None,
-            confidence_millis: Some(900),
-            extracted_at: now,
-        };
-        let mut unsupported_claim = acquisition_fixture_batch(now, "Episode notes.");
-        unsupported_claim.items[0]
+        assert!(matches!(
+            ingest_fixture(&mut store, &unsupported_feature, now),
+            Err(StoreError::InvalidAcquisitionPayload)
+        ));
+
+        let mut invalid_claim = acquisition_fixture_batch(now, "Episode notes.");
+        invalid_claim.items[0]
             .claims
             .push(nip_domain::AcquisitionClaim {
                 worker_claim_id: "fixture-claim-1".into(),
@@ -9931,32 +11691,70 @@ mod tests {
                 object: "fixture observation".into(),
                 confidence_millis: 900,
                 review_status: nip_domain::ClaimReviewStatus::FastGlance,
-                extraction: extraction.clone(),
-                evidence: evidence.clone(),
+                extraction: nip_domain::AcquisitionExtractionProvenance {
+                    tier: nip_domain::ExtractionTier::Tier2Llm,
+                    model: "fixture-model".into(),
+                    model_version: "v1".into(),
+                    prompt_version: None,
+                    confidence_millis: Some(900),
+                    extracted_at: now,
+                },
+                evidence: nip_domain::AcquisitionEvidenceSpan {
+                    payload: nip_domain::AcquisitionEvidencePayload::ItemContent,
+                    quote: "not the retained content".into(),
+                    start_offset: 0,
+                    end_offset: 14,
+                },
+                claim_text: None,
+                claim_type: None,
+                polarity: None,
+                certainty_millis: None,
+                horizon: None,
+                magnitude_millis: None,
+                attribution: None,
+                valid_from: None,
+                valid_to: None,
+                entity_refs: Vec::new(),
             });
         assert!(matches!(
-            ingest_fixture(&mut store, &unsupported_claim, now),
+            ingest_fixture(&mut store, &invalid_claim, now),
             Err(StoreError::InvalidAcquisitionPayload)
         ));
-        let mut unsupported_entity = acquisition_fixture_batch(now, "Episode notes.");
-        unsupported_entity.items[0]
+
+        let mut invalid_entity = acquisition_fixture_batch(now, "Episode notes.");
+        invalid_entity.items[0]
             .entities
             .push(nip_domain::AcquisitionEntity {
                 worker_entity_id: "fixture-entity-1".into(),
                 canonical_id: "fixture-canonical-1".into(),
                 name: "Fixture entity".into(),
-                entity_type: "organization".into(),
+                entity_type: "company".into(),
                 ticker: None,
-                extraction,
-                evidence: vec![evidence],
+                extraction: nip_domain::AcquisitionExtractionProvenance {
+                    tier: nip_domain::ExtractionTier::Tier2Llm,
+                    model: "fixture-model".into(),
+                    model_version: "v1".into(),
+                    prompt_version: None,
+                    confidence_millis: None,
+                    extracted_at: now,
+                },
+                evidence: vec![nip_domain::AcquisitionEvidenceSpan {
+                    payload: nip_domain::AcquisitionEvidencePayload::ItemContent,
+                    quote: "misplaced".into(),
+                    start_offset: 0,
+                    end_offset: 8,
+                }],
             });
         assert!(matches!(
-            ingest_fixture(&mut store, &unsupported_entity, now),
+            ingest_fixture(&mut store, &invalid_entity, now),
             Err(StoreError::InvalidAcquisitionPayload)
         ));
         assert_eq!(table_count(&store, "nip_events"), 0);
         assert_eq!(table_count(&store, "nip_acquisition_items"), 0);
         assert_eq!(table_count(&store, "nip_ingestion_runs"), 0);
+        assert_eq!(table_count(&store, "nip_derivation_runs"), 0);
+        assert_eq!(table_count(&store, "nip_claims"), 0);
+        assert_eq!(table_count(&store, "nip_entity_mentions"), 0);
     }
 
     #[test]
@@ -10024,5 +11822,369 @@ mod tests {
         assert_eq!(table_count(&store, "nip_ingestion_runs"), 0);
         assert_eq!(table_count(&store, "nip_acquisition_runs"), 0);
         assert_eq!(table_count(&store, "nip_acquisition_transcripts"), 1);
+    }
+
+    #[test]
+    fn schema_22_upgrade_preserves_legacy_rows_without_phase5_promotion() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("schema22.duckdb");
+        let mut connection = Connection::open(&path).unwrap();
+        assert_eq!(apply_migrations_through(&mut connection, 22).unwrap(), 22);
+        let now: DateTime<Utc> = "2026-11-28T00:00:00Z".parse().unwrap();
+        connection
+            .execute(
+                "INSERT INTO nip_sources
+                    (source_id, source_type, display_name, locator, rights_status, rights_statement)
+                 VALUES ('legacy-source', 'local_document', 'Legacy fixture', NULL,
+                         'approved', 'fixture-only rights')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO nip_events
+                    (event_id, source_id, source_native_id, canonical_url, content_hash,
+                     content_text, published_at, source_updated_at, captured_at, ingested_at,
+                     revision_of, schema_version)
+                 VALUES ('legacy-event', 'legacy-source', 'legacy-native', NULL, ?, ?, NULL,
+                         NULL, ?, ?, NULL, 1)",
+                params![hex_digest(b"legacy body"), "legacy body", now, now],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO nip_claims
+                    (claim_id, claim_text, speaker_or_author, confidence_millis,
+                     extraction_run_id, provider, model, prompt_version, extracted_at)
+                 VALUES ('legacy-claim', 'Legacy claim text', NULL, 700,
+                         'legacy-extraction', 'fixture', 'fixture-model', 'v0', ?)",
+                params![now],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO nip_claim_evidence
+                    (claim_id, event_id, quote, start_offset, end_offset)
+                 VALUES ('legacy-claim', 'legacy-event', 'legacy body', 0, 11)",
+                [],
+            )
+            .unwrap();
+        connection.execute_batch("CHECKPOINT").unwrap();
+        drop(connection);
+
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.schema_version(), 23);
+        let event = store.event("legacy-event").unwrap().unwrap();
+        assert_eq!(event.content_text.as_deref(), Some("legacy body"));
+        let claim = store
+            .claims()
+            .unwrap()
+            .into_iter()
+            .find(|claim| claim.claim_id == "legacy-claim")
+            .unwrap();
+        assert_eq!(claim.claim_text, "Legacy claim text");
+        let (quote, payload_kind, payload_hash): (String, Option<String>, Option<String>) = store
+            .connection
+            .query_row(
+                "SELECT quote, payload_kind, payload_hash FROM nip_claim_evidence
+                 WHERE claim_id = 'legacy-claim'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(quote, "legacy body");
+        assert_eq!(payload_kind, None);
+        assert_eq!(payload_hash, None);
+        assert_eq!(table_count(&store, "nip_claim_annotations"), 0);
+        assert_eq!(table_count(&store, "nip_entity_mentions"), 0);
+        assert_eq!(table_count(&store, "nip_entities"), 0);
+    }
+
+    #[test]
+    fn derivation_only_replay_fingerprints_manifest_and_producer_metadata() {
+        let (_temp, mut store, now) = acquisition_fixture_store();
+        let base = acquisition_fixture_batch(now, "Episode notes.\n\nA fixture summary.");
+        ingest_fixture(&mut store, &base, now).unwrap();
+        let mut batch = phase5_v2_fixture_batch(now, "phase5-run-1", "Apex", "guidance");
+        let first = derive_fixture(&mut store, &batch, now).unwrap();
+        assert!(!first.replay);
+        assert!(derive_fixture(&mut store, &batch, now).unwrap().replay);
+
+        let mut changed_manifest = batch.clone();
+        changed_manifest.items[0]
+            .derivation_manifest
+            .as_mut()
+            .unwrap()
+            .claim_windows_covered += 1;
+        assert!(matches!(
+            derive_fixture(&mut store, &changed_manifest, now),
+            Err(StoreError::DerivationRunConflict)
+        ));
+
+        let mut changed_producer = batch.clone();
+        changed_producer.producer.version = "fixture-0.2".into();
+        assert!(matches!(
+            derive_fixture(&mut store, &changed_producer, now),
+            Err(StoreError::DerivationRunConflict)
+        ));
+
+        batch.run_id = "phase5-run-2".into();
+        batch.items[0].claims[0].object = "outlook".into();
+        batch.items[0].claims[0].claim_text = Some("Apex raises outlook".into());
+        batch.items[0]
+            .derivation_manifest
+            .as_mut()
+            .unwrap()
+            .output_hash = hex_digest(
+            &serde_json::to_vec(&(&batch.items[0].claims, &batch.items[0].entities)).unwrap(),
+        );
+        let second = derive_fixture(&mut store, &batch, now).unwrap();
+        assert!(!second.replay);
+        assert_ne!(first.derivation_run_id, second.derivation_run_id);
+        assert_eq!(table_count(&store, "nip_derivation_runs"), 2);
+        assert_eq!(table_count(&store, "nip_claim_annotations"), 2);
+    }
+
+    #[test]
+    fn late_role_link_failure_rolls_back_derivation_only_write() {
+        let (_temp, mut store, now) = acquisition_fixture_store();
+        let base = acquisition_fixture_batch(now, "Episode notes.\n\nA fixture summary.");
+        ingest_fixture(&mut store, &base, now).unwrap();
+        let batch = phase5_v2_fixture_batch(now, "phase5-rollback", "Apex", "guidance");
+        let event_identity = "fixture-source\0fixture-site\0episode-01";
+        let event_id = format!("event-{}", &hex_digest(event_identity.as_bytes())[..32]);
+        let run_identity = format!("fixture-site\0{event_id}\0{}", batch.run_id);
+        let derivation_run_id =
+            format!("derivation-{}", &hex_digest(run_identity.as_bytes())[..32]);
+        let claim_identity = format!("{derivation_run_id}\0claim-1");
+        let colliding_claim_id =
+            format!("nip-claim-{}", &hex_digest(claim_identity.as_bytes())[..32]);
+        store
+            .connection
+            .execute(
+                "INSERT INTO nip_claims
+                    (claim_id, claim_text, confidence_millis, extraction_run_id,
+                     provider, model, prompt_version, extracted_at)
+                 VALUES (?, 'fixture collision', 0, 'fixture', 'fixture', 'fixture', 'fixture', ?)",
+                params![colliding_claim_id, now],
+            )
+            .unwrap();
+        assert!(derive_fixture(&mut store, &batch, now).is_err());
+        assert_eq!(table_count(&store, "nip_derivation_runs"), 0);
+        assert_eq!(table_count(&store, "nip_claim_annotations"), 0);
+        assert_eq!(table_count(&store, "nip_entity_mentions"), 0);
+        assert_eq!(table_count(&store, "nip_claim_entity_links"), 0);
+        assert_eq!(table_count(&store, "nip_claims"), 1);
+        assert_eq!(table_count(&store, "nip_events"), 1);
+        assert_eq!(table_count(&store, "nip_acquisition_items"), 1);
+    }
+
+    #[test]
+    fn phase5_reviews_relations_resolution_links_and_feature_snapshots_are_traceable() {
+        let (_temp, mut store, now) = acquisition_fixture_store();
+        let base = acquisition_fixture_batch(now, "Episode notes.\n\nA fixture summary.");
+        ingest_fixture(&mut store, &base, now).unwrap();
+        let batch_one =
+            phase5_v2_fixture_batch(now, "phase5-linked-1", " Apex  Inc. ", "Raises guidance");
+        let first = derive_fixture(&mut store, &batch_one, now).unwrap();
+        let first_claim = store
+            .list_nip_claim_annotations(20, 0, None)
+            .unwrap()
+            .into_iter()
+            .find(|claim| claim.derivation_run_id == first.derivation_run_id)
+            .unwrap();
+        let first_mention = store.list_nip_entity_mentions(20, false).unwrap()[0].clone();
+        assert_eq!(first_mention.evidence[0].quote, "Fixture transcript");
+        let outgoing = store
+            .list_nip_claim_entity_links(Some(&first_claim.claim_id), None, 20, 0)
+            .unwrap();
+        let incoming = store
+            .list_nip_claim_entity_links(None, Some(&first_mention.mention_id), 20, 0)
+            .unwrap();
+        assert_eq!(outgoing, incoming);
+        assert_eq!(outgoing[0].role, "subject");
+
+        let entity = store
+            .review_entity_mention(
+                &first_mention.mention_id,
+                None,
+                Some("company"),
+                Some("Apex Inc."),
+                "resolve",
+                "fixture-resolver",
+                "fixture identity",
+            )
+            .unwrap()
+            .unwrap();
+        let feature_start = now - chrono::Duration::days(1);
+        let feature_end = now + chrono::Duration::days(1);
+        let before_review = Utc::now();
+        let before_review_snapshot = store
+            .compute_nip_feature_snapshot(
+                &entity.entity_id,
+                feature_start,
+                feature_end,
+                before_review,
+            )
+            .unwrap();
+        assert_eq!(before_review_snapshot.claim_count, 0);
+        store
+            .review_nip_claim(
+                &first_claim.claim_id,
+                "accepted",
+                "fixture-reviewer",
+                Some("verified"),
+            )
+            .unwrap();
+        let review = store
+            .list_nip_claim_review_history(&first_claim.claim_id, 10, 0)
+            .unwrap()[0]
+            .clone();
+        assert!(review.known_at >= before_review);
+        let after_review = Utc::now() + chrono::Duration::seconds(1);
+        let after_review_snapshot = store
+            .compute_nip_feature_snapshot(
+                &entity.entity_id,
+                feature_start,
+                feature_end,
+                after_review,
+            )
+            .unwrap();
+        assert_eq!(after_review_snapshot.claim_count, 1);
+        let batch_two =
+            phase5_v2_fixture_batch(now, "phase5-linked-2", "apex inc.", "raises   guidance");
+        let second = derive_fixture(&mut store, &batch_two, now).unwrap();
+        let second_claim = store
+            .list_nip_claim_annotations(20, 0, None)
+            .unwrap()
+            .into_iter()
+            .find(|claim| claim.derivation_run_id == second.derivation_run_id)
+            .unwrap();
+        let second_mention = store
+            .list_nip_entity_mentions(20, false)
+            .unwrap()
+            .into_iter()
+            .find(|mention| mention.mention_id != first_mention.mention_id)
+            .unwrap();
+        store
+            .review_nip_claim(
+                &second_claim.claim_id,
+                "accepted",
+                "fixture-reviewer",
+                Some("verified"),
+            )
+            .unwrap();
+        let before_second_resolution = Utc::now();
+        let before_second_resolution_snapshot = store
+            .compute_nip_feature_snapshot(
+                &entity.entity_id,
+                feature_start,
+                feature_end,
+                before_second_resolution,
+            )
+            .unwrap();
+        assert_eq!(before_second_resolution_snapshot.claim_count, 1);
+        store
+            .review_entity_mention(
+                &second_mention.mention_id,
+                Some(&entity.entity_id),
+                None,
+                None,
+                "resolve",
+                "fixture-resolver",
+                "same reviewed company",
+            )
+            .unwrap();
+        let resolution = store
+            .list_nip_entity_resolution_history(&second_mention.mention_id, 10, 0)
+            .unwrap()[0]
+            .clone();
+        assert!(resolution.known_at >= before_second_resolution);
+        assert_eq!(
+            resolution.entity_id.as_deref(),
+            Some(entity.entity_id.as_str())
+        );
+        let after_second_resolution = Utc::now() + chrono::Duration::seconds(1);
+        let after_second_resolution_snapshot = store
+            .compute_nip_feature_snapshot(
+                &entity.entity_id,
+                feature_start,
+                feature_end,
+                after_second_resolution,
+            )
+            .unwrap();
+        assert_eq!(after_second_resolution_snapshot.claim_count, 2);
+
+        let relation = store
+            .add_nip_claim_relation(
+                &first_claim.claim_id,
+                &second_claim.claim_id,
+                "restates",
+                "fixture relation evidence",
+                "fixture-reviewer",
+            )
+            .unwrap();
+        assert!(relation.known_at >= before_second_resolution);
+        assert_eq!(
+            store
+                .list_nip_claim_relations(&second_claim.claim_id, 20)
+                .unwrap()[0]
+                .relation_id,
+            relation.relation_id
+        );
+
+        let as_of = Utc::now() + chrono::Duration::seconds(1);
+        store
+            .connection
+            .execute(
+                "INSERT INTO nip_feature_definitions
+                    (feature_key, definition_version, description, unit, formula_version,
+                     formula_description, minimum_observations, registered_at)
+                 VALUES ('nip.future_fixture', 1, 'not yet registered', 'count', 'v1',
+                         'future test definition', 0, ?)",
+                params![as_of + chrono::Duration::hours(1)],
+            )
+            .unwrap();
+        let snapshot = store
+            .compute_nip_feature_snapshot(
+                &entity.entity_id,
+                now - chrono::Duration::days(1),
+                now + chrono::Duration::days(1),
+                as_of,
+            )
+            .unwrap();
+        assert_eq!(snapshot.claim_count, 2);
+        assert_eq!(snapshot.source_count, 1);
+        let observation = snapshot
+            .features
+            .iter()
+            .find(|feature| feature.feature_key == "nip.claim_observation_count")
+            .unwrap();
+        assert_eq!(observation.value_numeric, Some(1.0));
+        assert!(!snapshot
+            .features
+            .iter()
+            .any(|feature| feature.feature_key == "nip.future_fixture"));
+        let replay = store
+            .compute_nip_feature_snapshot(
+                &entity.entity_id,
+                now - chrono::Duration::days(1),
+                now + chrono::Duration::days(1),
+                as_of,
+            )
+            .unwrap();
+        assert_eq!(replay.feature_run_id, snapshot.feature_run_id);
+        assert_eq!(replay.known_at, snapshot.known_at);
+        assert_eq!(replay.input_hash, snapshot.input_hash);
+        assert_eq!(
+            store
+                .list_nip_feature_snapshots(&entity.entity_id, 20)
+                .unwrap()
+                .into_iter()
+                .find(|record| record.feature_run_id == snapshot.feature_run_id)
+                .unwrap()
+                .features,
+            snapshot.features
+        );
     }
 }

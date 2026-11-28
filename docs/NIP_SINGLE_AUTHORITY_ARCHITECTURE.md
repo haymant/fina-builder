@@ -1,6 +1,6 @@
 # NIP Single-Authority Architecture and Execution Plan
 
-**Status:** Phase 0 audit, Phase 1 contract foundation, Phase 2A acquisition-boundary work, Phase 2B worker supervision, and the Phase 3 source-binding ownership slice are implemented and published. Phase 4's single-item, explicitly bound, rights-checked canonical event/transcript ingestion path is implemented and verified; worker RPC remains outside this slice, and Phase 5 has not started.
+**Status:** Phases 0–4 are implemented and published. Phase 5's additive schema-23 contract, derivation persistence, review/resolution/link APIs, and descriptive feature snapshots are implemented in the working tree. Serial Rust tests and targeted rustfmt checks pass; full Clippy is unverified because the native DuckDB archive build exhausted sandbox disk. Final diff checks and publication remain pending. NIP remains a logical authority while scraper legacy files and the TradeAC lake stay separate and untouched.
 
 ## Executive decision
 
@@ -187,6 +187,18 @@ suggestions. Tests used temporary fixture databases only; no user or legacy data
 - Feature values use registered NIP keys and preserve as-of/valid-time/live/reconstructed/run/model metadata.
 - Duplicate/changed claim versions and feature replay are idempotent or rejected under explicit tested policies.
 
+### Phase 5 — Canonical claims, entities, and descriptive features
+
+**Status:** Implemented in the working tree; serial Rust tests and targeted rustfmt checks pass. Full Clippy is unverified because the native DuckDB archive build exhausted sandbox disk; final diff checks and commit/push remain pending.
+
+**Delivered:** `AcquisitionBatch` v2 adds an explicit derivation manifest, typed optional claim semantics, and role-bearing references to evidence-backed worker entity mentions. Migration 23 is additive. The NIP store appends derivation runs, claim annotations, exact evidence payload metadata, NIP review history, entity mentions, role links, explicit entity resolution/rejection history, claim relations, and deterministic registered descriptive feature snapshots. Initial item ingestion and derivation-only reprocessing are atomic; unchanged replays are idempotent and changed output under the same derivation identity conflicts. Store-generated `known_at` governs derivations, reviews, relations, resolutions, and feature snapshots. Feature snapshots use independent `as_of` cutoffs for claim derivation, latest review, entity resolution, and feature-definition registration; same-source/event normalized facts are deduplicated.
+
+**Data boundary:** The user chose to preserve old data and skip migration/conversion. The schema-22 preservation fixture demonstrates that an existing event, legacy claim, and evidence row remain readable; new nullable evidence metadata stays null, and no Phase 5 annotation or entity is auto-created for that legacy claim. Phase 5 does not read/import/backfill/reconcile/rewrite/delete scraper Parquet/SQLite/YAML/transcripts, mutate TradeAC's `TAC_LAKE_DIR`, or export features to qlib. The only migration is the additive NIP schema upgrade in the NIP DuckDB.
+
+**Deliberate limits:** Producer canonical IDs and tickers remain hints. Resolution is explicit and reviewer-audited; no auto-match, ticker-to-instrument mapping, alias authoring/matching, merge/split workflow, worker-tool RPC, UI route change, feature-matrix export, or predictive/trading-signal claim is included. The migration's alias table is reserved for a later identity-policy slice, not presented as an active API.
+
+**Verification:** Rust 1.100 serial tests passed: 11 `nip-domain`, 137 `nip-engine` library, 14 `nip-engine` binary, and 47 `nip-store` tests; 0 failed. MCP target tests were included. Targeted rustfmt checks passed for the four modified Rust sources. Full Clippy did not complete because the native DuckDB archive build failed with `No space left on device` at 98% disk usage, so Clippy is unverified. A browser E2E was not applicable because Phase 5 adds no UI. Diff hygiene and commit/push remain. See the [Phase 5 contract](NIP_PHASE5_CONTRACT.md), [implementation plan](NIP_PHASE5_ARCHITECTURE_PLAN.md), and [Phase 5 handoff](NIP_PHASE5_HANDOFF.md).
+
 ### Phase 6 — One NIP-facing UI and tool surface
 
 **Work:** Route Narrative components and external agent tools through NIP APIs. Show worker jobs/status/results as NIP-owned workflow state. Remove product-facing dual-registry/dual-schedule presentations and direct scraper writes after equivalent NIP operations exist. Preserve compatibility reads behind NIP.
@@ -219,4 +231,4 @@ suggestions. Tests used temporary fixture databases only; no user or legacy data
 
 ## Phase-gate handoff prompt
 
-> **Next phase: Phase 5 — Canonical claims, entities, and features.** First define NIP-owned entity mention/resolution, claim revision/supersession, and feature-definition/value contracts. Reuse the Phase 4 single-item event and separate acquisition transcript as immutable evidence; preserve exact Unicode quote offsets, tier/review, run, as-of/valid-time and live/reconstructed provenance. Do not accept worker feature keys by inference, bulk-import the worker lake, or migrate/rewrite/delete data. Commit and push Phase 5 at its exit, then deliver a handoff before any later phase.
+> **Next phase: Phase 6 — One NIP-facing UI and tool surface.** Route narrative product journeys through the NIP APIs for retained evidence and Phase 5 claim/entity/feature records. Preserve the explicit review and resolution gates; do not create an automatic worker write path or infer ticker/instrument mappings. Phase 5 has not authorized legacy migration/conversion, scraper-lake mutation, TradeAC writes, qlib export, or predictive-signal claims. Review the Phase 5 handoff before proceeding.

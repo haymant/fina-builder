@@ -217,6 +217,10 @@ pub struct AcquisitionItem {
     /// Values refer to NIP-registered feature keys. The worker cannot register
     /// or redefine a feature through an ingestion result.
     pub features: Vec<AcquisitionFeatureValue>,
+    /// Required by contract v2; omitted from v1 serialization so exact v1
+    /// payload hashes remain stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derivation_manifest: Option<AcquisitionDerivationManifest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,6 +251,65 @@ pub struct AcquisitionTranscript {
     pub transcribed_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AcquisitionClaimType {
+    Assertion,
+    Forecast,
+    Commitment,
+    Causal,
+    Comparative,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AcquisitionPolarity {
+    Positive,
+    Neutral,
+    Negative,
+    Mixed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AcquisitionEntityRole {
+    Subject,
+    Object,
+    Speaker,
+    Author,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcquisitionClaimEntityRef {
+    pub worker_entity_id: String,
+    pub role: AcquisitionEntityRole,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AcquisitionCompleteness {
+    Complete,
+    Partial,
+    NotRequested,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcquisitionDerivationManifest {
+    pub claim_status: AcquisitionCompleteness,
+    pub entity_status: AcquisitionCompleteness,
+    pub claim_count: u32,
+    pub entity_count: u32,
+    pub claim_windows_covered: u32,
+    pub entity_windows_covered: u32,
+    /// SHA-256 of canonical JSON serialization of the item claims and entities.
+    pub output_hash: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AcquisitionClaim {
@@ -258,6 +321,27 @@ pub struct AcquisitionClaim {
     pub review_status: ClaimReviewStatus,
     pub extraction: AcquisitionExtractionProvenance,
     pub evidence: AcquisitionEvidenceSpan,
+    /// Human-readable producer paraphrase; never a substitute for evidence.quote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_type: Option<AcquisitionClaimType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub polarity: Option<AcquisitionPolarity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certainty_millis: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub horizon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnitude_millis: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_to: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entity_refs: Vec<AcquisitionClaimEntityRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,7 +402,7 @@ impl AcquisitionBatch {
     /// persistence layer. Source existence, hashes, rights, and feature-key
     /// registration are store-level checks and must not be inferred here.
     pub fn validate(&self) -> Result<(), String> {
-        if self.contract_version != 1 {
+        if !matches!(self.contract_version, 1 | 2) {
             return Err(format!(
                 "unsupported acquisition contract version {}",
                 self.contract_version
@@ -362,6 +446,14 @@ impl AcquisitionBatch {
                     item.source_id.as_str()
                 ));
             }
+            if (self.contract_version == 1 && item.derivation_manifest.is_some())
+                || (self.contract_version == 2 && item.derivation_manifest.is_none())
+            {
+                return Err(format!(
+                    "item {} must provide a derivation manifest for its contract version",
+                    item.worker_item_id
+                ));
+            }
             if item
                 .valid_to
                 .as_ref()
@@ -400,6 +492,65 @@ impl AcquisitionBatch {
                         item.worker_item_id, claim.worker_claim_id
                     ));
                 }
+                if self.contract_version == 1
+                    && (claim.claim_text.is_some()
+                        || claim.claim_type.is_some()
+                        || claim.polarity.is_some()
+                        || claim.certainty_millis.is_some()
+                        || claim.horizon.is_some()
+                        || claim.magnitude_millis.is_some()
+                        || claim.attribution.is_some()
+                        || claim.valid_from.is_some()
+                        || claim.valid_to.is_some()
+                        || !claim.entity_refs.is_empty())
+                {
+                    return Err(format!(
+                        "item {} uses v2 claim fields in contract v1",
+                        item.worker_item_id
+                    ));
+                }
+                if self.contract_version == 2
+                    && claim
+                        .claim_text
+                        .as_deref()
+                        .is_none_or(|text| text.trim().is_empty())
+                {
+                    return Err(format!(
+                        "claim {} requires producer claim_text in contract v2",
+                        claim.worker_claim_id
+                    ));
+                }
+                if claim.certainty_millis.is_some_and(|value| value > 1000)
+                    || claim
+                        .valid_from
+                        .as_ref()
+                        .zip(claim.valid_to.as_ref())
+                        .is_some_and(|(start, end)| end <= start)
+                    || claim
+                        .horizon
+                        .as_deref()
+                        .is_some_and(|value| value.len() > 128)
+                    || claim
+                        .attribution
+                        .as_deref()
+                        .is_some_and(|value| value.len() > 512)
+                {
+                    return Err(format!(
+                        "claim {} has invalid typed fields",
+                        claim.worker_claim_id
+                    ));
+                }
+                let mut claim_refs = std::collections::HashSet::new();
+                for reference in &claim.entity_refs {
+                    if reference.worker_entity_id.trim().is_empty()
+                        || !claim_refs.insert((reference.worker_entity_id.as_str(), reference.role))
+                    {
+                        return Err(format!(
+                            "claim {} has an invalid or duplicate entity reference",
+                            claim.worker_claim_id
+                        ));
+                    }
+                }
                 validate_acquisition_provenance(&claim.extraction)?;
                 validate_acquisition_span(item, &claim.evidence)?;
             }
@@ -431,6 +582,41 @@ impl AcquisitionBatch {
                 validate_acquisition_provenance(&entity.extraction)?;
                 for span in &entity.evidence {
                     validate_acquisition_span(item, span)?;
+                }
+            }
+
+            for claim in &item.claims {
+                for reference in &claim.entity_refs {
+                    if !entity_ids.contains(reference.worker_entity_id.as_str()) {
+                        return Err(format!(
+                            "claim {} references missing worker entity {}",
+                            claim.worker_claim_id, reference.worker_entity_id
+                        ));
+                    }
+                }
+            }
+
+            if let Some(manifest) = &item.derivation_manifest {
+                if manifest.claim_count as usize != item.claims.len()
+                    || manifest.entity_count as usize != item.entities.len()
+                    || manifest.output_hash.len() != 64
+                    || !manifest
+                        .output_hash
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit())
+                    || (manifest.claim_status == AcquisitionCompleteness::NotRequested
+                        && (manifest.claim_count != 0 || manifest.claim_windows_covered != 0))
+                    || (manifest.entity_status == AcquisitionCompleteness::NotRequested
+                        && (manifest.entity_count != 0 || manifest.entity_windows_covered != 0))
+                    || (manifest.claim_status == AcquisitionCompleteness::Failed
+                        && manifest.claim_count != 0)
+                    || (manifest.entity_status == AcquisitionCompleteness::Failed
+                        && manifest.entity_count != 0)
+                {
+                    return Err(format!(
+                        "item {} has inconsistent derivation coverage metadata",
+                        item.worker_item_id
+                    ));
                 }
             }
 
@@ -2214,7 +2400,7 @@ mod tests {
             model_version: "1".into(),
             prompt_version: Some("claims-v1".into()),
             confidence_millis: Some(900),
-            extracted_at: at.clone(),
+            extracted_at: at,
         };
         AcquisitionBatch {
             contract_version: 1,
@@ -2223,8 +2409,8 @@ mod tests {
                 version: "0.1.0".into(),
             },
             run_id: "run-1".into(),
-            started_at: at.clone(),
-            completed_at: at.clone(),
+            started_at: at,
+            completed_at: at,
             items: vec![AcquisitionItem {
                 source_id: SourceId::new("nip-source-1").unwrap(),
                 worker_source_key: "podcast:123".into(),
@@ -2235,8 +2421,8 @@ mod tests {
                 content_text: text.into(),
                 content_hash: "sha256:test-item".into(),
                 published_at: None,
-                ingested_at: at.clone(),
-                valid_from: at.clone(),
+                ingested_at: at,
+                valid_from: at,
                 valid_to: None,
                 availability: AcquisitionAvailability::Live,
                 transcript: None,
@@ -2254,6 +2440,16 @@ mod tests {
                         start_offset: start_chars,
                         end_offset: end_chars,
                     },
+                    claim_text: None,
+                    claim_type: None,
+                    polarity: None,
+                    certainty_millis: None,
+                    horizon: None,
+                    magnitude_millis: None,
+                    attribution: None,
+                    valid_from: None,
+                    valid_to: None,
+                    entity_refs: Vec::new(),
                 }],
                 entities: vec![AcquisitionEntity {
                     worker_entity_id: "entity-1".into(),
@@ -2272,12 +2468,13 @@ mod tests {
                 features: vec![AcquisitionFeatureValue {
                     feature_key: "narrative.sentiment".into(),
                     value: serde_json::json!({"score": 0.42}),
-                    as_of: at.clone(),
+                    as_of: at,
                     valid_from: at,
                     valid_to: None,
                     availability: AcquisitionAvailability::Live,
                     extraction: provenance,
                 }],
+                derivation_manifest: None,
             }],
         }
     }
@@ -2301,6 +2498,8 @@ mod tests {
             json["items"][0]["features"][0]["feature_key"],
             "narrative.sentiment"
         );
+        assert!(json["items"][0].get("derivation_manifest").is_none());
+        assert!(json["items"][0]["claims"][0].get("claim_text").is_none());
     }
 
     #[test]
@@ -2318,9 +2517,59 @@ mod tests {
     }
 
     #[test]
-    fn acquisition_contract_rejects_unsupported_versions_duplicate_ids_and_unknown_fields() {
+    fn acquisition_contract_v2_requires_manifest_text_and_resolved_worker_references() {
         let mut batch = acquisition_test_batch();
         batch.contract_version = 2;
+        let item = &mut batch.items[0];
+        let claim = &mut item.claims[0];
+        claim.claim_text = Some("Apex improves margins".into());
+        claim.claim_type = Some(AcquisitionClaimType::Assertion);
+        claim.polarity = Some(AcquisitionPolarity::Positive);
+        claim.entity_refs = vec![AcquisitionClaimEntityRef {
+            worker_entity_id: "entity-1".into(),
+            role: AcquisitionEntityRole::Subject,
+        }];
+        item.derivation_manifest = Some(AcquisitionDerivationManifest {
+            claim_status: AcquisitionCompleteness::Complete,
+            entity_status: AcquisitionCompleteness::Complete,
+            claim_count: 1,
+            entity_count: 1,
+            claim_windows_covered: 1,
+            entity_windows_covered: 1,
+            output_hash: "a".repeat(64),
+        });
+        batch.validate().unwrap();
+
+        let mut missing_reference = batch.clone();
+        missing_reference.items[0].claims[0].entity_refs[0].worker_entity_id = "missing".into();
+        assert!(missing_reference
+            .validate()
+            .unwrap_err()
+            .contains("references missing worker entity"));
+
+        let mut empty_text = batch.clone();
+        empty_text.items[0].claims[0].claim_text = Some("  ".into());
+        assert!(empty_text
+            .validate()
+            .unwrap_err()
+            .contains("requires producer claim_text"));
+
+        let mut wrong_count = batch;
+        wrong_count.items[0]
+            .derivation_manifest
+            .as_mut()
+            .unwrap()
+            .claim_count = 0;
+        assert!(wrong_count
+            .validate()
+            .unwrap_err()
+            .contains("inconsistent derivation coverage"));
+    }
+
+    #[test]
+    fn acquisition_contract_rejects_unsupported_versions_duplicate_ids_and_unknown_fields() {
+        let mut batch = acquisition_test_batch();
+        batch.contract_version = 3;
         assert!(batch
             .validate()
             .unwrap_err()

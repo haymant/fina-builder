@@ -15,11 +15,10 @@ use std::{
 use chrono::{DateTime, Utc};
 use nip_domain::{
     AcquisitionBatch, AgentClaimDraft, AgentEntityDraft, AgentNarrativeGraphDraft,
-    BacktestEvidenceRecord,
-    EtfMapping, EventSearchQuery, LocalEventImport, PodcastEpisode, PodcastSubscriptionState,
-    SourceId, SourceKind, SourceState, SourceUpdate, ThesisRecord, TranscriptRecord, VideoAsset,
-    VideoAssetLineage, VideoAssetUpstreamKind, VideoAudioCue, VideoJob, VideoNarrative,
-    VideoTimeline, VideoVisualSourceKind, VideoVisualSpec, VideoWorkflow,
+    BacktestEvidenceRecord, EtfMapping, EventSearchQuery, LocalEventImport, PodcastEpisode,
+    PodcastSubscriptionState, SourceId, SourceKind, SourceState, SourceUpdate, ThesisRecord,
+    TranscriptRecord, VideoAsset, VideoAssetLineage, VideoAssetUpstreamKind, VideoAudioCue,
+    VideoJob, VideoNarrative, VideoTimeline, VideoVisualSourceKind, VideoVisualSpec, VideoWorkflow,
 };
 use nip_engine::{
     acquisition::AcquisitionSupervisor,
@@ -109,6 +108,126 @@ struct IngestAcquisitionItemParams {
 #[serde(deny_unknown_fields)]
 struct AcquisitionTranscriptParams {
     event_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ListNipClaimsParams {
+    #[serde(default)]
+    limit: Option<u32>,
+    #[serde(default)]
+    offset: Option<u32>,
+    #[serde(default)]
+    review_status: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ReviewNipClaimParams {
+    claim_id: String,
+    review_status: String,
+    reviewer: String,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct NipClaimReviewHistoryParams {
+    claim_id: String,
+    #[serde(default)]
+    limit: Option<u32>,
+    #[serde(default)]
+    offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct NipClaimRelationParams {
+    source_claim_id: String,
+    target_claim_id: String,
+    relation_kind: String,
+    provenance: String,
+    producer: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct NipClaimRelationListParams {
+    claim_id: String,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct NipClaimEntityLinksParams {
+    #[serde(default)]
+    claim_id: Option<String>,
+    #[serde(default)]
+    mention_id: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+    #[serde(default)]
+    offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct NipEntityMentionListParams {
+    #[serde(default)]
+    limit: Option<u32>,
+    #[serde(default)]
+    unresolved_only: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct NipEntityResolutionHistoryParams {
+    mention_id: String,
+    #[serde(default)]
+    limit: Option<u32>,
+    #[serde(default)]
+    offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct NipEntityListParams {
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ReviewNipEntityMentionParams {
+    mention_id: String,
+    decision_kind: String,
+    #[serde(default)]
+    entity_id: Option<String>,
+    #[serde(default)]
+    entity_kind: Option<String>,
+    #[serde(default)]
+    display_name: Option<String>,
+    reviewer: String,
+    reason: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct NipFeatureSnapshotParams {
+    entity_id: String,
+    window_start: String,
+    window_end: String,
+    as_of: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct NipFeatureSnapshotListParams {
+    entity_id: String,
+    #[serde(default)]
+    limit: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1773,7 +1892,9 @@ impl NipMcp {
         }
     }
 
-    #[tool(description = "Report the NIP-owned acquisition worker lifecycle state. Legacy scraper acquisition writes are not exposed here.")]
+    #[tool(
+        description = "Report the NIP-owned acquisition worker lifecycle state. Legacy scraper acquisition writes are not exposed here."
+    )]
     fn acquisition_worker_status(&self) -> CallToolResult {
         structured_success(serde_json::to_value(self.acquisition_worker.status()).unwrap())
     }
@@ -2199,7 +2320,7 @@ impl NipMcp {
     }
 
     #[tool(
-        description = "Submit exactly one typed fina-scraper item to NIP. Requires an explicit current worker/source binding and approved NIP rights; validates hashes, URLs, timestamps and replay identity, then atomically stores the canonical event and optional transcript. Claims, entities and features are not accepted in Phase 4."
+        description = "Submit exactly one typed fina-scraper item to NIP. Requires an explicit current worker/source binding and approved NIP rights; validates hashes, URLs, timestamps and replay identity, then atomically stores the canonical event, optional transcript, evidence-backed claim derivation and unresolved entity mentions. NIP review state remains separate from producer extraction status; unregistered worker features are rejected."
     )]
     fn ingest_acquisition_item(
         &self,
@@ -2218,6 +2339,28 @@ impl NipMcp {
                 Ok(result) => structured_success(serde_json::to_value(result).unwrap()),
                 Err(error) => structured_error("acquisition_ingest_rejected", error.to_string()),
             },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Reprocess claims and entity mentions for one already-retained worker item without rewriting its event or transcript. Requires the current explicit source binding, approved rights, and the exact original content hash; a new run ID appends an immutable derivation, exact replay is a no-op, and changed output under the same run ID is rejected."
+    )]
+    fn derive_acquisition_item(
+        &self,
+        Parameters(params): Parameters<IngestAcquisitionItemParams>,
+    ) -> CallToolResult {
+        let batch = match serde_json::from_value::<AcquisitionBatch>(params.batch) {
+            Ok(batch) => batch,
+            Err(error) => return structured_error("invalid_acquisition_batch", error.to_string()),
+        };
+        match self.service.lock() {
+            Ok(mut service) => {
+                match service.derive_acquisition_batch(&params.worker_site_id, &batch) {
+                    Ok(result) => structured_success(serde_json::to_value(result).unwrap()),
+                    Err(error) => structured_error("derivation_rejected", error.to_string()),
+                }
+            }
             Err(_) => structured_error("internal", "NIP service lock failed"),
         }
     }
@@ -2862,6 +3005,266 @@ impl NipMcp {
         {
             Ok(claims) => structured_success(serde_json::to_value(claims).unwrap()),
             Err(error) => structured_error("storage_unavailable", error),
+        }
+    }
+
+    #[tool(
+        description = "List paginated typed NIP claim annotations with exact evidence references, worker lineage, producer extraction/review metadata, and the separate current NIP review state."
+    )]
+    fn list_nip_claim_annotations(
+        &self,
+        Parameters(params): Parameters<ListNipClaimsParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.nip_claim_annotations(
+                params.limit.unwrap_or(50),
+                params.offset.unwrap_or(0),
+                params.review_status.as_deref(),
+            ) {
+                Ok(records) => structured_success(serde_json::to_value(records).unwrap()),
+                Err(error) => structured_error("claim_read_failed", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Append a NIP review decision for a typed claim. Allowed states are accepted, rejected, and correction_requested; the producer's extraction tier/review status is never overwritten."
+    )]
+    fn review_nip_claim(
+        &self,
+        Parameters(params): Parameters<ReviewNipClaimParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(mut service) => match service.review_nip_claim(
+                &params.claim_id,
+                &params.review_status,
+                &params.reviewer,
+                params.reason.as_deref(),
+            ) {
+                Ok(()) => structured_success(
+                    json!({"claim_id": params.claim_id, "review_status": params.review_status, "appended": true}),
+                ),
+                Err(error) => structured_error("claim_review_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Read append-only NIP review decisions for one typed claim, newest first, with offset pagination."
+    )]
+    fn list_nip_claim_review_history(
+        &self,
+        Parameters(params): Parameters<NipClaimReviewHistoryParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.nip_claim_review_history(
+                &params.claim_id,
+                params.limit.unwrap_or(50),
+                params.offset.unwrap_or(0),
+            ) {
+                Ok(records) => structured_success(serde_json::to_value(records).unwrap()),
+                Err(error) => {
+                    structured_error("claim_review_history_read_failed", error.to_string())
+                }
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Append a provenance-bearing claim relation (restates, supports, contradicts, supersedes, or duplicate_candidate). Similar wording is never merged and source claim rows remain immutable."
+    )]
+    fn add_nip_claim_relation(
+        &self,
+        Parameters(params): Parameters<NipClaimRelationParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(mut service) => match service.add_nip_claim_relation(
+                &params.source_claim_id,
+                &params.target_claim_id,
+                &params.relation_kind,
+                &params.provenance,
+                &params.producer,
+            ) {
+                Ok(relation) => structured_success(serde_json::to_value(relation).unwrap()),
+                Err(error) => structured_error("claim_relation_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(description = "List claim relations touching one claim ID, newest first.")]
+    fn list_nip_claim_relations(
+        &self,
+        Parameters(params): Parameters<NipClaimRelationListParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => {
+                match service.nip_claim_relations(&params.claim_id, params.limit.unwrap_or(50)) {
+                    Ok(records) => structured_success(serde_json::to_value(records).unwrap()),
+                    Err(error) => structured_error("claim_relation_read_failed", error.to_string()),
+                }
+            }
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Read explicit role-bearing claim-to-mention links from either side. Supply exactly one claim_id or mention_id; entity resolution history is available separately."
+    )]
+    fn list_nip_claim_entity_links(
+        &self,
+        Parameters(params): Parameters<NipClaimEntityLinksParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.nip_claim_entity_links(
+                params.claim_id.as_deref(),
+                params.mention_id.as_deref(),
+                params.limit.unwrap_or(50),
+                params.offset.unwrap_or(0),
+            ) {
+                Ok(records) => structured_success(serde_json::to_value(records).unwrap()),
+                Err(error) => structured_error("claim_entity_link_read_failed", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "List evidence-backed entity mentions and their NIP resolution history; unresolved_only defaults to true."
+    )]
+    fn list_nip_entity_mentions(
+        &self,
+        Parameters(params): Parameters<NipEntityMentionListParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.nip_entity_mentions(
+                params.limit.unwrap_or(50),
+                params.unresolved_only.unwrap_or(true),
+            ) {
+                Ok(records) => structured_success(serde_json::to_value(records).unwrap()),
+                Err(error) => structured_error("entity_mention_read_failed", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Read append-only resolution/rejection decisions for one evidence-backed entity mention, newest first, with offset pagination."
+    )]
+    fn list_nip_entity_resolution_history(
+        &self,
+        Parameters(params): Parameters<NipEntityResolutionHistoryParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.nip_entity_resolution_history(
+                &params.mention_id,
+                params.limit.unwrap_or(50),
+                params.offset.unwrap_or(0),
+            ) {
+                Ok(records) => structured_success(serde_json::to_value(records).unwrap()),
+                Err(error) => {
+                    structured_error("entity_resolution_history_read_failed", error.to_string())
+                }
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "List NIP-owned canonical entities; worker canonical IDs and tickers remain untrusted hints."
+    )]
+    fn list_nip_entities(
+        &self,
+        Parameters(params): Parameters<NipEntityListParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service.nip_entities(params.limit.unwrap_or(100)) {
+                Ok(records) => structured_success(serde_json::to_value(records).unwrap()),
+                Err(error) => structured_error("entity_read_failed", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Explicitly resolve or reject one evidence-backed mention. To create a canonical entity, omit entity_id and provide entity_kind/display_name; otherwise entity_id must already exist. Every decision requires reviewer and reason, and history is append-only."
+    )]
+    fn review_nip_entity_mention(
+        &self,
+        Parameters(params): Parameters<ReviewNipEntityMentionParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(mut service) => match service.review_nip_entity_mention(
+                &params.mention_id,
+                params.entity_id.as_deref(),
+                params.entity_kind.as_deref(),
+                params.display_name.as_deref(),
+                &params.decision_kind,
+                &params.reviewer,
+                &params.reason,
+            ) {
+                Ok(entity) => structured_success(
+                    json!({"mention_id": params.mention_id, "entity": entity, "decision_kind": params.decision_kind}),
+                ),
+                Err(error) => structured_error("entity_resolution_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Compute or reuse a deterministic entity feature snapshot from NIP-accepted claims and reviewed entity links. All times must be ISO-8601 instants; only records known by as_of are included, and insufficient coverage remains explicit. These are descriptive corpus features, not trading signals."
+    )]
+    fn compute_nip_feature_snapshot(
+        &self,
+        Parameters(params): Parameters<NipFeatureSnapshotParams>,
+    ) -> CallToolResult {
+        let parse = |value: &str| {
+            value
+                .parse::<DateTime<Utc>>()
+                .map_err(|_| "timestamp must be ISO-8601".to_owned())
+        };
+        let start = match parse(&params.window_start) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        let end = match parse(&params.window_end) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        let as_of = match parse(&params.as_of) {
+            Ok(value) => value,
+            Err(error) => return structured_error("invalid_request", error),
+        };
+        match self.service.lock() {
+            Ok(mut service) => {
+                match service.compute_nip_feature_snapshot(&params.entity_id, start, end, as_of) {
+                    Ok(snapshot) => structured_success(serde_json::to_value(snapshot).unwrap()),
+                    Err(error) => structured_error("feature_snapshot_rejected", error.to_string()),
+                }
+            }
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Read recent deterministic feature snapshots for one canonical NIP entity."
+    )]
+    fn list_nip_feature_snapshots(
+        &self,
+        Parameters(params): Parameters<NipFeatureSnapshotListParams>,
+    ) -> CallToolResult {
+        match self.service.lock() {
+            Ok(service) => match service
+                .nip_feature_snapshots(&params.entity_id, params.limit.unwrap_or(50))
+            {
+                Ok(snapshots) => structured_success(serde_json::to_value(snapshots).unwrap()),
+                Err(error) => structured_error("feature_snapshot_read_failed", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
         }
     }
 
