@@ -1,6 +1,6 @@
 # NIP Single-Authority Architecture and Execution Plan
 
-**Status:** Phase 0 audit, Phase 1 contract foundation, Phase 2A acquisition-boundary work, and Phase 2B worker supervision are implemented in the working tree. Typed batch ingestion and canonical persistence remain later phases.
+**Status:** Phase 0 audit, Phase 1 contract foundation, Phase 2A acquisition-boundary work, Phase 2B worker supervision, and the Phase 3 source-binding ownership slice are implemented. Typed batch ingestion and canonical item persistence remain later phases.
 
 ## Executive decision
 
@@ -139,16 +139,12 @@ lifecycle, subscription state, poll interval, refresh, and manual trigger operat
 NIP APIs; the only process-lifetime scheduler is NIP's in-process scheduler, which reads NIP
 subscription state and never starts or mutates the scraper scheduler.
 
-**Data gate:** The implementation does not invent mappings for worker profiles that lack a
-canonical locator. The configured inventory must be reviewed and explicit NIP sources must be
-created and rights-approved before those profiles can become bound. Until that review is
-complete, the Phase 3 mapping criterion is intentionally reported as unresolved rather than
-silently inferred. Existing DuckDB rows and scraper YAML/schedules were not changed.
+**Data gate:** The implementation does not invent mappings for worker profiles that lack a canonical locator. A forward-only NIP migration now stores explicit binding review records in `nip_acquisition_bindings`; bind requires an observed worker profile, compatible `podcast` kind, exact canonical feed locator, an existing active NIP source, approved source rights, a non-empty reviewer, and explicit user confirmation. Unbind is also explicit and audited. Listing merges derived evidence with reviewed records and marks stale evidence unresolved rather than silently retaining authority. Existing DuckDB source rows and scraper YAML/schedules were not changed.
 
-**Focused verification:** Added temporary-root inventory coverage for worker profile and
-schedule metadata, plus binding tests for exact-feed binding and unresolved no-locator sites.
-`git diff --check` remains required; full Rust execution is subject to the sandbox Cargo
-1.75/edition-2024 limitation recorded under Phase 2B.
+**Focused verification:** Added persistent upsert/unbind review coverage, strict MCP bind/unbind
+parameters, and the binding ownership/error paths. `git diff --check` and the E2E launcher's
+Node syntax check pass. Full Rust execution remains blocked before compilation by the sandbox
+Cargo 1.75/edition-2024 limitation recorded under Phase 2B; `rustfmt` is unavailable.
 
 ### Phase 4 — Canonical item/event/transcript ingestion
 

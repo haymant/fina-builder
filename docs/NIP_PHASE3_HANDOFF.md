@@ -2,7 +2,7 @@
 
 ## Current checkpoint
 
-Phase 3 source-identity and schedule-ownership plumbing is implemented in the working tree. NIP remains the only product authority and the only process-lifetime scheduler. No commit or push had been made before this checkpoint.
+The Phase 3 explicit source-identity and schedule-ownership slice is complete. NIP remains the only product authority and the only process-lifetime scheduler. This handoff is the commit/push checkpoint; later Phase 4 ingestion work must not begin until this slice is accepted.
 
 The checkpoint includes:
 
@@ -15,6 +15,9 @@ The checkpoint includes:
 - NIP-owned source lifecycle, subscription state, poll interval, refresh, and manual trigger paths remain the only product schedule operations.
 - NIP's in-process scheduler remains the only process-lifetime scheduler; it reads NIP subscription state and does not start or mutate the scraper scheduler.
 - Temporary-root inventory coverage and exact-feed/unresolved binding tests.
+- Forward-only `nip_acquisition_bindings` persistence with reviewed `bound`/`unbound` state, reviewer, note, and timestamps.
+- Strict bind/unbind operations requiring explicit confirmation, reviewer identity, exact kind/locator evidence, active source state, and approved NIP rights.
+- Stale or missing-profile explicit records remain unresolved in the read-only binding report; they do not silently recreate or retain source authority.
 - Artifact review in `docs/PHASE3_ARTIFACT_READINESS.md`.
 
 ## Important verification limitation
@@ -31,17 +34,15 @@ Do not modify or stage these preserved local artifacts:
 
 Do not migrate, rewrite, copy, or delete existing NIP or scraper data. Existing scraper YAML, schedules, and storage remain compatibility/read-only material. TAC/R&D lake data remains separate from NIP.
 
-## Remaining Phase 3 data gate
+## Completed Phase 3 data gate
 
-The resolver intentionally reports worker profiles without canonical locators as unresolved. The next agent must not infer mappings from worker site IDs, display names, seed status, or scraper registration. To complete the data gate, add an explicit, rights-aware NIP binding workflow backed by canonical URL/type evidence, then review the current inventory and create only approved mappings. Ambiguous matches must remain unresolved.
+The resolver intentionally reports worker profiles without canonical locators as unresolved. The binding workflow does not infer mappings from worker site IDs, display names, seed status, or scraper registration. It persists only explicit, rights-reviewed mappings backed by canonical URL/type evidence; ambiguous and stale matches remain unresolved.
 
-The next agent should also verify whether a persistent binding table is warranted. If added, use a forward-only migration and preserve all existing rows; do not use scraper YAML or schedules as a write-through store. The binding API should support list, explicit bind, unbind/review, and audit metadata, while keeping legacy acquisition write tools outside the product surface.
+The persistent binding table is a NIP-owned forward-only migration and does not use scraper YAML or schedules as a write-through store. The binding API supports list, explicit bind, unbind/review, and audit metadata, while legacy acquisition write tools remain outside the product surface.
 
 ## Recommended next steps
 
-1. Obtain a compatible Rust toolchain and run `cargo fmt --all` and `cargo test -p nip-engine`.
-2. Add service/tool tests for the binding report and source/schedule ownership behavior.
-3. Define and implement persistent explicit binding records only after deciding the canonical mapping UX and rights gate.
-4. Add a diagnostics view showing bound, unresolved, and ambiguous profiles without presenting unresolved profiles as active sources.
-5. Update the Phase 3 architecture status only after the configured inventory has been reviewed and every intended active worker profile has an explicit NIP mapping.
-6. Stop and request confirmation before any later commit/push if the user has not authorized it.
+1. Obtain a compatible Rust toolchain and run `cargo fmt --all` and focused `nip-store`/`nip-engine` tests.
+2. Add the Phase 3 diagnostics view showing bound, unresolved, stale, and unbound profiles without presenting unresolved profiles as active sources.
+3. Exercise the bind/unbind MCP journey against a fixture-backed NIP store and verify no scraper YAML/schedule mutation.
+4. Begin Phase 4 only after the user accepts this commit/push checkpoint: typed worker batch validation and canonical item/event/transcript persistence.

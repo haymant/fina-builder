@@ -43,7 +43,8 @@ const MIGRATION_16: &str = include_str!("../migrations/0016_video_audio_cues.sql
 const MIGRATION_17: &str = include_str!("../migrations/0017_video_export_producer.sql");
 const MIGRATION_19: &str = include_str!("../migrations/0019_f2_thesis_transcript_backtest.sql");
 const MIGRATION_20: &str = include_str!("../migrations/0020_f7_5_thesis_backtest_check.sql");
-const LATEST_SCHEMA_VERSION: u32 = 20;
+const MIGRATION_21: &str = include_str!("../migrations/0021_acquisition_bindings.sql");
+const LATEST_SCHEMA_VERSION: u32 = 21;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -81,6 +82,8 @@ pub enum StoreError {
     InvalidVideoRecord,
     #[error("video evidence reference is invalid")]
     InvalidVideoEvidence,
+    #[error("acquisition binding persistence is invalid")]
+    InvalidAcquisitionBinding,
     #[error("Video project was not found")]
     VideoProjectNotFound,
     #[error("confirmation name does not exactly match the current Video project title")]
@@ -218,6 +221,19 @@ pub struct SubscriptionFetchStateUpdate<'a> {
     pub next_poll_at: DateTime<Utc>,
     pub last_error_code: Option<&'a str>,
     pub consecutive_failures: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcquisitionBinding {
+    pub worker_site_id: String,
+    pub source_id: String,
+    pub worker_kind: String,
+    pub worker_locator: String,
+    pub state: String,
+    pub reviewed_by: String,
+    pub review_note: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// One local DuckDB ledger. The connection remains owned by the store and is
@@ -458,6 +474,85 @@ impl Store {
             )
             .optional()?;
         raw.map(TryInto::try_into).transpose()
+    }
+
+    pub fn acquisition_bindings(&self) -> Result<Vec<AcquisitionBinding>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT worker_site_id, source_id, worker_kind, worker_locator, state,
+                    reviewed_by, review_note, created_at, updated_at
+             FROM nip_acquisition_bindings ORDER BY worker_site_id",
+        )?;
+        let rows = statement.query_map([], raw_acquisition_binding_from_row)?;
+        rows.collect()
+    }
+
+    pub fn acquisition_binding(
+        &self,
+        worker_site_id: &str,
+    ) -> Result<Option<AcquisitionBinding>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT worker_site_id, source_id, worker_kind, worker_locator, state,
+                        reviewed_by, review_note, created_at, updated_at
+                 FROM nip_acquisition_bindings WHERE worker_site_id = ?",
+                params![worker_site_id],
+                raw_acquisition_binding_from_row,
+            )
+            .optional()
+    }
+
+    pub fn upsert_acquisition_binding(
+        &mut self,
+        worker_site_id: &str,
+        source_id: &str,
+        worker_kind: &str,
+        worker_locator: &str,
+        reviewed_by: &str,
+        review_note: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Result<AcquisitionBinding, StoreError> {
+        self.connection.execute(
+            "INSERT INTO nip_acquisition_bindings
+                (worker_site_id, source_id, worker_kind, worker_locator, state,
+                 reviewed_by, review_note, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 'bound', ?, ?, ?, ?)
+             ON CONFLICT (worker_site_id) DO UPDATE SET
+                source_id = excluded.source_id,
+                worker_kind = excluded.worker_kind,
+                worker_locator = excluded.worker_locator,
+                state = 'bound',
+                reviewed_by = excluded.reviewed_by,
+                review_note = excluded.review_note,
+                updated_at = excluded.updated_at",
+            params![
+                worker_site_id,
+                source_id,
+                worker_kind,
+                worker_locator,
+                reviewed_by,
+                review_note,
+                now,
+                now,
+            ],
+        )?;
+        self.acquisition_binding(worker_site_id)?
+            .ok_or(StoreError::InvalidAcquisitionBinding)
+    }
+
+    pub fn unbind_acquisition_binding(
+        &mut self,
+        worker_site_id: &str,
+        reviewed_by: &str,
+        review_note: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        let changed = self.connection.execute(
+            "UPDATE nip_acquisition_bindings
+             SET state = 'unbound', reviewed_by = ?, review_note = ?, updated_at = ?
+             WHERE worker_site_id = ?",
+            params![reviewed_by, review_note, now, worker_site_id],
+        )?;
+        Ok(changed == 1)
     }
 
     /// Register a source that has no podcast adapter row (all non-podcast kinds).
@@ -5461,6 +5556,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<u32, StoreError> {
         apply_migration(connection, 20, "f7_5_thesis_backtest_check", MIGRATION_20)?;
         applied_any = true;
     }
+    if current_version < 21 {
+        apply_migration(connection, 21, "acquisition_bindings", MIGRATION_21)?;
+        applied_any = true;
+    }
     if applied_any {
         // Migration 0009 rebuilds tables (DROP/RENAME). DuckDB cannot replay
         // those catalog records from a WAL left behind by a crashed process, so
@@ -6015,6 +6114,22 @@ impl TryFrom<RawSource> for NarrativeSource {
             episode_count: raw.episode_count.max(0) as u64,
         })
     }
+}
+
+fn raw_acquisition_binding_from_row(
+    row: &duckdb::Row<'_>,
+) -> duckdb::Result<AcquisitionBinding> {
+    Ok(AcquisitionBinding {
+        worker_site_id: row.get(0)?,
+        source_id: row.get(1)?,
+        worker_kind: row.get(2)?,
+        worker_locator: row.get(3)?,
+        state: row.get(4)?,
+        reviewed_by: row.get(5)?,
+        review_note: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
 }
 
 struct RawSubscription {
@@ -8060,7 +8175,7 @@ mod tests {
     fn thesis_backtest_narrative_and_in_review_storyboard_save() {
         let temp = tempdir().unwrap();
         let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
-        assert_eq!(store.schema_version(), 20);
+        assert_eq!(store.schema_version(), LATEST_SCHEMA_VERSION);
         let now = "2026-11-18T09:01:00Z".parse().unwrap();
         let project = VideoProject {
             project_id: "f7-5-project".into(),
@@ -8684,10 +8799,9 @@ mod tests {
     }
 
     #[test]
-    fn f2_migration_applies_on_fresh_store_at_schema_19() {
+    fn f2_migration_applies_on_fresh_store_at_latest_schema() {
         let temp = tempdir().unwrap();
         let store = Store::open(temp.path().join("nip.duckdb")).unwrap();
-        assert_eq!(store.schema_version(), 20);
         assert_eq!(store.schema_version(), LATEST_SCHEMA_VERSION);
         assert!(store.has_table("nip_theses").unwrap());
         assert!(store.has_table("nip_transcripts").unwrap());
@@ -9100,5 +9214,37 @@ mod tests {
             ));
             assert!(store.video_visual_spec(spec_id, 1).unwrap().is_none());
         }
+    }
+
+    #[test]
+    fn acquisition_binding_records_are_forward_only_and_reviewable() {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        assert_eq!(store.schema_version(), LATEST_SCHEMA_VERSION);
+        let now = Utc::now();
+        let binding = store
+            .upsert_acquisition_binding(
+                "podcast-main",
+                "source-main",
+                "podcast",
+                "https://example.test/feed.xml",
+                "reviewer@example.test",
+                Some("approved feed and rights reviewed"),
+                now,
+            )
+            .unwrap();
+        assert_eq!(binding.state, "bound");
+        assert_eq!(store.acquisition_bindings().unwrap().len(), 1);
+        assert!(store
+            .unbind_acquisition_binding(
+                "podcast-main",
+                "reviewer@example.test",
+                Some("mapping withdrawn for review"),
+                now,
+            )
+            .unwrap());
+        let loaded = store.acquisition_binding("podcast-main").unwrap().unwrap();
+        assert_eq!(loaded.state, "unbound");
+        assert_eq!(loaded.review_note.as_deref(), Some("mapping withdrawn for review"));
     }
 }

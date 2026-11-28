@@ -48,7 +48,7 @@ $NIP_LAKE_DIR/
 ├── prices/dt=YYYY-MM-DD/site=.../run=....parquet
 ├── backtests/dt=YYYY-MM-DD/site=.../run=....parquet
 └── _nip/
-    ├── nip.duckdb                 # NIP-owned source/event/workflow store
+    ├── nip.duckdb                 # NIP-owned source/event/workflow/binding store
     ├── media/                     # NIP-managed media
     ├── logs/nip-engine.log
     ├── nip-engine.pid
@@ -75,7 +75,7 @@ A worker may retain private operational state such as retry cursors or dedup cac
 
 | Domain | Current writer | Final authority | Transition rule |
 | --- | --- | --- | --- |
-| Source identity, rights and product status | NIP DuckDB plus scraper site configuration | NIP | Create explicit NIP-source-to-worker-profile bindings; do not infer ownership from matching text IDs. |
+| Source identity, rights and product status | NIP DuckDB plus scraper site configuration | NIP | Create explicit NIP-source-to-worker-profile bindings; `nip_acquisition_bindings` stores reviewed bind/unbind state and audit metadata; do not infer ownership from matching text IDs. |
 | Schedule intent and product-visible job state | NIP source timer in some flows; scraper schedule/launcher in others | NIP | Introduce a single NIP orchestration API before disabling existing execution paths; never run duplicate polling loops. |
 | Collection and extraction | fina-scraper | NIP orchestrates; worker executes | Keep worker mechanics, but return a typed result to NIP rather than exposing a peer catalog. |
 | Item/event/transcript evidence | Scraper Parquet/transcript files and NIP DuckDB records in separate paths | NIP | Preserve hash, native IDs, producer run, times, availability, tiers, exact spans and revision history. Legacy data is compatibility/read-only until authorized migration. |

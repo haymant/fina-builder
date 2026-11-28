@@ -49,6 +49,9 @@ pub struct AcquisitionSourceBinding {
     pub state: String,
     pub match_basis: Option<String>,
     pub detail: String,
+    pub explicit: bool,
+    pub reviewed_by: Option<String>,
+    pub review_note: Option<String>,
 }
 
 /// Resolve worker profiles against NIP sources without creating sources or
@@ -113,12 +116,15 @@ pub fn resolve_source_bindings(
                 state,
                 match_basis,
                 detail,
+                explicit: false,
+                reviewed_by: None,
+                review_note: None,
             }
         })
         .collect()
 }
 
-fn canonical_locator(value: &str) -> String {
+pub(crate) fn canonical_locator(value: &str) -> String {
     value.trim().trim_end_matches('/').to_ascii_lowercase()
 }
 

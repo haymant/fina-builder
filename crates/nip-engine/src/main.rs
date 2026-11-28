@@ -80,6 +80,25 @@ struct SourceParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct BindAcquisitionSourceParams {
+    worker_site_id: String,
+    source_id: String,
+    reviewed_by: String,
+    review_note: Option<String>,
+    user_confirmed: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct UnbindAcquisitionSourceParams {
+    worker_site_id: String,
+    reviewed_by: String,
+    review_note: Option<String>,
+    user_confirmed: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct StartTranscriptionParams {
     source_id: String,
     source_native_id: Option<String>,
@@ -2076,6 +2095,92 @@ impl NipMcp {
             }) {
             Ok(bindings) => structured_success(serde_json::to_value(bindings).unwrap()),
             Err(error) => structured_error("storage_unavailable", error),
+        }
+    }
+
+    #[tool(
+        description = "Explicitly bind one NIP-approved podcast source to one observed worker profile after canonical feed URL, kind, rights, and user-review checks. This never creates a source or writes scraper configuration."
+    )]
+    fn bind_acquisition_source(
+        &self,
+        Parameters(params): Parameters<BindAcquisitionSourceParams>,
+    ) -> CallToolResult {
+        if params.user_confirmed != Some(true) {
+            return structured_error(
+                "confirmation_required",
+                "pass user_confirmed=true only after reviewing the exact worker profile and approved NIP source mapping",
+            );
+        }
+        let source_id = match SourceId::new(params.source_id) {
+            Ok(source) => source,
+            Err(error) => return structured_error("invalid_request", error.message),
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service.bind_acquisition_source(
+                &params.worker_site_id,
+                source_id,
+                &params.reviewed_by,
+                params.review_note.as_deref(),
+                true,
+            ) {
+                Ok(binding) => structured_success(serde_json::to_value(binding).unwrap()),
+                Err(NipError::RightsConfirmationRequired) => structured_error(
+                    "rights_confirmation_required",
+                    "an explicit reviewer and user confirmation are required",
+                ),
+                Err(NipError::AcquisitionProfileNotFound) => structured_error(
+                    "worker_profile_not_found",
+                    "the worker profile is not present in NIP's observed inventory",
+                ),
+                Err(NipError::AcquisitionBindingRightsRequired) => structured_error(
+                    "source_rights_not_approved",
+                    "the NIP source must have approved rights before binding",
+                ),
+                Err(NipError::AcquisitionBindingEvidenceMismatch) => structured_error(
+                    "binding_evidence_mismatch",
+                    "worker kind and canonical locator must exactly match the NIP source",
+                ),
+                Err(error) => structured_error("binding_failed", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Mark an existing worker-profile/source binding unbound after explicit review. This changes only the NIP binding review record and never edits scraper configuration or canonical source identity."
+    )]
+    fn unbind_acquisition_source(
+        &self,
+        Parameters(params): Parameters<UnbindAcquisitionSourceParams>,
+    ) -> CallToolResult {
+        if params.user_confirmed != Some(true) {
+            return structured_error(
+                "confirmation_required",
+                "pass user_confirmed=true only after reviewing the binding record",
+            );
+        }
+        match self.service.lock() {
+            Ok(mut service) => match service.unbind_acquisition_source(
+                &params.worker_site_id,
+                &params.reviewed_by,
+                params.review_note.as_deref(),
+                true,
+            ) {
+                Ok(()) => structured_success(json!({
+                    "worker_site_id": params.worker_site_id,
+                    "state": "unbound"
+                })),
+                Err(NipError::AcquisitionBindingNotFound) => structured_error(
+                    "binding_not_found",
+                    "no explicit binding review record exists for this worker profile",
+                ),
+                Err(NipError::RightsConfirmationRequired) => structured_error(
+                    "rights_confirmation_required",
+                    "an explicit reviewer and user confirmation are required",
+                ),
+                Err(error) => structured_error("unbinding_failed", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
         }
     }
 
