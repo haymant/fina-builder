@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use duckdb::{params, Connection, OptionalExt};
 use nip_domain::{
-    AgentNarrativeAnalysis, BacktestDelta, BacktestEvidenceRecord, BacktestMetrics,
-    BacktestVerdict, ClaimEvidence, ClaimRecord, ClaimReviewStatus, EditorialCandidate,
-    EditorialReviewAudit, EmbeddingIndexManifest, EtfMapping, EventRecord, EventSearchPage,
-    EventSearchQuery, ExtractionTier, LocalEventImport, NarrativeCluster, NarrativeClusterMember,
-    NarrativeGraph, NarrativeSource, PodcastEpisode, PodcastEpisodeState, PodcastSubscription,
+    AcquisitionAvailability, AcquisitionBatch, AcquisitionContentKind, AgentNarrativeAnalysis,
+    BacktestDelta, BacktestEvidenceRecord, BacktestMetrics, BacktestVerdict, ClaimEvidence,
+    ClaimRecord, ClaimReviewStatus, EditorialCandidate, EditorialReviewAudit,
+    EmbeddingIndexManifest, EtfMapping, EventRecord, EventSearchPage, EventSearchQuery,
+    ExtractionTier, LocalEventImport, NarrativeCluster, NarrativeClusterMember, NarrativeGraph,
+    NarrativeSource, PodcastEpisode, PodcastEpisodeState, PodcastSubscription,
     PodcastSubscriptionState, PodcastTranscript, ProviderConsent, SourceId, SourceKind,
     SourceState, SourceUpdate, ThesisBasis, ThesisDirection, ThesisRecord, ThesisStatus,
     TranscriptRecord, VideoAnalysisMode, VideoAsset, VideoAssetLineage, VideoAssetUpstreamKind,
@@ -44,7 +45,8 @@ const MIGRATION_17: &str = include_str!("../migrations/0017_video_export_produce
 const MIGRATION_19: &str = include_str!("../migrations/0019_f2_thesis_transcript_backtest.sql");
 const MIGRATION_20: &str = include_str!("../migrations/0020_f7_5_thesis_backtest_check.sql");
 const MIGRATION_21: &str = include_str!("../migrations/0021_acquisition_bindings.sql");
-const LATEST_SCHEMA_VERSION: u32 = 21;
+const MIGRATION_22: &str = include_str!("../migrations/0022_single_item_acquisition.sql");
+const LATEST_SCHEMA_VERSION: u32 = 22;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -84,6 +86,18 @@ pub enum StoreError {
     InvalidVideoEvidence,
     #[error("acquisition binding persistence is invalid")]
     InvalidAcquisitionBinding,
+    #[error("single-item acquisition payload is invalid")]
+    InvalidAcquisitionPayload,
+    #[error("single-item acquisition requires a current, rights-approved NIP binding")]
+    AcquisitionBindingRejected,
+    #[error("worker item identity was replayed with changed payload")]
+    AcquisitionIdentityConflict,
+    #[error("worker item collides with an existing canonical NIP event")]
+    AcquisitionEventCollision,
+    #[error("worker run identity was replayed with changed provenance")]
+    AcquisitionRunConflict,
+    #[error("acquisition payload serialization failed")]
+    AcquisitionPayloadSerialization(serde_json::Error),
     #[error("Video project was not found")]
     VideoProjectNotFound,
     #[error("confirmation name does not exactly match the current Video project title")]
@@ -234,6 +248,27 @@ pub struct AcquisitionBinding {
     pub review_note: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcquisitionIngestResult {
+    pub event_id: String,
+    pub ingestion_run_id: String,
+    pub worker_site_id: String,
+    pub worker_item_id: String,
+    pub content_hash: String,
+    pub transcript_stored: bool,
+    pub replay: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcquisitionTranscriptRecord {
+    pub event_id: String,
+    pub transcript_text: String,
+    pub content_hash: String,
+    pub language: Option<String>,
+    pub method: String,
+    pub model: Option<String>,
+    pub model_version: Option<String>,
+    pub transcribed_at: DateTime<Utc>,
 }
 
 /// One local DuckDB ledger. The connection remains owned by the store and is
@@ -960,6 +995,324 @@ impl Store {
             ],
         )?;
         Ok(changed == 1)
+    }
+
+    /// Persist exactly one typed worker item after repeating the authorization
+    /// and integrity checks at the canonical-store boundary. Claims, entities,
+    /// and feature values remain a later-phase contract and are rejected here.
+    #[allow(clippy::too_many_arguments)]
+    pub fn ingest_acquisition_item(
+        &mut self,
+        batch: &AcquisitionBatch,
+        worker_site_id: &str,
+        expected_source_id: &str,
+        expected_worker_kind: &str,
+        expected_worker_locator: &str,
+        expected_source_locator: &str,
+        received_at: DateTime<Utc>,
+    ) -> Result<AcquisitionIngestResult, StoreError> {
+        batch
+            .validate()
+            .map_err(|_| StoreError::InvalidAcquisitionPayload)?;
+        if batch.items.len() != 1 || batch.producer.name != "fina-scraper" {
+            return Err(StoreError::InvalidAcquisitionPayload);
+        }
+        let item = &batch.items[0];
+        if item.source_id.as_str() != expected_source_id
+            || item.worker_source_key != worker_site_id
+            || expected_worker_kind != "podcast"
+            || expected_worker_locator.trim().is_empty()
+            || expected_source_locator.trim().is_empty()
+            || item.content_kind == AcquisitionContentKind::Filing
+            || !item.claims.is_empty()
+            || !item.entities.is_empty()
+            || !item.features.is_empty()
+            || batch.completed_at > received_at
+            || item.ingested_at > batch.completed_at
+            || item
+                .published_at
+                .is_some_and(|published_at| published_at > received_at)
+            || item.valid_from > received_at
+            || item
+                .transcript
+                .as_ref()
+                .is_some_and(|transcript| transcript.transcribed_at > batch.completed_at)
+        {
+            return Err(StoreError::InvalidAcquisitionPayload);
+        }
+        let parsed_url =
+            url::Url::parse(&item.source_url).map_err(|_| StoreError::InvalidAcquisitionPayload)?;
+        if !matches!(parsed_url.scheme(), "http" | "https") || parsed_url.host_str().is_none() {
+            return Err(StoreError::InvalidAcquisitionPayload);
+        }
+
+        let content_hash = normalized_text_sha256(&item.content_text);
+        if !valid_content_sha256(&item.content_hash) || item.content_hash != content_hash {
+            return Err(StoreError::InvalidAcquisitionPayload);
+        }
+        if let Some(transcript) = &item.transcript {
+            let transcript_hash = normalized_text_sha256(&transcript.transcript_text);
+            if !valid_content_sha256(&transcript.content_hash)
+                || transcript.content_hash != transcript_hash
+            {
+                return Err(StoreError::InvalidAcquisitionPayload);
+            }
+        }
+
+        let payload_bytes =
+            serde_json::to_vec(item).map_err(StoreError::AcquisitionPayloadSerialization)?;
+        let payload_hash = hex_digest(&payload_bytes);
+        let ingestion_run_id = format!(
+            "acq-{}",
+            &hex_digest(format!("{}\0{}", worker_site_id, batch.run_id).as_bytes())[..32]
+        );
+        let identity = format!(
+            "{}\0{}\0{}",
+            expected_source_id, worker_site_id, item.worker_item_id
+        );
+        let event_id = format!("event-{}", &hex_digest(identity.as_bytes())[..32]);
+        let source_native_id = format!("fina-scraper:{}:{}", worker_site_id, item.worker_item_id);
+
+        let transaction = self.connection.transaction()?;
+        let authorized: bool = transaction.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM nip_acquisition_bindings b
+                JOIN nip_sources s ON s.source_id = b.source_id
+                WHERE b.worker_site_id = ? AND b.source_id = ?
+                  AND b.worker_kind = ? AND b.worker_locator = ? AND b.state = 'bound'
+                  AND s.source_type = 'podcast' AND s.source_kind = 'podcast'
+                  AND s.rights_status = 'approved' AND s.state <> 'removed'
+                  AND s.locator = ?
+            )",
+            params![
+                worker_site_id,
+                expected_source_id,
+                expected_worker_kind,
+                expected_worker_locator,
+                expected_source_locator,
+            ],
+            |row| row.get(0),
+        )?;
+        if !authorized {
+            return Err(StoreError::AcquisitionBindingRejected);
+        }
+
+        let existing_item: Option<(String, String, String, String)> = transaction
+            .query_row(
+                "SELECT event_id, payload_hash, worker_content_hash, run_id
+                 FROM nip_acquisition_items
+                 WHERE worker_site_id = ? AND worker_item_id = ?",
+                params![worker_site_id, item.worker_item_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        if let Some((
+            existing_event_id,
+            existing_payload_hash,
+            existing_content_hash,
+            original_run_id,
+        )) = existing_item
+        {
+            if existing_payload_hash != payload_hash || existing_content_hash != item.content_hash {
+                return Err(StoreError::AcquisitionIdentityConflict);
+            }
+            transaction.rollback()?;
+            return Ok(AcquisitionIngestResult {
+                event_id: existing_event_id,
+                ingestion_run_id: original_run_id,
+                worker_site_id: worker_site_id.to_owned(),
+                worker_item_id: item.worker_item_id.clone(),
+                content_hash: item.content_hash.clone(),
+                transcript_stored: item.transcript.is_some(),
+                replay: true,
+            });
+        }
+
+        let event_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM nip_events WHERE event_id = ?)",
+            params![event_id],
+            |row| row.get(0),
+        )?;
+        if event_exists {
+            return Err(StoreError::AcquisitionEventCollision);
+        }
+
+        let existing_run: Option<(String, String, String, String, DateTime<Utc>, DateTime<Utc>)> =
+            transaction
+                .query_row(
+                    "SELECT run_id, source_id, producer_name, producer_version, started_at, completed_at
+                     FROM nip_acquisition_runs
+                     WHERE worker_site_id = ? AND worker_run_id = ?",
+                    params![worker_site_id, batch.run_id],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                        ))
+                    },
+                )
+                .optional()?;
+        if let Some((
+            run_id,
+            source_id,
+            producer_name,
+            producer_version,
+            started_at,
+            completed_at,
+        )) = &existing_run
+        {
+            if run_id != &ingestion_run_id
+                || source_id != expected_source_id
+                || producer_name != &batch.producer.name
+                || producer_version != &batch.producer.version
+                || started_at != &batch.started_at
+                || completed_at != &batch.completed_at
+            {
+                return Err(StoreError::AcquisitionRunConflict);
+            }
+        } else {
+            let run_id_collision: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM nip_ingestion_runs WHERE run_id = ?)",
+                params![ingestion_run_id],
+                |row| row.get(0),
+            )?;
+            if run_id_collision {
+                return Err(StoreError::AcquisitionRunConflict);
+            }
+            transaction.execute(
+                "INSERT INTO nip_ingestion_runs
+                    (run_id, source_id, status, started_at, finished_at)
+                 VALUES (?, ?, 'succeeded', ?, ?)",
+                params![
+                    ingestion_run_id,
+                    expected_source_id,
+                    batch.started_at,
+                    batch.completed_at
+                ],
+            )?;
+            transaction.execute(
+                "INSERT INTO nip_acquisition_runs
+                    (run_id, worker_site_id, worker_run_id, source_id, producer_name,
+                     producer_version, started_at, completed_at, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    ingestion_run_id,
+                    worker_site_id,
+                    batch.run_id,
+                    expected_source_id,
+                    batch.producer.name,
+                    batch.producer.version,
+                    batch.started_at,
+                    batch.completed_at,
+                    received_at,
+                ],
+            )?;
+        }
+
+        transaction.execute(
+            "INSERT INTO nip_events
+                (event_id, source_id, source_native_id, canonical_url, content_hash,
+                 content_text, published_at, source_updated_at, captured_at, ingested_at,
+                 revision_of, schema_version, extraction_tier, review_status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, 1, NULL, NULL)",
+            params![
+                event_id,
+                expected_source_id,
+                source_native_id,
+                item.source_url,
+                item.content_hash,
+                item.content_text,
+                item.published_at,
+                received_at,
+                received_at,
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO nip_acquisition_items
+                (worker_site_id, worker_item_id, worker_source_key, source_id, event_id,
+                 run_id, source_url, title, content_kind, availability, worker_content_hash,
+                 payload_hash, worker_ingested_at, valid_from, valid_to, recorded_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                worker_site_id,
+                item.worker_item_id,
+                item.worker_source_key,
+                expected_source_id,
+                event_id,
+                ingestion_run_id,
+                item.source_url,
+                item.title,
+                acquisition_content_kind_as_str(item.content_kind),
+                acquisition_availability_as_str(item.availability),
+                item.content_hash,
+                payload_hash,
+                item.ingested_at,
+                item.valid_from,
+                item.valid_to,
+                received_at,
+            ],
+        )?;
+        if let Some(transcript) = &item.transcript {
+            transaction.execute(
+                "INSERT INTO nip_acquisition_transcripts
+                    (event_id, transcript_text, content_hash, language, method, model,
+                     model_version, transcribed_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    event_id,
+                    transcript.transcript_text,
+                    transcript.content_hash,
+                    transcript.language,
+                    transcript.method,
+                    transcript.model,
+                    transcript.model_version,
+                    transcript.transcribed_at,
+                ],
+            )?;
+        }
+        transaction.commit()?;
+
+        Ok(AcquisitionIngestResult {
+            event_id,
+            ingestion_run_id,
+            worker_site_id: worker_site_id.to_owned(),
+            worker_item_id: item.worker_item_id.clone(),
+            content_hash: item.content_hash.clone(),
+            transcript_stored: item.transcript.is_some(),
+            replay: false,
+        })
+    }
+
+    pub fn acquisition_transcript(
+        &self,
+        event_id: &str,
+    ) -> Result<Option<AcquisitionTranscriptRecord>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT event_id, transcript_text, content_hash, language, method, model,
+                        model_version, transcribed_at
+                 FROM nip_acquisition_transcripts WHERE event_id = ?",
+                params![event_id],
+                |row| {
+                    Ok(AcquisitionTranscriptRecord {
+                        event_id: row.get(0)?,
+                        transcript_text: row.get(1)?,
+                        content_hash: row.get(2)?,
+                        language: row.get(3)?,
+                        method: row.get(4)?,
+                        model: row.get(5)?,
+                        model_version: row.get(6)?,
+                        transcribed_at: row.get(7)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
     }
 
     pub fn import_local_event(
@@ -5561,6 +5914,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<u32, StoreError> {
         apply_migration(connection, 21, "acquisition_bindings", MIGRATION_21)?;
         applied_any = true;
     }
+    if current_version < 22 {
+        apply_migration(connection, 22, "single_item_acquisition", MIGRATION_22)?;
+        applied_any = true;
+    }
     if applied_any {
         // Migration 0009 rebuilds tables (DROP/RENAME). DuckDB cannot replay
         // those catalog records from a WAL left behind by a crashed process, so
@@ -5898,6 +6255,49 @@ fn valid_media_relative_path(value: &str) -> bool {
 fn hex_digest(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Mirrors fina-scraper::dedup::normalize_body: CRLF to LF, trim each line,
+/// collapse repeated blank lines, and remove leading/trailing blank lines.
+fn normalized_text_sha256(text: &str) -> String {
+    let normalized = text.replace("\r\n", "\n");
+    let mut lines = Vec::new();
+    let mut previous_blank = false;
+    for line in normalized.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if !previous_blank {
+                lines.push("");
+            }
+            previous_blank = true;
+        } else {
+            lines.push(trimmed);
+            previous_blank = false;
+        }
+    }
+    while lines.first().is_some_and(|line| line.is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    hex_digest(lines.join("\n").as_bytes())
+}
+
+fn acquisition_content_kind_as_str(kind: AcquisitionContentKind) -> &'static str {
+    match kind {
+        AcquisitionContentKind::Article => "article",
+        AcquisitionContentKind::Transcript => "transcript",
+        AcquisitionContentKind::Filing => "filing",
+        AcquisitionContentKind::Other => "other",
+    }
+}
+
+fn acquisition_availability_as_str(availability: AcquisitionAvailability) -> &'static str {
+    match availability {
+        AcquisitionAvailability::Live => "live",
+        AcquisitionAvailability::Reconstructed => "reconstructed",
+    }
 }
 
 struct RawEvent {
@@ -6250,7 +6650,10 @@ impl TryFrom<RawEpisode> for PodcastEpisode {
 mod tests {
     use super::*;
     use duckdb::Connection;
-    use nip_domain::{RejectedClaimRef, TranscriptBeat, TranscriptEvidenceRef};
+    use nip_domain::{
+        AcquisitionItem, AcquisitionProducer, AcquisitionTranscript, RejectedClaimRef, SourceId,
+        TranscriptBeat, TranscriptEvidenceRef,
+    };
     use std::collections::BTreeMap;
     use tempfile::tempdir;
 
@@ -6444,6 +6847,9 @@ mod tests {
             assert!(store.has_table("video_asset_lineage").unwrap());
             assert!(store.has_table("nip_agent_narrative_analyses").unwrap());
             assert!(store.has_table("nip_agent_entity_candidates").unwrap());
+            assert!(store.has_table("nip_acquisition_runs").unwrap());
+            assert!(store.has_table("nip_acquisition_items").unwrap());
+            assert!(store.has_table("nip_acquisition_transcripts").unwrap());
         }
 
         let reopened = Store::open(&path).unwrap();
@@ -6486,6 +6892,40 @@ mod tests {
         assert_eq!(store.schema_version(), LATEST_SCHEMA_VERSION);
         assert!(store.has_table("nip_events").unwrap());
         assert!(store.has_table("nip_podcast_subscriptions").unwrap());
+    }
+
+    #[test]
+    fn upgrades_a_version_21_database_with_phase_4_tables() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("v21.duckdb");
+        {
+            let store = Store::open(&path).unwrap();
+            store
+                .connection
+                .execute_batch(
+                    "DROP TABLE nip_acquisition_transcripts;
+                     DROP TABLE nip_acquisition_items;
+                     DROP TABLE nip_acquisition_runs;
+                     DELETE FROM nip_schema_migrations WHERE version = 22;",
+                )
+                .unwrap();
+        }
+
+        let upgraded = Store::open(&path).unwrap();
+        assert_eq!(upgraded.schema_version(), LATEST_SCHEMA_VERSION);
+        assert!(upgraded.has_table("nip_events").unwrap());
+        assert!(upgraded.has_table("nip_acquisition_runs").unwrap());
+        assert!(upgraded.has_table("nip_acquisition_items").unwrap());
+        assert!(upgraded.has_table("nip_acquisition_transcripts").unwrap());
+        let version_22_count: i64 = upgraded
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM nip_schema_migrations WHERE version = 22",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version_22_count, 1);
     }
 
     #[test]
@@ -9247,5 +9687,342 @@ mod tests {
         let loaded = store.acquisition_binding("podcast-main").unwrap().unwrap();
         assert_eq!(loaded.state, "unbound");
         assert_eq!(loaded.review_note.as_deref(), Some("mapping withdrawn for review"));
+    }
+
+    fn acquisition_fixture_store() -> (tempfile::TempDir, Store, DateTime<Utc>) {
+        let temp = tempdir().unwrap();
+        let mut store = Store::open(temp.path().join("nip.duckdb")).unwrap();
+        let now = Utc::now();
+        store
+            .connection
+            .execute(
+                "INSERT INTO nip_sources
+                    (source_id, source_type, source_kind, display_name, locator,
+                     rights_status, rights_statement, state)
+                 VALUES ('fixture-source', 'podcast', 'podcast', 'Fixture podcast',
+                         'https://fixture.test/feed.xml', 'approved', 'fixture rights', 'active')",
+                [],
+            )
+            .unwrap();
+        store
+            .upsert_acquisition_binding(
+                "fixture-site",
+                "fixture-source",
+                "podcast",
+                "https://fixture.test/feed.xml",
+                "fixture-reviewer",
+                Some("explicit fixture binding"),
+                now,
+            )
+            .unwrap();
+        (temp, store, now)
+    }
+
+    fn acquisition_fixture_batch(now: DateTime<Utc>, content: &str) -> AcquisitionBatch {
+        let started_at = now - chrono::Duration::seconds(3);
+        let completed_at = now - chrono::Duration::seconds(1);
+        let transcript_text = "Fixture transcript: policy remains restrictive.";
+        AcquisitionBatch {
+            contract_version: 1,
+            producer: AcquisitionProducer {
+                name: "fina-scraper".into(),
+                version: "fixture-0.1".into(),
+            },
+            run_id: "fixture-run-1".into(),
+            started_at,
+            completed_at,
+            items: vec![AcquisitionItem {
+                source_id: SourceId::new("fixture-source").unwrap(),
+                worker_source_key: "fixture-site".into(),
+                worker_item_id: "episode-01".into(),
+                source_url: "https://fixture.test/episodes/one".into(),
+                title: "Fixture episode".into(),
+                content_kind: AcquisitionContentKind::Article,
+                content_text: content.into(),
+                content_hash: normalized_text_sha256(content),
+                published_at: Some(started_at),
+                ingested_at: completed_at,
+                valid_from: started_at,
+                valid_to: None,
+                availability: AcquisitionAvailability::Live,
+                transcript: Some(AcquisitionTranscript {
+                    transcript_text: transcript_text.into(),
+                    content_hash: normalized_text_sha256(transcript_text),
+                    language: Some("en".into()),
+                    method: "fixture_asr".into(),
+                    model: Some("fixture-model".into()),
+                    model_version: Some("v1".into()),
+                    transcribed_at: completed_at,
+                }),
+                claims: Vec::new(),
+                entities: Vec::new(),
+                features: Vec::new(),
+            }],
+        }
+    }
+
+    fn ingest_fixture(
+        store: &mut Store,
+        batch: &AcquisitionBatch,
+        received_at: DateTime<Utc>,
+    ) -> Result<AcquisitionIngestResult, StoreError> {
+        store.ingest_acquisition_item(
+            batch,
+            "fixture-site",
+            "fixture-source",
+            "podcast",
+            "https://fixture.test/feed.xml",
+            "https://fixture.test/feed.xml",
+            received_at,
+        )
+    }
+
+    fn table_count(store: &Store, table: &str) -> i64 {
+        store
+            .connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn worker_content_hash_matches_normalized_body_fixture() {
+        let raw = "  Episode notes  \r\n\r\n \r\n   A fixture summary.  \n";
+        assert_eq!(
+            normalized_text_sha256(raw),
+            "2e3643bbdd488cb4c526f8990f066ace040b385e04d7d707be7d0f111b753a5c"
+        );
+    }
+
+    #[test]
+    fn one_worker_item_becomes_a_canonical_event_and_separate_transcript() {
+        let (_temp, mut store, now) = acquisition_fixture_store();
+        let batch = acquisition_fixture_batch(now, "Episode notes\r\n\r\nA fixture summary.");
+        let first = ingest_fixture(&mut store, &batch, now).unwrap();
+        assert!(!first.replay);
+        assert!(first.transcript_stored);
+        let event = store.event(&first.event_id).unwrap().unwrap();
+        assert_eq!(event.source_id.as_str(), "fixture-source");
+        assert_eq!(
+            event.source_native_id.as_deref(),
+            Some("fina-scraper:fixture-site:episode-01")
+        );
+        assert_eq!(
+            event.content_text.as_deref(),
+            Some("Episode notes\r\n\r\nA fixture summary.")
+        );
+        assert_eq!(event.content_hash, batch.items[0].content_hash);
+        assert_eq!(
+            event.times.captured_at.timestamp_micros(),
+            now.timestamp_micros()
+        );
+        let transcript = store
+            .acquisition_transcript(&first.event_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            transcript.transcript_text,
+            "Fixture transcript: policy remains restrictive."
+        );
+        assert_eq!(
+            transcript.content_hash,
+            normalized_text_sha256(&transcript.transcript_text)
+        );
+        let second =
+            ingest_fixture(&mut store, &batch, now + chrono::Duration::seconds(1)).unwrap();
+        assert!(second.replay);
+        assert_eq!(second.event_id, first.event_id);
+        let mut later_worker_run = batch.clone();
+        later_worker_run.run_id = "fixture-run-retry".into();
+        let third = ingest_fixture(
+            &mut store,
+            &later_worker_run,
+            now + chrono::Duration::seconds(2),
+        )
+        .unwrap();
+        assert!(third.replay);
+        assert_eq!(third.ingestion_run_id, first.ingestion_run_id);
+        let changed = acquisition_fixture_batch(now, "Changed body for the same worker identity.");
+        assert!(matches!(
+            ingest_fixture(&mut store, &changed, now),
+            Err(StoreError::AcquisitionIdentityConflict)
+        ));
+        assert_eq!(table_count(&store, "nip_events"), 1);
+        assert_eq!(table_count(&store, "nip_acquisition_items"), 1);
+        assert_eq!(table_count(&store, "nip_acquisition_transcripts"), 1);
+        assert_eq!(table_count(&store, "nip_ingestion_runs"), 1);
+    }
+
+    #[test]
+    fn changed_payload_hash_or_invalid_worker_metadata_writes_nothing() {
+        let (_temp, mut store, now) = acquisition_fixture_store();
+        let mut bad_hash = acquisition_fixture_batch(now, "Episode notes.");
+        bad_hash.items[0].content_hash = "0".repeat(64);
+        assert!(matches!(
+            ingest_fixture(&mut store, &bad_hash, now),
+            Err(StoreError::InvalidAcquisitionPayload)
+        ));
+        let mut bad_url = acquisition_fixture_batch(now, "Episode notes.");
+        bad_url.items[0].source_url = "file:///private/worker.txt".into();
+        assert!(matches!(
+            ingest_fixture(&mut store, &bad_url, now),
+            Err(StoreError::InvalidAcquisitionPayload)
+        ));
+        let mut bad_time = acquisition_fixture_batch(now, "Episode notes.");
+        bad_time.items[0].ingested_at = now + chrono::Duration::seconds(2);
+        assert!(matches!(
+            ingest_fixture(&mut store, &bad_time, now),
+            Err(StoreError::InvalidAcquisitionPayload)
+        ));
+        let mut future_publication = acquisition_fixture_batch(now, "Episode notes.");
+        future_publication.items[0].published_at = Some(now + chrono::Duration::seconds(1));
+        assert!(matches!(
+            ingest_fixture(&mut store, &future_publication, now),
+            Err(StoreError::InvalidAcquisitionPayload)
+        ));
+        let mut future_valid_from = acquisition_fixture_batch(now, "Episode notes.");
+        future_valid_from.items[0].valid_from = now + chrono::Duration::seconds(1);
+        assert!(matches!(
+            ingest_fixture(&mut store, &future_valid_from, now),
+            Err(StoreError::InvalidAcquisitionPayload)
+        ));
+        let mut unsupported_feature = acquisition_fixture_batch(now, "Episode notes.");
+        unsupported_feature.items[0]
+            .features
+            .push(nip_domain::AcquisitionFeatureValue {
+                feature_key: "unregistered-fixture-feature".into(),
+                value: serde_json::json!(1.0),
+                as_of: now,
+                valid_from: now,
+                valid_to: None,
+                availability: AcquisitionAvailability::Live,
+                extraction: nip_domain::AcquisitionExtractionProvenance {
+                    tier: nip_domain::ExtractionTier::Tier2Llm,
+                    model: "fixture-model".into(),
+                    model_version: "v1".into(),
+                    prompt_version: None,
+                    confidence_millis: None,
+                    extracted_at: now,
+                },
+            });
+        assert!(ingest_fixture(&mut store, &unsupported_feature, now).is_err());
+        let evidence = nip_domain::AcquisitionEvidenceSpan {
+            payload: nip_domain::AcquisitionEvidencePayload::ItemContent,
+            quote: "Episode notes.".into(),
+            start_offset: 0,
+            end_offset: 14,
+        };
+        let extraction = nip_domain::AcquisitionExtractionProvenance {
+            tier: nip_domain::ExtractionTier::Tier2Llm,
+            model: "fixture-model".into(),
+            model_version: "v1".into(),
+            prompt_version: None,
+            confidence_millis: Some(900),
+            extracted_at: now,
+        };
+        let mut unsupported_claim = acquisition_fixture_batch(now, "Episode notes.");
+        unsupported_claim.items[0]
+            .claims
+            .push(nip_domain::AcquisitionClaim {
+                worker_claim_id: "fixture-claim-1".into(),
+                subject: "Fixture subject".into(),
+                predicate: "reports".into(),
+                object: "fixture observation".into(),
+                confidence_millis: 900,
+                review_status: nip_domain::ClaimReviewStatus::FastGlance,
+                extraction: extraction.clone(),
+                evidence: evidence.clone(),
+            });
+        assert!(matches!(
+            ingest_fixture(&mut store, &unsupported_claim, now),
+            Err(StoreError::InvalidAcquisitionPayload)
+        ));
+        let mut unsupported_entity = acquisition_fixture_batch(now, "Episode notes.");
+        unsupported_entity.items[0]
+            .entities
+            .push(nip_domain::AcquisitionEntity {
+                worker_entity_id: "fixture-entity-1".into(),
+                canonical_id: "fixture-canonical-1".into(),
+                name: "Fixture entity".into(),
+                entity_type: "organization".into(),
+                ticker: None,
+                extraction,
+                evidence: vec![evidence],
+            });
+        assert!(matches!(
+            ingest_fixture(&mut store, &unsupported_entity, now),
+            Err(StoreError::InvalidAcquisitionPayload)
+        ));
+        assert_eq!(table_count(&store, "nip_events"), 0);
+        assert_eq!(table_count(&store, "nip_acquisition_items"), 0);
+        assert_eq!(table_count(&store, "nip_ingestion_runs"), 0);
+    }
+
+    #[test]
+    fn unbound_or_rights_unapproved_source_cannot_persist_worker_items() {
+        let (_temp, mut store, now) = acquisition_fixture_store();
+        store
+            .unbind_acquisition_binding("fixture-site", "reviewer", None, now)
+            .unwrap();
+        let batch = acquisition_fixture_batch(now, "Episode notes.");
+        assert!(matches!(
+            ingest_fixture(&mut store, &batch, now),
+            Err(StoreError::AcquisitionBindingRejected)
+        ));
+        store
+            .upsert_acquisition_binding(
+                "fixture-site",
+                "fixture-source",
+                "podcast",
+                "https://fixture.test/feed.xml",
+                "fixture-reviewer",
+                None,
+                now,
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE nip_sources SET rights_status = 'blocked' WHERE source_id = 'fixture-source'",
+                [],
+            )
+            .unwrap();
+        assert!(matches!(
+            ingest_fixture(&mut store, &batch, now),
+            Err(StoreError::AcquisitionBindingRejected)
+        ));
+        assert_eq!(table_count(&store, "nip_events"), 0);
+        assert_eq!(table_count(&store, "nip_acquisition_items"), 0);
+        assert_eq!(table_count(&store, "nip_ingestion_runs"), 0);
+    }
+
+    #[test]
+    fn transcript_insert_failure_rolls_back_run_event_and_item_atomically() {
+        let (_temp, mut store, now) = acquisition_fixture_store();
+        let batch = acquisition_fixture_batch(now, "Episode notes.");
+        let event_identity = format!(
+            "{}\0{}\0{}",
+            batch.items[0].source_id.as_str(),
+            batch.items[0].worker_source_key,
+            batch.items[0].worker_item_id
+        );
+        let event_id = format!("event-{}", &hex_digest(event_identity.as_bytes())[..32]);
+        store
+            .connection
+            .execute(
+                "INSERT INTO nip_acquisition_transcripts
+                    (event_id, transcript_text, content_hash, method, transcribed_at)
+                 VALUES (?, 'collision fixture', ?, 'fixture', ?)",
+                params![event_id, "a".repeat(64), now],
+            )
+            .unwrap();
+
+        assert!(ingest_fixture(&mut store, &batch, now).is_err());
+        assert_eq!(table_count(&store, "nip_events"), 0);
+        assert_eq!(table_count(&store, "nip_acquisition_items"), 0);
+        assert_eq!(table_count(&store, "nip_ingestion_runs"), 0);
+        assert_eq!(table_count(&store, "nip_acquisition_runs"), 0);
+        assert_eq!(table_count(&store, "nip_acquisition_transcripts"), 1);
     }
 }

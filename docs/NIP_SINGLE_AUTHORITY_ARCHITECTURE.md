@@ -1,6 +1,6 @@
 # NIP Single-Authority Architecture and Execution Plan
 
-**Status:** Phase 0 audit, Phase 1 contract foundation, Phase 2A acquisition-boundary work, Phase 2B worker supervision, and the Phase 3 source-binding ownership slice are implemented. Typed batch ingestion and canonical item persistence remain later phases.
+**Status:** Phase 0 audit, Phase 1 contract foundation, Phase 2A acquisition-boundary work, Phase 2B worker supervision, and the Phase 3 source-binding ownership slice are implemented and published. Phase 4's single-item, explicitly bound, rights-checked canonical event/transcript ingestion path is implemented and verified; worker RPC remains outside this slice, and Phase 5 has not started.
 
 ## Executive decision
 
@@ -23,7 +23,7 @@ The current branch still has split ownership and should not be described as the 
 - NIP has unique workflows that must survive: rights and consent/audit, retained event identity and exact quote-offset validation, podcast transcript state, graph/research/thesis workflows, and the detailed video project/storyboard/asset/QA/lineage model.
 - fina-scraper has valuable collection mechanics and evidence semantics that must survive: feed/site adapters, dedup and revisions, ASR/NLP tiers, run lineage, live/reconstructed availability, valid-time and as-of queries, feature extraction, and backload support.
 
-The new `nip-domain::AcquisitionBatch` contract is defined and unit-tested in isolation. Phase 2A moves acquisition initialization/inventory under NIP, and Phase 2B adds NIP-owned worker lifecycle supervision; typed batch ingestion and canonical persistence remain later phases.
+The `nip-domain::AcquisitionBatch` contract is versioned and unit-tested. Phase 2A moves acquisition initialization/inventory under NIP, Phase 2B adds NIP-owned worker lifecycle supervision, Phase 3 adds explicit source bindings, and Phase 4 provides the first narrow canonical ingestion sink. The worker supervisor still does not expose a call/response adapter for the scraper's acquisition tools.
 
 ## Canonical ownership target
 
@@ -50,9 +50,9 @@ The new `nip-domain::AcquisitionBatch` contract is defined and unit-tested in is
 - structured claims and entities with extraction tier, model/version, prompt version, extraction confidence, review state, and exact evidence spans;
 - feature values referring to NIP-registered feature keys, with as-of/valid-time/availability and extraction provenance.
 
-The domain validator checks contract version, required values, duplicate item/claim/entity/feature identifiers, validity intervals, confidence ranges, and exact quote/offset matches. Offsets count Unicode scalar values, matching the retained-transcript quote validator. Store-level checks remain mandatory: source existence and mapping, rights approval, content-hash verification, feature-key registration, idempotency/revision policy, and atomic persistence. The worker cannot grant rights, register a source, approve its own content, set NIP review state, or redefine feature catalogs.
+The domain validator checks contract version, required values, duplicate item/claim/entity/feature identifiers, validity intervals, confidence ranges, and exact quote/offset matches. Offsets count Unicode scalar values, matching the retained-transcript quote validator. Store-level checks remain mandatory: source existence and explicit mapping, rights approval, content-hash verification, feature-key registration, idempotency/revision policy, and atomic persistence. Phase 4 currently rejects claims, entities, and feature values instead of dropping or persisting them before Phase 5. The worker cannot grant rights, register a source, approve its own content, set NIP review state, or redefine feature catalogs.
 
-This contract is intentionally not an importer yet. In particular, do not reuse `import_local_event` unchanged: it is a local-document operation with explicit user rights confirmation and current idempotency behavior, not a complete scraper item/revision contract.
+Phase 4 adds a scraper-specific, one-item ingestion operation; do not reuse `import_local_event` unchanged. That API is a local-document operation with explicit user rights confirmation and different idempotency behavior, not the scraper item/revision contract.
 
 ## Phased execution and exit gates
 
@@ -115,10 +115,13 @@ launchers remain compatibility/diagnostic paths only.
 
 **Focused verification:** The temporary-root supervisor tests cover typed startup and safe
 reuse, early-exit reporting, and idempotent shutdown. `git diff --check` passes. Full Rust
-format/test execution is pending a compatible Rust toolchain in this sandbox: the installed
-Cargo 1.75 rejects the repository's pinned edition-2024 RIGA submodule before compiling
-`nip-engine`, and `rustfmt` is not installed. No lake data was migrated, rewritten, or
-deleted.
+format/test execution was blocked at the original Phase 2B close by the sandbox's Cargo
+1.75/edition-2024 incompatibility. This was resolved before Phase 4 exit: the combined
+current suite passes with Rust 1.100 from `~/.rustup` (see Phase 4 verification below).
+The early-exit fixture now completes the MCP initialized notification before exiting, so it
+tests post-handshake worker exit reporting; production supervisor behavior is unchanged.
+Package-scoped rustfmt still reports existing formatting differences in previously
+committed code. No lake data was migrated, rewritten, or deleted.
 
 ### Phase 3 — Make source identity and schedule intent NIP-owned
 
@@ -130,7 +133,7 @@ deleted.
 - Rights and consent gates are not inferred from scraped registration.
 - Existing DuckDB source/subscription rows and scraper YAML/schedules remain readable and unchanged; compatibility mapping is test-backed.
 
-**Status:** Phase 3 ownership plumbing is implemented in the working tree. NIP now retains the
+**Status:** Phase 3 ownership plumbing is implemented and published. NIP now retains the
 full worker profile inventory, exposes a read-only `list_acquisition_source_bindings` report,
 and resolves a binding only when one NIP source has the same canonical feed locator and
 compatible `podcast` kind. Worker site IDs never become NIP source IDs, worker profiles never
@@ -143,8 +146,10 @@ subscription state and never starts or mutates the scraper scheduler.
 
 **Focused verification:** Added persistent upsert/unbind review coverage, strict MCP bind/unbind
 parameters, and the binding ownership/error paths. `git diff --check` and the E2E launcher's
-Node syntax check pass. Full Rust execution remains blocked before compilation by the sandbox
-Cargo 1.75/edition-2024 limitation recorded under Phase 2B; `rustfmt` is unavailable.
+Node syntax check pass. At the original Phase 3 close, Rust execution was blocked by the
+sandbox Cargo 1.75/edition-2024 limitation recorded under Phase 2B; the later full combined
+suite passed before Phase 4 exit (see below). Package-scoped rustfmt still reports existing
+formatting differences in previously committed code.
 
 ### Phase 4 — Canonical item/event/transcript ingestion
 
@@ -157,6 +162,20 @@ Cargo 1.75/edition-2024 limitation recorded under Phase 2B; `rustfmt` is unavail
 - Existing event quote validation and podcast workflow tests still pass.
 
 **Constraint:** Do not bulk-import the lake or change the semantics of `import_local_event` as a shortcut.
+
+**Status:** The NIP service and MCP now accept exactly one `fina-scraper` batch item only through an explicit, current worker-profile/source binding. The store repeats podcast-kind, approved-rights, locator and source-state checks in the same transaction that writes the NIP event, NIP ingestion run, namespaced worker identity/lineage, and optional transcript. It mirrors fina-scraper's normalized-body SHA-256 for verification while retaining original text and hash, rejects future/malformed timestamps and non-HTTP(S) item URLs, treats exact item replay as a no-op, and rejects changed payloads for the same worker identity. Phase 4 does not call legacy scraper write tools and does not alter or import any worker lake data.
+
+**Implementation boundary:** `ingest_acquisition_item` is a typed NIP sink; the existing NIP supervisor still performs lifecycle/handshake only. A real scraper request/result adapter is not enabled by this phase. Claims, entities, and features are rejected until Phase 5 contracts and persistence are designed.
+
+**Verification:** `cargo test -p nip-domain -p nip-store -p nip-engine`, using Rust 1.100
+from `~/.rustup`, passes **10 domain, 137 engine library, 14 engine binary, and 42 store
+tests; 0 failed**. Store coverage includes fresh migration 22, the simulated version-21
+upgrade, atomic rollback, exact replay/collision, timestamp and hash checks, and rejection
+of unapproved/unbound sources and later-phase payload fields. The early-exit supervisor
+fixture now completes the MCP handshake before exiting; the production supervisor was not
+changed. `git diff --check` passes. Package-scoped rustfmt still reports baseline formatting
+differences in pre-existing Phase 2/3 sections; no Phase 4-added Rust sections have formatter
+suggestions. Tests used temporary fixture databases only; no user or legacy data was changed.
 
 ### Phase 5 — Canonical claims, entities, and features
 
@@ -196,8 +215,8 @@ Cargo 1.75/edition-2024 limitation recorded under Phase 2B; `rustfmt` is unavail
 - No automatic copy, move, rewrite, backfill, or delete of user data. No broad cleanup or submodule reset. The pre-existing `modules/riga` worktree modification is unrelated and remains untouched.
 - Keep `TAC_LAKE_DIR` separate. Keep the NIP root selection policy unchanged until a dedicated storage phase.
 - Test fixtures and temporary stores only. Avoid live provider credentials and production source probes.
-- At every phase gate, stop and report exact files/changes, tests (including blocked/unverified gates), data-safety status, and the next-phase handoff prompt. Do not commit or push without the user's explicit confirmation at that gate.
+- At every phase gate, report exact files/changes, tests (including blocked/unverified gates), and data-safety status; commit and push the completed phase as the user instructed, then deliver the next-phase handoff and stop before proceeding further.
 
 ## Phase-gate handoff prompt
 
-> **Next phase: Phase 2 — NIP-owned worker lifecycle.** Move the fina-scraper integration seam from the Tauri shell into nip-engine, make NIP supervise exactly one acquisition worker lifecycle, remove the normal-launch peer scraper MCP path only after the NIP worker path has health/shutdown coverage, and add temporary-root lifecycle tests. Do not migrate, rewrite, or delete any existing data. Preserve the pre-existing `modules/riga` submodule worktree modification. Before continuing, ask whether the user wants this completed phase committed and pushed; do not do so without explicit approval.
+> **Next phase: Phase 5 — Canonical claims, entities, and features.** First define NIP-owned entity mention/resolution, claim revision/supersession, and feature-definition/value contracts. Reuse the Phase 4 single-item event and separate acquisition transcript as immutable evidence; preserve exact Unicode quote offsets, tier/review, run, as-of/valid-time and live/reconstructed provenance. Do not accept worker feature keys by inference, bulk-import the worker lake, or migrate/rewrite/delete data. Commit and push Phase 5 at its exit, then deliver a handoff before any later phase.

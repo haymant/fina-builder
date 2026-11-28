@@ -18,7 +18,8 @@ pub mod video_qa_adapter;
 
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use nip_domain::{
-    AgentClaimAnnotation, AgentEntityCandidate, AgentNarrativeAnalysis, AgentNarrativeGraphDraft,
+    AcquisitionBatch, AgentClaimAnnotation, AgentEntityCandidate, AgentNarrativeAnalysis,
+    AgentNarrativeGraphDraft,
     BacktestDelta, BacktestEvidenceRecord, BacktestMetrics, BacktestVerdict, CapabilitiesResponse,
     ClaimEvidence, ClaimRecord, ClaimReviewStatus, EditorialCandidate, EditorialReviewAudit,
     EmbeddingIndexManifest, EtfMapping, EventRecord, EventSearchPage, EventSearchQuery,
@@ -35,8 +36,8 @@ use nip_domain::{
     DOMAIN_SCHEMA_VERSION, SERVICE_NAME,
 };
 use nip_store::{
-    AcquisitionBinding, SnapshotManifest, Store, StoreError, SubscriptionFetchStateUpdate,
-    VideoProjectDeleteResult,
+    AcquisitionBinding, AcquisitionIngestResult, AcquisitionTranscriptRecord, SnapshotManifest,
+    Store, StoreError, SubscriptionFetchStateUpdate, VideoProjectDeleteResult,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -226,6 +227,8 @@ pub enum NipError {
     AcquisitionBindingRightsRequired,
     #[error("worker profile and NIP source do not match by canonical locator and kind")]
     AcquisitionBindingEvidenceMismatch,
+    #[error("worker acquisition batch was rejected: {0}")]
+    AcquisitionBatchRejected(String),
     #[error("acquisition binding review record was not found")]
     AcquisitionBindingNotFound,
     #[error("another active or paused source already uses this locator")]
@@ -1040,6 +1043,7 @@ impl NipService {
                 });
                 if evidence_matches.is_some() {
                     binding.source_id = Some(record.source_id.clone());
+                    binding.worker_locator = Some(record.worker_locator.clone());
                     binding.state = "bound".to_owned();
                     binding.match_basis = Some("explicit_review_exact_feed_url_source_kind_rights".to_owned());
                     binding.detail = "NIP explicitly reviewed and bound this worker profile".to_owned();
@@ -1065,6 +1069,84 @@ impl NipService {
             }
         }
         Ok(bindings)
+    }
+
+    pub fn ingest_acquisition_batch(
+        &mut self,
+        worker_site_id: &str,
+        batch: &AcquisitionBatch,
+    ) -> Result<AcquisitionIngestResult, NipError> {
+        batch
+            .validate()
+            .map_err(NipError::AcquisitionBatchRejected)?;
+        if batch.items.len() != 1 {
+            return Err(NipError::AcquisitionBatchRejected(
+                "Phase 4 accepts exactly one worker item".to_owned(),
+            ));
+        }
+        let item = &batch.items[0];
+        if item.worker_source_key != worker_site_id {
+            return Err(NipError::AcquisitionBatchRejected(
+                "worker source key does not match the reviewed worker profile".to_owned(),
+            ));
+        }
+        let binding = self
+            .acquisition_source_bindings()?
+            .into_iter()
+            .find(|binding| binding.worker_site_id == worker_site_id)
+            .ok_or(NipError::AcquisitionProfileNotFound)?;
+        if !binding.explicit || binding.state != "bound" {
+            return Err(NipError::AcquisitionBindingEvidenceMismatch);
+        }
+        let source_id_text = binding
+            .source_id
+            .as_deref()
+            .ok_or(NipError::AcquisitionBindingEvidenceMismatch)?;
+        if item.source_id.as_str() != source_id_text {
+            return Err(NipError::AcquisitionBindingEvidenceMismatch);
+        }
+        let source_id = SourceId::new(source_id_text.to_owned())
+            .map_err(|_| NipError::AcquisitionBindingEvidenceMismatch)?;
+        let source = self
+            .store
+            .source(&source_id)?
+            .ok_or(NipError::SourceNotFound)?;
+        if source.rights_status != "approved" {
+            return Err(NipError::AcquisitionBindingRightsRequired);
+        }
+        if source.kind != SourceKind::Podcast || source.state == SourceState::Removed {
+            return Err(NipError::AcquisitionBindingEvidenceMismatch);
+        }
+        let worker_locator = binding
+            .worker_locator
+            .as_deref()
+            .ok_or(NipError::AcquisitionBindingEvidenceMismatch)?;
+        let source_locator = source
+            .locator
+            .as_deref()
+            .ok_or(NipError::AcquisitionBindingEvidenceMismatch)?;
+        if binding.worker_kind != "podcast"
+            || canonical_locator(worker_locator) != canonical_locator(source_locator)
+        {
+            return Err(NipError::AcquisitionBindingEvidenceMismatch);
+        }
+
+        Ok(self.store.ingest_acquisition_item(
+            batch,
+            worker_site_id,
+            source_id.as_str(),
+            &binding.worker_kind,
+            worker_locator,
+            source_locator,
+            Utc::now(),
+        )?)
+    }
+
+    pub fn acquisition_transcript(
+        &self,
+        event_id: &str,
+    ) -> Result<Option<AcquisitionTranscriptRecord>, NipError> {
+        Ok(self.store.acquisition_transcript(event_id)?)
     }
 
     pub fn bind_acquisition_source(
@@ -2946,6 +3028,10 @@ fn observed_persistence(events: &[(EventRecord, String)], current_start: DateTim
 mod tests {
     use super::*;
     use crate::semantic::DeterministicEmbeddingProvider;
+    use nip_domain::{
+        AcquisitionAvailability, AcquisitionContentKind, AcquisitionItem, AcquisitionProducer,
+        AcquisitionTranscript,
+    };
     use serde_json::{json, Value};
     use std::collections::BTreeMap;
     use std::thread;
@@ -2970,7 +3056,7 @@ mod tests {
         let health = service.health();
         assert_eq!(health.service, "nip-engine");
         assert_eq!(health.readiness, Readiness::Ready);
-        assert_eq!(health.schema_version, 21);
+        assert_eq!(health.schema_version, 22);
 
         let capabilities = service.capabilities();
         assert!(capabilities.features.duckdb_store);
@@ -3207,6 +3293,172 @@ mod tests {
         assert_eq!(binding.state, "unbound");
         assert_eq!(binding.review_note.as_deref(), Some("mapping withdrawn"));
         assert_eq!(service.sources(true).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn typed_worker_ingest_requires_explicit_binding_and_rejects_changed_or_stale_items() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let mut config = NipConfig::resolve(
+            &BTreeMap::from([(
+                "NIP_LAKE_DIR".to_owned(),
+                root.join("lake").to_string_lossy().into_owned(),
+            )]),
+            root,
+            None,
+            true,
+        )
+        .unwrap();
+        config
+            .set_acquisition_site_profiles(vec![acquisition::AcquisitionSiteProfile {
+                site_id: "fixture-site".into(),
+                display_name: "Fixture podcast worker".into(),
+                kind: "podcast".into(),
+                enabled: true,
+                poll_interval_min: 60,
+                feed_url: Some("https://fixture.test/feed.xml/".into()),
+                source_seed_status: "observed".into(),
+                schedule_seed_status: "observed".into(),
+                credential_status: "not_required".into(),
+            }])
+            .unwrap();
+        let mut service = NipService::open(config).unwrap();
+        let source_id = SourceId::new("fixture-source").unwrap();
+        let now = Utc::now();
+        service
+            .store
+            .insert_source(&NarrativeSource {
+                source_id: source_id.clone(),
+                kind: SourceKind::Podcast,
+                display_name: "Fixture source".into(),
+                locator: Some("https://fixture.test/feed.xml".into()),
+                rights_status: "approved".into(),
+                rights_statement: Some("fixture rights".into()),
+                topics: Vec::new(),
+                state: SourceState::Active,
+                poll_interval_minutes: 60,
+                per_scan_limit: 100,
+                notes: None,
+                created_at: now,
+                updated_at: now,
+                event_count: 0,
+                episode_count: 0,
+            })
+            .unwrap();
+
+        let hash_text = |text: &str| -> String {
+            Sha256::digest(text.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+        };
+        let started_at = now - Duration::seconds(10);
+        let completed_at = now - Duration::seconds(2);
+        let body = "Fixture episode notes.";
+        let transcript_text = "Fixture transcript text.";
+        let mut batch = AcquisitionBatch {
+            contract_version: 1,
+            producer: AcquisitionProducer {
+                name: "fina-scraper".into(),
+                version: "fixture-0.1".into(),
+            },
+            run_id: "fixture-run".into(),
+            started_at,
+            completed_at,
+            items: vec![AcquisitionItem {
+                source_id: source_id.clone(),
+                worker_source_key: "fixture-site".into(),
+                worker_item_id: "episode-1".into(),
+                source_url: "https://fixture.test/episode/1".into(),
+                title: "Fixture episode".into(),
+                content_kind: AcquisitionContentKind::Article,
+                content_text: body.into(),
+                content_hash: hash_text(body),
+                published_at: Some(started_at),
+                ingested_at: completed_at,
+                valid_from: started_at,
+                valid_to: None,
+                availability: AcquisitionAvailability::Live,
+                transcript: Some(AcquisitionTranscript {
+                    transcript_text: transcript_text.into(),
+                    content_hash: hash_text(transcript_text),
+                    language: Some("en".into()),
+                    method: "fixture_asr".into(),
+                    model: Some("fixture-model".into()),
+                    model_version: Some("v1".into()),
+                    transcribed_at: completed_at,
+                }),
+                claims: Vec::new(),
+                entities: Vec::new(),
+                features: Vec::new(),
+            }],
+        };
+        let mut multi_item_batch = batch.clone();
+        let mut second_item = multi_item_batch.items[0].clone();
+        second_item.worker_item_id = "episode-2".into();
+        multi_item_batch.items.push(second_item);
+        assert!(matches!(
+            service.ingest_acquisition_batch("fixture-site", &multi_item_batch),
+            Err(NipError::AcquisitionBatchRejected(_))
+        ));
+        assert!(service.store.all_events().unwrap().is_empty());
+        assert!(matches!(
+            service.ingest_acquisition_batch("fixture-site", &batch),
+            Err(NipError::AcquisitionBindingEvidenceMismatch)
+        ));
+        service
+            .bind_acquisition_source(
+                "fixture-site",
+                source_id.clone(),
+                "reviewer@example.test",
+                Some("fixture rights reviewed"),
+                true,
+            )
+            .unwrap();
+
+        let first = service
+            .ingest_acquisition_batch("fixture-site", &batch)
+            .unwrap();
+        assert!(!first.replay);
+        assert!(first.transcript_stored);
+        assert_eq!(
+            service
+                .acquisition_transcript(&first.event_id)
+                .unwrap()
+                .unwrap()
+                .transcript_text,
+            transcript_text
+        );
+        let replay = service
+            .ingest_acquisition_batch("fixture-site", &batch)
+            .unwrap();
+        assert!(replay.replay);
+        assert_eq!(replay.event_id, first.event_id);
+
+        batch.items[0].content_text = "Changed body for the same worker identity.".into();
+        batch.items[0].content_hash = hash_text(&batch.items[0].content_text);
+        assert!(matches!(
+            service.ingest_acquisition_batch("fixture-site", &batch),
+            Err(NipError::Storage(StoreError::AcquisitionIdentityConflict))
+        ));
+
+        service
+            .store
+            .update_source(
+                &source_id,
+                &SourceUpdate {
+                    locator: Some("https://fixture.test/changed-feed.xml".into()),
+                    ..SourceUpdate::default()
+                },
+                Utc::now(),
+            )
+            .unwrap();
+        batch.items[0].worker_item_id = "episode-2".into();
+        assert!(matches!(
+            service.ingest_acquisition_batch("fixture-site", &batch),
+            Err(NipError::AcquisitionBindingEvidenceMismatch)
+        ));
+        assert_eq!(service.store.all_events().unwrap().len(), 1);
     }
 
     #[test]
@@ -4299,7 +4551,7 @@ mod tests {
     fn f2_migration_applies_on_fresh_temp_data_dir_and_thesis_round_trips_via_service() {
         let temp = tempdir().unwrap();
         let mut service = service_at(temp.path());
-        assert_eq!(service.health().schema_version, 21);
+        assert_eq!(service.health().schema_version, 22);
 
         let now: DateTime<Utc> = "2026-11-24T16:00:00Z".parse().unwrap();
         let thesis = ThesisRecord {

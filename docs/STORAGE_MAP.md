@@ -48,7 +48,7 @@ $NIP_LAKE_DIR/
 ├── prices/dt=YYYY-MM-DD/site=.../run=....parquet
 ├── backtests/dt=YYYY-MM-DD/site=.../run=....parquet
 └── _nip/
-    ├── nip.duckdb                 # NIP-owned source/event/workflow/binding store
+    ├── nip.duckdb                 # NIP-owned source/event/workflow/binding/acquisition ledger
     ├── media/                     # NIP-managed media
     ├── logs/nip-engine.log
     ├── nip-engine.pid
@@ -60,7 +60,7 @@ Existing Parquet table names, columns, point-in-time rules, and Hive partitionin
 ## Actual writers today (transitional, not the final authority model)
 
 - fina-scraper currently writes and reads its site YAML, schedules, run/dedup state, Parquet evidence, transcripts, theses and exports under the lake root. These are active legacy/worker paths, not yet managed solely through a NIP-owned API.
-- nip-engine currently writes and reads its DuckDB source/event/claim/research/thesis/video workflow data, rights/audit state, media and runtime metadata under `_nip`.
+- nip-engine writes and reads its DuckDB source/event/claim/research/thesis/video workflow data, rights/audit state, media and runtime metadata under `_nip`. Phase 4 adds a separate NIP-owned acquisition run/item/transcript ledger alongside the canonical event table.
 - NIP engine invokes the existing `fina-scraper init` CLI as a subordinate process, then derives site/feed inventory internally. Tauri resolves the worker binary path and starts NIP; it no longer links fina-scraper, initializes storage, or forwards a duplicate inventory. Normal development launchers can still start fina-scraper as a separate optional MCP service for compatibility/diagnostics.
 - The Narrative UI still accesses both NIP and scraper APIs. The current repository facade is partial and does not unify product ownership.
 - There is no automatic Parquet-to-DuckDB copy. The common root does not make the underlying stores one canonical database.
@@ -69,7 +69,7 @@ Existing Parquet table names, columns, point-in-time rules, and Hive partitionin
 
 NIP is the sole product and canonical data authority. NIP owns source identity and rights, user-visible schedule/job lifecycle, acceptance/revision policy, canonical items/events/transcripts, claims/evidence, entity resolution, feature definitions/snapshots, research/thesis/video workflows, and product-facing reads/writes. fina-scraper becomes an embedded acquisition worker: NIP supplies a source binding and job request; the worker returns a typed, versioned result; NIP validates and commits it.
 
-The NIP-owned `AcquisitionBatch` domain contract and NIP-supervised storage-init subprocess are foundations only. The subprocess initializes the shared layout and discovers configured sources, but does not yet start a long-running worker or persist an item. The contract preserves worker provenance and exact evidence spans and validates the envelope; neither change migrates a source/schedule or changes UI routing.
+The NIP-owned `AcquisitionBatch` domain contract, explicit binding table, lifecycle supervisor, and Phase 4 one-item sink now form the acceptance boundary. The MCP `ingest_acquisition_item` operation accepts exactly one typed result for a currently explicit, rights-approved worker/source binding; NIP verifies the worker's normalized-body SHA-256, timestamps, URL, identity and replay policy, then atomically stores the event, optional separate acquisition transcript, and run/item provenance. Claims, entities and features are rejected pending Phase 5. The supervisor still performs lifecycle/handshake only and does not yet request or receive typed items from the worker. No legacy lake data is imported and no UI routing changes here.
 
 A worker may retain private operational state such as retry cursors or dedup caches, provided it is subordinate to NIP lifecycle and is not a second product-visible source, schedule, or evidence catalog. Legacy Parquet/SQLite/YAML/transcript records remain readable during transition and are not automatically copied, moved, rewritten, or deleted. Future physical consolidation requires its own inventory, dry-run mapping, backup/rollback plan, parity evidence, and explicit approval.
 
@@ -78,7 +78,7 @@ A worker may retain private operational state such as retry cursors or dedup cac
 | Source identity, rights and product status | NIP DuckDB plus scraper site configuration | NIP | Create explicit NIP-source-to-worker-profile bindings; `nip_acquisition_bindings` stores reviewed bind/unbind state and audit metadata; do not infer ownership from matching text IDs. |
 | Schedule intent and product-visible job state | NIP source timer in some flows; scraper schedule/launcher in others | NIP | Introduce a single NIP orchestration API before disabling existing execution paths; never run duplicate polling loops. |
 | Collection and extraction | fina-scraper | NIP orchestrates; worker executes | Keep worker mechanics, but return a typed result to NIP rather than exposing a peer catalog. |
-| Item/event/transcript evidence | Scraper Parquet/transcript files and NIP DuckDB records in separate paths | NIP | Preserve hash, native IDs, producer run, times, availability, tiers, exact spans and revision history. Legacy data is compatibility/read-only until authorized migration. |
+| Item/event/transcript evidence | Scraper Parquet/transcript files and NIP DuckDB records in separate paths | NIP | Migration 22 stores accepted single-item run/item provenance and optional transcripts separately from podcast-subscription transcripts; canonical events preserve exact text and worker hash, with NIP capture/ingest time. Changed worker identity payloads are rejected. Legacy data is compatibility/read-only until authorized migration. |
 | Claims/entities/features | Scraper Parquet and NIP claim/evidence workflows | NIP | Do not flatten schemas by label; NIP validates claim evidence against canonical retained payloads and owns the feature/entity catalogs. |
 | Thesis/research/video/consent/audit | Primarily NIP; scraper also has some thesis/backtest artifacts | NIP | Preserve NIP workflow gates; retain worker artifacts as referenced inputs until lossless mappings exist. |
 | Trading market data | TradeAC under `TAC_LAKE_DIR` | TradeAC | Keep the separate root and ownership boundary. |

@@ -14,7 +14,8 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use nip_domain::{
-    AgentClaimDraft, AgentEntityDraft, AgentNarrativeGraphDraft, BacktestEvidenceRecord,
+    AcquisitionBatch, AgentClaimDraft, AgentEntityDraft, AgentNarrativeGraphDraft,
+    BacktestEvidenceRecord,
     EtfMapping, EventSearchQuery, LocalEventImport, PodcastEpisode, PodcastSubscriptionState,
     SourceId, SourceKind, SourceState, SourceUpdate, ThesisRecord, TranscriptRecord, VideoAsset,
     VideoAssetLineage, VideoAssetUpstreamKind, VideoAudioCue, VideoJob, VideoNarrative,
@@ -95,6 +96,19 @@ struct UnbindAcquisitionSourceParams {
     reviewed_by: String,
     review_note: Option<String>,
     user_confirmed: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct IngestAcquisitionItemParams {
+    worker_site_id: String,
+    batch: Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AcquisitionTranscriptParams {
+    event_id: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -2179,6 +2193,49 @@ impl NipMcp {
                     "an explicit reviewer and user confirmation are required",
                 ),
                 Err(error) => structured_error("unbinding_failed", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Submit exactly one typed fina-scraper item to NIP. Requires an explicit current worker/source binding and approved NIP rights; validates hashes, URLs, timestamps and replay identity, then atomically stores the canonical event and optional transcript. Claims, entities and features are not accepted in Phase 4."
+    )]
+    fn ingest_acquisition_item(
+        &self,
+        Parameters(params): Parameters<IngestAcquisitionItemParams>,
+    ) -> CallToolResult {
+        let batch = match serde_json::from_value::<AcquisitionBatch>(params.batch) {
+            Ok(batch) => batch,
+            Err(error) => {
+                return structured_error("invalid_acquisition_batch", error.to_string());
+            }
+        };
+        match self.service.lock() {
+            Ok(mut service) => match service
+                .ingest_acquisition_batch(&params.worker_site_id, &batch)
+            {
+                Ok(result) => structured_success(serde_json::to_value(result).unwrap()),
+                Err(error) => structured_error("acquisition_ingest_rejected", error.to_string()),
+            },
+            Err(_) => structured_error("internal", "NIP service lock failed"),
+        }
+    }
+
+    #[tool(
+        description = "Read back a transcript accepted into NIP's canonical acquisition-transcript table by ingest_acquisition_item. This does not read or mutate the legacy fina-scraper transcript store."
+    )]
+    fn get_acquisition_transcript(
+        &self,
+        Parameters(params): Parameters<AcquisitionTranscriptParams>,
+    ) -> CallToolResult {
+        if params.event_id.trim().is_empty() {
+            return structured_error("invalid_request", "event_id must not be empty");
+        }
+        match self.service.lock() {
+            Ok(service) => match service.acquisition_transcript(&params.event_id) {
+                Ok(transcript) => structured_success(serde_json::to_value(transcript).unwrap()),
+                Err(error) => structured_error("storage_unavailable", error.to_string()),
             },
             Err(_) => structured_error("internal", "NIP service lock failed"),
         }

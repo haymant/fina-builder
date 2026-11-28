@@ -576,7 +576,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let binary = executable(
             temp.path(),
-            "#!/bin/sh\nif [ \"$1\" = \"mcp\" ]; then read line; printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}'; exit 7; else exit 2; fi\n",
+            "#!/bin/sh\nif [ \"$1\" = \"mcp\" ]; then read line; printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}'; read line; exit 7; else exit 2; fi\n",
         );
         let worker = AcquisitionSupervisor::start(&binary, temp.path()).unwrap();
         thread::sleep(Duration::from_millis(50));
