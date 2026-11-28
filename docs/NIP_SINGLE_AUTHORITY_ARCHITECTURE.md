@@ -1,6 +1,6 @@
 # NIP Single-Authority Architecture and Execution Plan
 
-**Status:** Phases 0–4 are implemented and published. Phase 5's additive schema-23 contract, derivation persistence, review/resolution/link APIs, and descriptive feature snapshots are implemented in the working tree. Serial Rust tests and targeted rustfmt checks pass; full Clippy is unverified because the native DuckDB archive build exhausted sandbox disk. Final diff checks and publication remain pending. NIP remains a logical authority while scraper legacy files and the TradeAC lake stay separate and untouched.
+**Status:** Phases 0–4 are implemented and published. Phase 5's additive schema-23 contract, derivation persistence, review/resolution/link APIs, and descriptive feature snapshots are implemented and published on `main` at `e5a75b9`. Serial Rust tests, targeted rustfmt checks, and diff hygiene checks passed. Full Clippy is unverified because the native DuckDB archive build exhausted sandbox disk. NIP remains a logical authority while scraper legacy files and the TradeAC lake stay separate and untouched.
 
 ## Executive decision
 
@@ -189,7 +189,7 @@ suggestions. Tests used temporary fixture databases only; no user or legacy data
 
 ### Phase 5 — Canonical claims, entities, and descriptive features
 
-**Status:** Implemented in the working tree; serial Rust tests and targeted rustfmt checks pass. Full Clippy is unverified because the native DuckDB archive build exhausted sandbox disk; final diff checks and commit/push remain pending.
+**Status:** Implemented and published on `main` at `e5a75b9`. Serial Rust tests, targeted rustfmt checks, and diff hygiene checks passed. Full Clippy is unverified because the native DuckDB archive build exhausted sandbox disk.
 
 **Delivered:** `AcquisitionBatch` v2 adds an explicit derivation manifest, typed optional claim semantics, and role-bearing references to evidence-backed worker entity mentions. Migration 23 is additive. The NIP store appends derivation runs, claim annotations, exact evidence payload metadata, NIP review history, entity mentions, role links, explicit entity resolution/rejection history, claim relations, and deterministic registered descriptive feature snapshots. Initial item ingestion and derivation-only reprocessing are atomic; unchanged replays are idempotent and changed output under the same derivation identity conflicts. Store-generated `known_at` governs derivations, reviews, relations, resolutions, and feature snapshots. Feature snapshots use independent `as_of` cutoffs for claim derivation, latest review, entity resolution, and feature-definition registration; same-source/event normalized facts are deduplicated.
 
@@ -197,7 +197,7 @@ suggestions. Tests used temporary fixture databases only; no user or legacy data
 
 **Deliberate limits:** Producer canonical IDs and tickers remain hints. Resolution is explicit and reviewer-audited; no auto-match, ticker-to-instrument mapping, alias authoring/matching, merge/split workflow, worker-tool RPC, UI route change, feature-matrix export, or predictive/trading-signal claim is included. The migration's alias table is reserved for a later identity-policy slice, not presented as an active API.
 
-**Verification:** Rust 1.100 serial tests passed: 11 `nip-domain`, 137 `nip-engine` library, 14 `nip-engine` binary, and 47 `nip-store` tests; 0 failed. MCP target tests were included. Targeted rustfmt checks passed for the four modified Rust sources. Full Clippy did not complete because the native DuckDB archive build failed with `No space left on device` at 98% disk usage, so Clippy is unverified. A browser E2E was not applicable because Phase 5 adds no UI. Diff hygiene and commit/push remain. See the [Phase 5 contract](NIP_PHASE5_CONTRACT.md), [implementation plan](NIP_PHASE5_ARCHITECTURE_PLAN.md), and [Phase 5 handoff](NIP_PHASE5_HANDOFF.md).
+**Verification:** Rust 1.100 serial tests passed: 11 `nip-domain`, 137 `nip-engine` library, 14 `nip-engine` binary, and 47 `nip-store` tests; 0 failed. MCP target tests were included. Targeted rustfmt checks passed for the four modified Rust sources, and `git diff --check` passed. Full Clippy did not complete because the native DuckDB archive build failed with `No space left on device` at 98% disk usage, so Clippy is unverified. A browser E2E was not applicable because Phase 5 adds no UI. Phase 5 was committed and pushed to `main` as `e5a75b9`. See the [Phase 5 contract](NIP_PHASE5_CONTRACT.md), [implementation plan](NIP_PHASE5_ARCHITECTURE_PLAN.md), and [Phase 5 handoff](NIP_PHASE5_HANDOFF.md).
 
 ### Phase 6 — One NIP-facing UI and tool surface
 

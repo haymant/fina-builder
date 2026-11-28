@@ -1,6 +1,6 @@
 # NIP Single-Authority Architecture — Phase 5 Handoff
 
-**Status:** Phase 5 implementation and Rust test gates are complete in the working tree. Targeted rustfmt and diff hygiene checks are the remaining close-out checks; full Clippy is unverified because the native DuckDB archive build exhausted sandbox disk. Commit/push remain pending. This handoff does not start Phase 6.
+**Status:** Phase 5 is complete and was committed and pushed to `main` as `e5a75b9` (`feat(nip): implement phase 5 interpretation layer`). Serial Rust tests, targeted rustfmt checks, and diff hygiene checks passed. Full Clippy remains unverified because the native DuckDB archive build exhausted sandbox disk. This handoff records the Phase 5 exit and does not start Phase 6.
 
 ## Delivered
 
@@ -40,4 +40,4 @@ Worker entity IDs, canonical-ID hints, and tickers are not identity authority. R
 
 ## Next-phase boundary
 
-Phase 6 may consolidate the product-facing UI/tool journey behind NIP APIs. Before doing so, preserve the Phase 5 review/resolution gates and keep legacy stores and TradeAC separate. The user should receive this handoff after the Phase 5 commit/push; no Phase 6 work is authorized by this handoff itself.
+Phase 6 may consolidate the product-facing UI/tool journey behind NIP APIs. Before doing so, preserve the Phase 5 review/resolution gates and keep legacy stores and TradeAC separate. This Phase 5 handoff is complete; Phase 6 work is a separate phase and is not included here.

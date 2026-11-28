@@ -1,6 +1,6 @@
 # NIP Single-Authority Architecture — Phase 5 Design Proposal
 
-**Status:** Phase 5 implementation is in the working tree. Serial Rust tests and targeted rustfmt checks pass; full Clippy is unverified because the native DuckDB archive build exhausted sandbox disk. Final diff checks and commit/push remain pending. The user chose: preserve old data; skip legacy migration/conversion. Migration 23 is additive and introduces NIP-owned contract-v2 derivations, review/resolution/link history, and descriptive feature snapshots; no legacy conversion, backfill, reconciliation, rewrite, or deletion is part of this phase. Phase 4 is published at `5061d1c`.
+**Status:** Phase 5 is implemented and published to `main` as `e5a75b9`. Serial Rust tests, targeted rustfmt checks, and diff hygiene checks passed; full Clippy is unverified because the native DuckDB archive build exhausted sandbox disk. The user chose: preserve old data; skip legacy migration/conversion. Migration 23 is additive and introduces NIP-owned contract-v2 derivations, review/resolution/link history, and descriptive feature snapshots; no legacy conversion, backfill, reconciliation, rewrite, or deletion was performed. Phase 4 is published at `5061d1c`.
 
 **Governing context:** [Storage map](STORAGE_MAP.md), [single-authority architecture](NIP_SINGLE_AUTHORITY_ARCHITECTURE.md), [Phase 4 handoff](NIP_PHASE4_HANDOFF.md), the draft [entity/claims/features research](65-entity-claims-features-signal-research.md), the [agent-native journey plan](69-agent-native-modes-and-full-journey-plan.md), and the [NIP testing plan](57-narrative-intelligence-testing-plan.md).
 
@@ -121,7 +121,7 @@ Feature-definition registration is explicit and NIP-owned. For the initial regis
 
 ## 7. Implementation slices and exit gates
 
-Phase 5 implements the bounded contract and persistence surface described below. The contract, migration, store/service wrappers, and MCP tools are present in the working tree. The serial Rust suite and targeted source formatting checks pass; full Clippy is unverified because the native DuckDB archive build exhausted sandbox disk. Final diff checks and publication remain pending.
+Phase 5 implemented the bounded contract and persistence surface described below. The contract, migration, store/service wrappers, and MCP tools are published on `main` at `e5a75b9`. Serial Rust tests, targeted source formatting, and diff hygiene checks passed; full Clippy is unverified because the native DuckDB archive build exhausted sandbox disk.
 
 ### P5.0 — Contract and policy freeze
 
@@ -157,7 +157,7 @@ Phase 5 implements the bounded contract and persistence surface described below.
 
 ### Phase 5 exit
 
-The exit check uses Rust 1.100 from `~/.rustup` and runs the relevant domain/store/engine suites, including MCP target compilation/tests, fresh-schema migration, schema-22 preservation, and a simulated version-21 upgrade. It also checks formatting/diff hygiene and reviews every trust timestamp and caller-facing API. UI changes, automatic worker extraction, alias/merge/split tools, instrument mapping, matrix export, TradeAC/qlib integration, and predictive-signal claims are not part of this phase. After the gates pass, update the storage map/architecture/handoff, commit and push the phase, and provide the user a clear handoff before any later phase.
+The exit check was completed with Rust 1.100 from `~/.rustup`: the serial domain/store/engine suite passed, including MCP target tests, fresh-schema migration, schema-22 preservation, and simulated version-21 migration replay. Targeted rustfmt and `git diff --check` passed. Full Clippy remains unverified because the native DuckDB archive build failed with `No space left on device` at 98% disk usage. UI changes, automatic worker extraction, alias/merge/split tools, instrument mapping, matrix export, TradeAC/qlib integration, and predictive-signal claims were not part of this phase. The documentation was updated and Phase 5 was committed and pushed to `main` as `e5a75b9`; see the Phase 5 handoff.
 
 ## 8. Explicit non-goals and safety limits
 

@@ -1,6 +1,6 @@
 # NIP Phase 5 Contract and Read Surface
 
-**Status:** Implementation and serial Rust test gates are complete in the working tree; final diff checks and commit/push remain pending. Targeted rustfmt checks pass. Full Clippy is unverified because the native DuckDB archive build exhausted sandbox disk. Schema version 23 is additive. The approved preservation choice is **preserve all existing data; do not migrate, convert, backfill, rewrite, or delete legacy records**.
+**Status:** Phase 5 implementation is complete and published to `main` as `e5a75b9`. Serial Rust tests, targeted rustfmt checks, and diff hygiene checks passed. Full Clippy is unverified because the native DuckDB archive build exhausted sandbox disk. Schema version 23 is additive. The approved preservation choice is **preserve all existing data; do not migrate, convert, backfill, rewrite, or delete legacy records**.
 
 NIP remains the sole authority for retained evidence and its canonical interpretation. Phase 5 writes only NIP-owned DuckDB records under `NIP_LAKE_DIR/_nip/nip.duckdb`; it does not read or modify fina-scraper's legacy claim/entity stores or TradeAC's market lake.
 
