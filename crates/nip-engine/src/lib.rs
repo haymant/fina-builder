@@ -1,3 +1,4 @@
+pub mod acquisition;
 pub mod asr;
 pub mod comfy;
 pub mod comfy_discovery;
@@ -2913,26 +2914,27 @@ mod tests {
         feed_urls: &[&str],
         site_ids: &[&str],
     ) -> NipService {
-        let config = NipConfig::resolve(
-            &BTreeMap::from([
-                (
-                    "NIP_LAKE_DIR".to_owned(),
-                    root.join("lake").to_string_lossy().into_owned(),
-                ),
-                (
-                    "NIP_SCRAPER_OWNED_PODCAST_FEEDS".to_owned(),
-                    serde_json::to_string(feed_urls).unwrap(),
-                ),
-                (
-                    "NIP_SCRAPER_OWNED_SITE_IDS".to_owned(),
-                    serde_json::to_string(site_ids).unwrap(),
-                ),
-            ]),
+        let mut config = NipConfig::resolve(
+            &BTreeMap::from([(
+                "NIP_LAKE_DIR".to_owned(),
+                root.join("lake").to_string_lossy().into_owned(),
+            )]),
             root,
             None,
             true,
         )
         .unwrap();
+        let feed_urls = feed_urls
+            .iter()
+            .map(|feed| (*feed).to_owned())
+            .collect::<Vec<_>>();
+        let site_ids = site_ids
+            .iter()
+            .map(|site| (*site).to_owned())
+            .collect::<Vec<_>>();
+        config
+            .set_acquisition_inventory(&feed_urls, &site_ids)
+            .unwrap();
         NipService::open(config).unwrap()
     }
 

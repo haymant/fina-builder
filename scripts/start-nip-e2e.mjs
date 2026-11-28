@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
+import { finaScraperBinMissingHelp, resolveFinaScraperBin } from './lib/fina-scraper-bin.mjs'
 
 const root = process.cwd()
 const runId = process.env.NIP_E2E_RUN_ID
@@ -24,6 +25,8 @@ if (transcriptFile && !transcriptFile.startsWith(`${root}/`)) {
 }
 const testTranscript = transcriptFile ? readFileSync(transcriptFile, 'utf8').trim() : undefined
 if (testTranscript !== undefined && !testTranscript) throw new Error('NIP E2E transcript fixture must not be empty')
+const scraperBin = resolveFinaScraperBin(root)
+if (!scraperBin) throw new Error(finaScraperBinMissingHelp(root))
 
 const cargoCandidates = [
   process.env.CARGO_BIN,
@@ -44,6 +47,7 @@ const child = spawn(cargo, ['run', '-p', 'nip-engine', '--', '--transport', 'htt
     ...(testTranscript ? { NIP_TEST_TRANSCRIPT: testTranscript } : {}),
     NIP_TEST_MODE: '1',
     NIP_LAKE_DIR: lakeDir,
+    FINA_SCRAPER_BIN: scraperBin,
     DATABASE_URL: '',
     VECTOR_DB_URL: '',
     NIP_COMFYUI_URL: '',

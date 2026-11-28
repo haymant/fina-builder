@@ -79,14 +79,32 @@ This contract is intentionally not an importer yet. In particular, do not reuse 
 
 **Result:** Contract and focused tests added. All 10 `nip-domain` unit tests pass in an isolated temporary crate. The normal workspace command is blocked before compilation by an existing dependency-resolution conflict (`riga-server` pins `rmcp=2.0.0`; the fina-scraper dependency pins `rmcp=2.2.0`). The pinned Rust toolchain is installed. This conflict and the remaining integration work are recorded, not hidden. The test helper's isolated crate was created under `/tmp` only.
 
-### Phase 2 — Move the integration seam into NIP and supervise one worker lifecycle
+### Phase 2A — Move acquisition storage initialization and inventory under NIP
 
-**Work:** Move fina-scraper dependency/adapter ownership out of the Tauri shell and behind nip-engine's NIP-owned service boundary. NIP must own worker startup, health, requests, cancellation/shutdown, and product-visible job state. Keep normal app launch from starting a peer scraper MCP. Retain a separately named diagnostic launch only if needed.
+**Work:** Move storage initialization behind NIP using the existing `fina-scraper init` CLI as a subordinate subprocess, rather than linking the scraper crate into either Tauri or nip-engine. Direct crate linkage pulls its optional `rmcp=2.2.0` into the workspace and conflicts with RIGA's `rmcp=2.0.0` pin. NIP startup initializes the existing compatible lake layout and derives site/feed inventory itself. Tauri resolves the worker binary and passes its path to NIP; it does not initialize scraper storage or forward a second copy of inventory. This subphase does not invoke legacy acquisition run APIs or change existing UI routes.
 
 **Exit criteria:**
-- Tauri starts NIP as its only narrative service; NIP owns worker lifecycle.
-- Worker health/unavailable behavior is surfaced as a NIP job/API state; no component can bypass NIP to create a competing product write.
-- Temporary-root startup, shutdown, failure, and safe reuse tests pass.
+- Tauri has no direct `fina-scraper` crate dependency and no scraper storage initialization/inventory forwarding; it only resolves the subordinate binary path.
+- NIP invokes only the idempotent storage-init CLI, with a cleared/minimal child environment; no legacy acquisition writer tools are enabled.
+- NIP initializes acquisition storage and populates ownership only from values discovered in that lake; legacy launcher inventory variables are no longer parsed.
+- Temporary-root initialization is repeatable and yields stable inventory; existing source/feed ownership guards remain tested.
+- `NIP_LAKE_DIR` and derived `_nip` remain unchanged; no data is migrated, rewritten, or deleted.
+
+**Status:** Phase 2A is implemented. NIP starts the bundled/resolved `fina-scraper init` executable with a cleared environment containing only the lake path and `PATH`, then validates the returned inventory. Tauri no longer links the scraper crate, initializes the lake, or supplies site/feed ownership. The process boundary avoids pulling the scraper's optional `rmcp=2.2.0` into the workspace, where it conflicts with RIGA's pinned `rmcp=2.0.0`.
+
+**Verification:** `cargo test -p nip-engine` passes (132 library tests and 14 binary tests); a real `fina-scraper init` run against a fresh temporary lake returned valid JSON and the same 22 site/feed identity records on repeat initialization. Rust formatting, `git diff --check`, the E2E launcher's Node syntax, and Tauri config JSON checks pass. A full Tauri crate compile/package check was not run because sandbox disk usage reached 93%; no user data or unrelated worktrees were removed. Existing data roots were not changed.
+
+**Phase 2B handoff prompt:** “Continue the NIP single-authority plan at Phase 2B. Make nip-engine own the long-running fina-scraper child lifecycle over its existing stdio MCP transport: startup, health/early-exit reporting, cancellation, shutdown, and temporary-root tests. Do not expose legacy scraper run/backload tools as product operations because they persist scraper-owned outputs/state. Keep compatibility/diagnostic launchers only until NIP can replace their product-facing API use; ensure the normal journey has one NIP entry point and no duplicate polling loop. Do not change or migrate existing user data. Stop at the Phase 2B exit gate and ask before commit/push.”
+
+### Phase 2B — Supervise one worker lifecycle from NIP
+
+**Work:** NIP owns worker process startup, health, cancellation/shutdown, and product-visible job state. The desktop should not start a peer scraper MCP on the normal path. Preserve a separately named diagnostic path only while existing UI/API compatibility requires it. Do not enable legacy scraper run tools as product operations: they persist worker-owned outputs and cannot yet return the typed `AcquisitionBatch` without side effects.
+
+**Exit criteria:**
+- NIP owns the worker process and shutdown/error handling; worker health/unavailable state is surfaced through NIP.
+- Normal product launch has one narrative entry point; any temporary compatibility/diagnostic process is explicitly labeled and cannot write canonical NIP data.
+- Temporary-root startup, early-exit, shutdown, and safe reuse tests pass.
+- Legacy acquisition calls remain disabled from the product surface until the worker returns a validated typed batch for NIP ingestion.
 - `NIP_LAKE_DIR` and derived `_nip` remain unchanged; the phase does not migrate, rewrite, or delete existing data.
 
 ### Phase 3 — Make source identity and schedule intent NIP-owned

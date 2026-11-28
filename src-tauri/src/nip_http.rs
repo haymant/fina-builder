@@ -702,6 +702,7 @@ pub fn nip_media_file(app: AppHandle, relative_path: String) -> Result<String, S
 /// Start the single NIP Streamable HTTP MCP server for this app run.
 pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipService, String> {
     let binary = crate::mcp_commands::get_nip_engine_path(app.clone())?;
+    let scraper_binary = crate::mcp_commands::resolve_fina_scraper_binary(app)?;
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
         .map_err(|error| format!("could not reserve a NIP HTTP port: {error}"))?;
     let port = listener
@@ -711,10 +712,8 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
     drop(listener);
 
     let lake_dir = crate::mcp_commands::resolve_nip_lake_dir(app)?;
-    // Share the scraper's lock and safety checks. This occurs before NIP logs,
-    // pidfiles, media directories, or the engine process are created.
-    let storage_init = fina_scraper::storage::initialize(&lake_dir, None)
-        .map_err(|error| format!("could not initialize NIP_LAKE_DIR: {error}"))?;
+    // NIP owns acquisition storage initialization and source inventory. Tauri
+    // only resolves the shared lake path and launches the NIP service.
     let data_dir = lake_dir.join("_nip");
     eprintln!(
         "NIP storage: NIP_LAKE_DIR={} NIP_DATA_DIR={} (legacy app-data storage location is unused)",
@@ -726,6 +725,7 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
     // DuckDB lock; starting a second engine would only fail.
     reap_stale_engine(&pidfile);
     let mut env = vec![
+        ("FINA_SCRAPER_BIN".to_string(), scraper_binary),
         (
             "NIP_DATA_DIR".to_string(),
             data_dir.to_string_lossy().into_owned(),
@@ -735,27 +735,6 @@ pub fn start(app: &AppHandle, bridge: Option<&NipBridgeInfo>) -> Result<NipServi
             lake_dir.to_string_lossy().into_owned(),
         ),
     ];
-    let scraper_owned_feeds: Vec<String> = storage_init
-        .site_inventory
-        .iter()
-        .filter(|site| site.kind == "podcast")
-        .filter_map(|site| site.feed_url.clone())
-        .collect();
-    env.push((
-        "NIP_SCRAPER_OWNED_PODCAST_FEEDS".to_string(),
-        serde_json::to_string(&scraper_owned_feeds)
-            .map_err(|error| format!("could not serialize scraper feed ownership: {error}"))?,
-    ));
-    let scraper_site_ids: Vec<String> = storage_init
-        .site_inventory
-        .iter()
-        .map(|site| site.site_id.clone())
-        .collect();
-    env.push((
-        "NIP_SCRAPER_OWNED_SITE_IDS".to_string(),
-        serde_json::to_string(&scraper_site_ids)
-            .map_err(|error| format!("could not serialize scraper site ownership: {error}"))?,
-    ));
     if let Some(bridge) = bridge {
         env.push(("NIP_RIGA_BRIDGE_URL".to_string(), bridge.url.clone()));
         env.push(("NIP_RIGA_BRIDGE_TOKEN".to_string(), bridge.token.clone()));
@@ -1037,6 +1016,29 @@ mod tests {
             .find(|candidate| candidate.is_file())
     }
 
+    fn scraper_binary() -> Option<std::path::PathBuf> {
+        if let Some(binary) = std::env::var_os("FINA_SCRAPER_BIN").map(std::path::PathBuf::from) {
+            if binary.is_file() {
+                return Some(binary);
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let executable = if cfg!(windows) {
+            "fina-scraper.exe"
+        } else {
+            "fina-scraper"
+        };
+        [
+            "modules/target/release",
+            "modules/target/debug",
+            "modules/fina-scraper/target/release",
+            "modules/fina-scraper/target/debug",
+        ]
+        .iter()
+        .map(|relative| root.join(relative).join(executable))
+        .find(|candidate| candidate.is_file())
+    }
+
     #[test]
     fn a_stale_pidfile_never_kills_an_unrelated_process() {
         let dir = std::env::temp_dir().join(format!("nip-reap-{}", uuid::Uuid::new_v4()));
@@ -1063,6 +1065,10 @@ mod tests {
             eprintln!("skipping: nip-engine binary is not built");
             return;
         };
+        let Some(scraper_binary) = scraper_binary() else {
+            eprintln!("skipping: fina-scraper binary is not built");
+            return;
+        };
         let root = std::env::temp_dir().join(format!("nip-http-test-{}", uuid::Uuid::new_v4()));
         let lake_dir = root.join("lake");
         let data_dir = lake_dir.join("_nip");
@@ -1074,6 +1080,7 @@ mod tests {
             .arg("http")
             .arg("--bind")
             .arg(format!("127.0.0.1:{port}"))
+            .env("FINA_SCRAPER_BIN", &scraper_binary)
             .env("NIP_DATA_DIR", &data_dir)
             .env("NIP_LAKE_DIR", &lake_dir)
             .stdin(Stdio::null())

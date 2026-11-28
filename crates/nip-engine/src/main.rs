@@ -4533,7 +4533,15 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<(), String> {
     let cli = parse_cli()?;
-    let config = NipConfig::from_env().map_err(|_| "NIP configuration is invalid".to_owned())?;
+    let mut config =
+        NipConfig::from_env().map_err(|_| "NIP configuration is invalid".to_owned())?;
+    let acquisition_inventory = nip_engine::acquisition::initialize_storage(config.lake_dir())?;
+    config
+        .set_acquisition_inventory(
+            &acquisition_inventory.podcast_feed_urls,
+            &acquisition_inventory.site_ids,
+        )
+        .map_err(|error| format!("NIP acquisition inventory is invalid: {error}"))?;
     eprintln!(
         "NIP storage: NIP_LAKE_DIR={} NIP_DATA_DIR={} (legacy app-data storage location is unused)",
         config.lake_dir().display(),

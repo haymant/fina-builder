@@ -61,7 +61,7 @@ Existing Parquet table names, columns, point-in-time rules, and Hive partitionin
 
 - fina-scraper currently writes and reads its site YAML, schedules, run/dedup state, Parquet evidence, transcripts, theses and exports under the lake root. These are active legacy/worker paths, not yet managed solely through a NIP-owned API.
 - nip-engine currently writes and reads its DuckDB source/event/claim/research/thesis/video workflow data, rights/audit state, media and runtime metadata under `_nip`.
-- Tauri initializes the scraper storage layout and passes scraper site/feed inventory to the NIP service. Normal development launchers can also start fina-scraper as a separate optional MCP service.
+- NIP engine invokes the existing `fina-scraper init` CLI as a subordinate process, then derives site/feed inventory internally. Tauri resolves the worker binary path and starts NIP; it no longer links fina-scraper, initializes storage, or forwards a duplicate inventory. Normal development launchers can still start fina-scraper as a separate optional MCP service for compatibility/diagnostics.
 - The Narrative UI still accesses both NIP and scraper APIs. The current repository facade is partial and does not unify product ownership.
 - There is no automatic Parquet-to-DuckDB copy. The common root does not make the underlying stores one canonical database.
 
@@ -69,7 +69,7 @@ Existing Parquet table names, columns, point-in-time rules, and Hive partitionin
 
 NIP is the sole product and canonical data authority. NIP owns source identity and rights, user-visible schedule/job lifecycle, acceptance/revision policy, canonical items/events/transcripts, claims/evidence, entity resolution, feature definitions/snapshots, research/thesis/video workflows, and product-facing reads/writes. fina-scraper becomes an embedded acquisition worker: NIP supplies a source binding and job request; the worker returns a typed, versioned result; NIP validates and commits it.
 
-The NIP-owned `AcquisitionBatch` domain contract is a foundation only. It preserves worker provenance and exact evidence spans and validates the envelope, but does not yet start a worker, persist an item, migrate a source/schedule, or change UI routing.
+The NIP-owned `AcquisitionBatch` domain contract and NIP-supervised storage-init subprocess are foundations only. The subprocess initializes the shared layout and discovers configured sources, but does not yet start a long-running worker or persist an item. The contract preserves worker provenance and exact evidence spans and validates the envelope; neither change migrates a source/schedule or changes UI routing.
 
 A worker may retain private operational state such as retry cursors or dedup caches, provided it is subordinate to NIP lifecycle and is not a second product-visible source, schedule, or evidence catalog. Legacy Parquet/SQLite/YAML/transcript records remain readable during transition and are not automatically copied, moved, rewritten, or deleted. Future physical consolidation requires its own inventory, dry-run mapping, backup/rollback plan, parity evidence, and explicit approval.
 
